@@ -2,7 +2,17 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** — share the URL with anyone to start a peer session. Set the signaling server URL in the sidebar and click Connect.
+**[Open a room →](https://jimscarver.github.io/quantum-os/)**
+
+### How to connect with another peer
+
+1. Open **https://jimscarver.github.io/quantum-os/** in your browser.
+2. Click **Connect** — the app joins a room identified by the URL hash and shows your peer ID.
+3. Copy the share link at the bottom of the page and send it to someone, or open it in a second tab.
+4. The second browser loads the same room URL and clicks **Connect**.
+5. Both peers see each other in the **Peers** list and can send messages.
+
+The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.fly.dev`) is used by default; edit the field to point at a self-hosted server.
 
 **Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities).
 
@@ -173,11 +183,12 @@ wasm_capability_valid(hex: string): boolean
 
 | Component | Status |
 |---|---|
-| ZFA Rust kernel | ✓ 18/18 tests pass |
+| ZFA Rust kernel | ✓ 19/19 tests pass (all 256 byte values) |
 | WASM build | ✓ wasm-pack, wasm-bindgen |
-| Signaling server | ✓ running, ws://0.0.0.0:4444 |
+| Signaling server | ✓ deployed — wss://quantum-os-signaling.fly.dev |
 | Browser TypeScript | ✓ 0 type errors |
-| WebRTC peer | Scaffold (needs browser to test data channels) |
+| WebRTC peer | ✓ join/peers/offer/answer/ICE/data channel |
+| GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 
 ---
