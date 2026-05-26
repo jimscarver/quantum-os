@@ -1,5 +1,7 @@
-app = "quantum-os-signaling"
-primary_region = "iad"
+# fly.toml app configuration file generated for quantum-os-signaling
+
+app = 'quantum-os-signaling'
+primary_region = 'iad'
 
 [build]
   dockerfile = "Dockerfile"
@@ -13,15 +15,9 @@ primary_region = "iad"
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
-
-  [[http_service.checks]]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    timeout = "5s"
-    path = "/"
+  processes = ['app']
 
 [[vm]]
-  memory = "256mb"
-  cpu_kind = "shared"
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
