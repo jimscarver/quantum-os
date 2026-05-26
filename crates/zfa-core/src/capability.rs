@@ -21,11 +21,10 @@ impl Capability {
     pub fn from_entropy(bytes: &[u8], label: impl Into<String>) -> Self {
         let mut twists = Vec::with_capacity(bytes.len() * 2);
         for &b in bytes {
-            // Each byte contributes one pos and one neg twist.
-            // Pos twist from high nibble, neg twist from low nibble.
-            let pos_idx = (b >> 4) & 0x3;  // 0..3 → Up, Right, Slash, Plus
-            let neg_idx = (b & 0x3) + 4;   // 4..7 → Down, Left, BSlash, Minus
-            // Safety: indices 0..7 are all valid Twist variants
+            // Positive twists have even values (0,2,4,6); negative have odd (1,3,5,7).
+            // Map 2 bits → pos by *2, → neg by *2+1, guaranteeing ZFA balance.
+            let pos_idx = ((b >> 4) & 0x3) * 2;      // → 0,2,4,6 (all positive)
+            let neg_idx = ((b & 0x3) * 2) + 1;        // → 1,3,5,7 (all negative)
             let pos = Twist::from_u8(pos_idx).unwrap_or(Twist::Plus);
             let neg = Twist::from_u8(neg_idx).unwrap_or(Twist::Minus);
             twists.push(pos);
@@ -100,6 +99,23 @@ mod tests {
         let cap = Capability::from_entropy(&bytes, "peer-id");
         assert!(cap.is_valid(), "capability from entropy must be ZFA-balanced");
         assert_eq!(cap.spectral_gap(), 0);
+    }
+
+    #[test]
+    fn entropy_capability_valid_all_nibbles() {
+        // Bytes with high nibbles 1,3 (previously mapped to Down/Left = negative)
+        // were the failure case. Test every nibble value.
+        for hi in 0u8..16 {
+            for lo in 0u8..16 {
+                let b = (hi << 4) | lo;
+                let cap = Capability::from_entropy(&[b], "test");
+                assert!(
+                    cap.is_valid(),
+                    "byte 0x{:02x} produced unbalanced capability: {}",
+                    b, cap.to_hex()
+                );
+            }
+        }
     }
 
     #[test]

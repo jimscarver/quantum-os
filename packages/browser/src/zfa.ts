@@ -55,11 +55,13 @@ export function generateCapability(label: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   if (_wasm) return _wasm.wasm_capability_from_entropy(bytes, label);
-  // Pure-TS fallback: encode as hex with ZFA balance guaranteed
+  // Pure-TS fallback: encode as hex with ZFA balance guaranteed.
+  // Positive twists are even (0,2,4,6); negative are odd (1,3,5,7).
+  // Map 2 bits → pos by *2, → neg by *2+1.
   let hex = "";
   for (const b of bytes) {
-    const pos = (b >> 4) & 0x3;
-    const neg = (b & 0x3) + 4;
+    const pos = ((b >> 4) & 0x3) * 2;        // → 0,2,4,6  (all positive)
+    const neg = ((b & 0x3) * 2) + 1;          // → 1,3,5,7  (all negative)
     hex += pos.toString(16) + neg.toString(16);
   }
   return `cap:${label}:${hex}`;
