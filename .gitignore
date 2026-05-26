@@ -1,0 +1,7 @@
+target/
+node_modules/
+dist/
+pkg/
+packages/zfa-core-wasm/
+*.wasm
+.DS_Store

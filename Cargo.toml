@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/zfa-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["QLF Contributors"]
+license = "MIT"
+repository = "https://github.com/jimscarver/quantum-os"
+
+[profile.release]
+opt-level = "s"   # size-optimized for WASM

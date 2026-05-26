@@ -1,0 +1,17 @@
+{
+  "name": "quantum-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Peer-to-peer QuantumOS: ZFA kernel (Rust/WASM) + WebRTC browser peers",
+  "scripts": {
+    "build:wasm": "cd crates/zfa-core && wasm-pack build --target web --out-dir ../../packages/zfa-core-wasm --features wasm",
+    "build:signaling": "pnpm --filter @quantum-os/signaling build",
+    "build:browser": "pnpm --filter @quantum-os/browser build",
+    "build": "pnpm build:wasm && pnpm build:signaling && pnpm build:browser",
+    "start:signaling": "pnpm --filter @quantum-os/signaling start",
+    "dev:signaling": "pnpm --filter @quantum-os/signaling dev",
+    "dev:browser": "pnpm --filter @quantum-os/browser dev",
+    "test:rust": "cargo test --workspace",
+    "test": "pnpm test:rust"
+  }
+}

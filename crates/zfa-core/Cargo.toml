@@ -1,0 +1,20 @@
+[package]
+name = "zfa-core"
+version.workspace = true
+edition.workspace = true
+description = "ZFA kernel: twist algebra, process model, capability tokens"
+
+[lib]
+crate-type = ["cdylib", "rlib"]  # cdylib for WASM, rlib for native
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "js-sys"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+getrandom = { version = "0.2", features = ["js"] }  # capability token entropy
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

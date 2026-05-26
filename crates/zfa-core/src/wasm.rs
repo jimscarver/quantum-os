@@ -1,0 +1,54 @@
+//! WASM bindings — compiled when feature = "wasm".
+//! Exposes the ZFA core to TypeScript with zero-copy where possible.
+
+use wasm_bindgen::prelude::*;
+
+use crate::capability::Capability;
+use crate::history::{achieves_zfa, charge, div_b, spectral_gap};
+use crate::twist::Twist;
+
+/// Parse a twist sequence from a Uint8Array (0..7 encoding).
+fn parse_twists(bytes: &[u8]) -> Vec<Twist> {
+    bytes.iter().filter_map(|&b| Twist::from_u8(b)).collect()
+}
+
+#[wasm_bindgen]
+pub fn wasm_achieves_zfa(twist_bytes: &[u8]) -> bool {
+    achieves_zfa(&parse_twists(twist_bytes))
+}
+
+#[wasm_bindgen]
+pub fn wasm_spectral_gap(twist_bytes: &[u8]) -> i32 {
+    spectral_gap(&parse_twists(twist_bytes)) as i32
+}
+
+#[wasm_bindgen]
+pub fn wasm_div_b(twist_bytes: &[u8]) -> i32 {
+    div_b(&parse_twists(twist_bytes)) as i32
+}
+
+#[wasm_bindgen]
+pub fn wasm_charge(twist_bytes: &[u8]) -> i32 {
+    charge(&parse_twists(twist_bytes)) as i32
+}
+
+/// Generate a capability from random bytes supplied by JS (via crypto.getRandomValues).
+#[wasm_bindgen]
+pub fn wasm_capability_from_entropy(bytes: &[u8], label: &str) -> String {
+    Capability::from_entropy(bytes, label).to_string()
+}
+
+/// Verify that a hex-encoded capability string is ZFA-balanced.
+#[wasm_bindgen]
+pub fn wasm_capability_valid(hex: &str) -> bool {
+    // Parse cap:label:hextwists format
+    let parts: Vec<&str> = hex.splitn(3, ':').collect();
+    if parts.len() != 3 || parts[0] != "cap" {
+        return false;
+    }
+    let twist_bytes: Vec<u8> = parts[2]
+        .chars()
+        .filter_map(|c| c.to_digit(16).map(|d| d as u8))
+        .collect();
+    achieves_zfa(&parse_twists(&twist_bytes))
+}
