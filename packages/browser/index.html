@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantumOS — P2P Room</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "SF Mono", "Fira Code", monospace;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #222;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 { font-size: 1rem; color: #7fdbca; letter-spacing: 0.05em; }
+    header .tag { font-size: 0.7rem; color: #555; }
+
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 260px;
+      border-right: 1px solid #222;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+      overflow-y: auto;
+    }
+
+    .sidebar h2 { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.1em; }
+
+    .id-box {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 4px;
+      padding: 0.5rem;
+      font-size: 0.65rem;
+      color: #7fdbca;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background: #444;
+    }
+    .status-dot.connected { background: #4caf50; }
+    .status-dot.connecting { background: #ff9800; }
+
+    #peer-list { list-style: none; }
+    #peer-list li {
+      font-size: 0.7rem;
+      color: #aaa;
+      padding: 0.3rem 0;
+      border-bottom: 1px solid #1a1a1a;
+      word-break: break-all;
+    }
+    #peer-list li:last-child { border-bottom: none; }
+    #peer-list .you { color: #7fdbca; }
+
+    .signal-row {
+      display: flex;
+      gap: 0.4rem;
+    }
+    .signal-row input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.7rem;
+      padding: 0.4rem 0.5rem;
+    }
+    .signal-row button {
+      background: #1e3a3a;
+      border: 1px solid #2a5a5a;
+      border-radius: 4px;
+      color: #7fdbca;
+      font-family: inherit;
+      font-size: 0.7rem;
+      padding: 0.4rem 0.6rem;
+      cursor: pointer;
+    }
+    .signal-row button:hover { background: #2a4a4a; }
+
+    /* Main */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .msg {
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+    .msg .from { color: #7fdbca; margin-right: 0.5rem; }
+    .msg .from.system { color: #555; }
+    .msg .from.self { color: #ff9d4a; }
+    .msg .text { color: #ccc; }
+    .msg.system-line .text { color: #555; font-style: italic; }
+
+    .input-row {
+      border-top: 1px solid #222;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    #msg-input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 0.5rem 0.75rem;
+    }
+    #msg-input:focus { outline: none; border-color: #7fdbca; }
+
+    #send-btn {
+      background: #1e3a3a;
+      border: 1px solid #2a5a5a;
+      border-radius: 4px;
+      color: #7fdbca;
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+    }
+    #send-btn:hover { background: #2a4a4a; }
+
+    .share-row {
+      padding: 0.5rem 1rem;
+      background: #111;
+      border-bottom: 1px solid #222;
+      font-size: 0.7rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .share-row span { color: #555; }
+    .share-row a { color: #7fdbca; text-decoration: none; word-break: break-all; }
+    .share-row a:hover { text-decoration: underline; }
+    #copy-btn {
+      background: none;
+      border: 1px solid #333;
+      border-radius: 3px;
+      color: #555;
+      font-family: inherit;
+      font-size: 0.65rem;
+      padding: 0.2rem 0.5rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #copy-btn:hover { color: #aaa; border-color: #555; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⬡ QuantumOS</h1>
+    <span class="tag">peer-to-peer · ZFA capability model · WebRTC</span>
+  </header>
+
+  <div class="layout">
+    <div class="sidebar">
+      <div>
+        <h2>Your ID</h2>
+        <div class="id-box" id="my-id">generating…</div>
+      </div>
+
+      <div>
+        <h2>Room</h2>
+        <div class="id-box" id="room-id">—</div>
+      </div>
+
+      <div>
+        <h2>Signaling</h2>
+        <div class="signal-row">
+          <input id="signal-url" type="text" value="ws://localhost:4444" />
+          <button id="connect-btn">Connect</button>
+        </div>
+        <div style="margin-top:0.5rem; font-size:0.65rem;">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text" style="color:#555">disconnected</span>
+        </div>
+      </div>
+
+      <div>
+        <h2>Peers (<span id="peer-count">0</span>)</h2>
+        <ul id="peer-list"></ul>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="share-row">
+        <span>Share room:</span>
+        <a id="share-link" href="#">—</a>
+        <button id="copy-btn">copy</button>
+      </div>
+
+      <div id="messages"></div>
+
+      <div class="input-row">
+        <input id="msg-input" type="text" placeholder="broadcast a message…" disabled />
+        <button id="send-btn" disabled>Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/app.ts"></script>
+</body>
+</html>

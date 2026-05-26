@@ -2,6 +2,8 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** — share the URL with anyone to start a peer session. Set the signaling server URL in the sidebar and click Connect.
+
 **Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities).
 
 ---

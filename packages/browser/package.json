@@ -4,7 +4,7 @@
   "description": "Browser peer for quantum-os: WebRTC + ZFA kernel (WASM)",
   "type": "module",
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "vite build",
     "dev": "vite",
     "typecheck": "tsc --noEmit"
   },
