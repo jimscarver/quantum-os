@@ -21,6 +21,7 @@ function getRoomId(): string {
 
 const myIdEl       = document.getElementById("my-id")!;
 const roomIdEl     = document.getElementById("room-id")!;
+const DEFAULT_SIGNAL = "wss://quantum-os-signaling.fly.dev";
 const signalUrlEl  = document.getElementById("signal-url") as HTMLInputElement;
 const connectBtn   = document.getElementById("connect-btn") as HTMLButtonElement;
 const statusDot    = document.getElementById("status-dot")!;
@@ -195,10 +196,11 @@ async function init(): Promise<void> {
   sendBtn.addEventListener("click", send);
   msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
-  // Read signaling URL from query param ?signal=ws://...
+  // Read signaling URL from query param ?signal=wss://...
   const qp = new URLSearchParams(window.location.search);
   const sig = qp.get("signal");
   if (sig) signalUrlEl.value = sig;
+  else signalUrlEl.value = DEFAULT_SIGNAL;
 }
 
 init();

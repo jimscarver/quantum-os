@@ -1,3 +1,4 @@
+import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { Room, type Peer } from "./room.js";
 
@@ -20,12 +21,22 @@ export class SignalingServer {
   private peerIndex = new Map<string, { roomId: string }>();
 
   constructor(private port: number) {
-    this.wss = new WebSocketServer({ port });
+    // HTTP server handles both health checks (GET /) and WS upgrades.
+    const http = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", rooms: this.rooms.size }));
+    });
+    this.wss = new WebSocketServer({ server: http });
+    this._http = http;
   }
+
+  private _http: ReturnType<typeof createServer>;
 
   start(): void {
     this.wss.on("connection", (ws) => this.onConnect(ws));
-    console.log(`[quantum-os signaling] listening on ws://0.0.0.0:${this.port}`);
+    this._http.listen(this.port, () => {
+      console.log(`[quantum-os signaling] listening on ws://0.0.0.0:${this.port}`);
+    });
   }
 
   private onConnect(ws: WebSocket): void {
