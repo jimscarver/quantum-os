@@ -41,13 +41,13 @@ else
   echo "      pnpm already installed: $(pnpm --version)"
 fi
 
-# 3. JS dependencies
-echo "[3/4] Installing JS dependencies..."
-pnpm install
-
-# 4. Build WASM
-echo "[4/4] Building ZFA WASM kernel..."
+# 3. Build WASM (must happen before pnpm install so @quantum-os/zfa-core resolves)
+echo "[3/4] Building ZFA WASM kernel..."
 pnpm build:wasm
+
+# 4. JS dependencies
+echo "[4/4] Installing JS dependencies..."
+pnpm install
 
 echo ""
 echo "=== Setup complete ==="
