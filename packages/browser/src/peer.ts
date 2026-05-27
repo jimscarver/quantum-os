@@ -88,8 +88,9 @@ export class QOSPeer {
   private handleSignal(msg: SignalMsg): void {
     switch (msg.type) {
       case "peers":
-        // Initiate connections to existing peers in the room
+        // Notify app and initiate connections to existing peers in the room
         for (const peerId of msg.peers) {
+          this.config.onPeerJoined?.(peerId);
           this.initiateConnection(peerId);
         }
         break;

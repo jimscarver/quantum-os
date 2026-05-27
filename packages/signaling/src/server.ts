@@ -18,7 +18,7 @@ export class SignalingServer {
   private wss: WebSocketServer;
   private rooms = new Map<string, Room>();
   // peerId → { roomId, ws } for cleanup on disconnect
-  private peerIndex = new Map<string, { roomId: string }>();
+  private peerIndex = new Map<string, { roomId: string; ws: WebSocket }>();
 
   constructor(private port: number) {
     // HTTP server handles both health checks (GET /) and WS upgrades.
@@ -79,7 +79,7 @@ export class SignalingServer {
 
     const peer: Peer = { id: peerId, ws, joinedAt: Date.now() };
     room.add(peer);
-    this.peerIndex.set(peerId, { roomId });
+    this.peerIndex.set(peerId, { roomId, ws });
 
     // Tell the joiner who else is in the room.
     this.send(ws, { type: "peers", roomId, peers: room.peerIds().filter(id => id !== peerId) });
@@ -101,15 +101,11 @@ export class SignalingServer {
   }
 
   private onDisconnect(ws: WebSocket): void {
-    // Find all peers on this socket and remove them.
-    for (const [peerId, { roomId }] of this.peerIndex) {
-      const room = this.rooms.get(roomId);
-      if (!room) continue;
-      const peer = [...room.peerIds()].find(id => id === peerId);
-      if (peer) {
-        this.onLeave(roomId, peerId);
-        this.peerIndex.delete(peerId);
-      }
+    // Find the single peer on this socket and remove only them.
+    for (const [peerId, { roomId, ws: peerWs }] of this.peerIndex) {
+      if (peerWs !== ws) continue;
+      this.onLeave(roomId, peerId);
+      break;
     }
   }
 
