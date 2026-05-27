@@ -26,7 +26,7 @@ const toggleBtn       = document.getElementById("sidebar-toggle") as HTMLButtonE
 const myNameEl        = document.getElementById("my-name") as HTMLInputElement;
 const myIdEl          = document.getElementById("my-id")!;
 const roomIdEl        = document.getElementById("room-id")!;
-const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.fly.dev";
+const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.onrender.com";
 const signalUrlEl     = document.getElementById("signal-url") as HTMLInputElement;
 const connectBtn      = document.getElementById("connect-btn") as HTMLButtonElement;
 const statusDot       = document.getElementById("status-dot")!;
@@ -435,7 +435,7 @@ async function connect(): Promise<void> {
   const roomId = getRoomId();
   const signalingUrl = signalUrlEl.value.trim();
 
-  setStatus("connecting", "connecting…");
+  setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
   connectBtn.textContent = "Disconnect";
 
   qpeer = new QOSPeer({

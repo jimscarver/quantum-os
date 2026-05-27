@@ -17,7 +17,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
 8. Use `/grant [label]` to mint a ZFA capability and share it with the room.
 
-The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.fly.dev`) is used by default; edit the field to point at a self-hosted server.
+The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
 
 **Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
 
@@ -326,7 +326,7 @@ The signaling layer is designed to survive network interruptions without losing 
 - **Server heartbeat** — the server pings every client every 25 seconds. Browsers respond automatically at the protocol level; connections that miss two consecutive pings are terminated cleanly. This keeps Fly.io's proxy from silently closing idle WebSocket connections.
 - **Auto-reconnect** — if the signaling WebSocket drops, the client reconnects after 3 seconds (5 seconds on repeated failure) and re-joins the room. Existing peers detect the rejoin via the `joined` message and re-establish data channels via the normal offer/answer flow.
 - **ICE failure detection** — `RTCPeerConnection.onconnectionstatechange` is monitored; a `"failed"` state triggers cleanup and notifies the app, so the peer list stays accurate rather than showing stale connected peers.
-- **Always-on server** — `auto_stop_machines = "off"`, `min_machines_running = 1` in `fly.toml` keeps the signaling machine running permanently. No cold-start drops mid-session.
+- **Free-tier server — hosted on Render (free tier); first connection after 15 min idle may take ~30s to wake. The heartbeat and auto-reconnect logic handles this transparently.
 
 ---
 
@@ -355,7 +355,7 @@ wasm_capability_valid(hex: string): boolean
 |---|---|
 | ZFA Rust kernel | ✓ 19/19 tests pass (all 256 byte values) |
 | WASM build | ✓ wasm-pack, wasm-bindgen |
-| Signaling server | ✓ deployed — wss://quantum-os-signaling.fly.dev |
+| Signaling server | ✓ deployed — wss://quantum-os-signaling.onrender.com |
 | Browser TypeScript | ✓ 0 type errors |
 | WebRTC peer | ✓ join/peers/offer/answer/ICE/data channel |
 | Connection reliability | ✓ WS heartbeat (25s ping), auto-reconnect, ICE failure detection |

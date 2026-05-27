@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: quantum-os-signaling
+    runtime: node
+    rootDir: .
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        generateValue: false
+    autoDeploy: true
