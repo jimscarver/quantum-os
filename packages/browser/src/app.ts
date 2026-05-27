@@ -49,6 +49,9 @@ const peerNames = new Map<string, string>();   // peerId → display name
 let myName: string = localStorage.getItem("qos-name") ?? "";
 let qpeer: QOSPeer | null = null;
 
+type LogEntry = { who: string; cmd: string; arg: string; summary: string };
+const sessionLog: LogEntry[] = [];
+
 // ---------------------------------------------------------------------------
 // UI helpers
 // ---------------------------------------------------------------------------
@@ -289,6 +292,7 @@ function handleCommand(raw: string): string[] {
       sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
+      sys("  /dump            — summary of all logic shared this session");
       sys("  //message        — send a message starting with /");
       break;
 
@@ -437,6 +441,17 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "dump": {
+      if (sessionLog.length === 0) { sys("no logic shared yet this session"); break; }
+      sys("logic shared this session:");
+      for (const e of sessionLog) {
+        const argPart = e.arg ? ` ${e.arg}` : "";
+        sys(`  ${e.who}: /${e.cmd}${argPart}`);
+        if (e.summary) sys(`    → ${e.summary}`);
+      }
+      break;
+    }
+
     case "freq": {
       let highlight: number | null = null;
       if (!arg && qpeer) {
@@ -535,8 +550,10 @@ function connect(): void {
         if (d.kind === "qlf") {
           const cmdStr = String(d.cmd ?? "");
           const argStr = String(d.arg ?? "");
+          const pLines = d.lines as string[];
           addMessage(from, `/${cmdStr}${argStr ? " " + argStr : ""}`, "peer", peerLabel(from));
-          for (const line of (d.lines as string[])) addMessage("", line, "system");
+          for (const line of pLines) addMessage("", line, "system");
+          sessionLog.push({ who: peerLabel(from), cmd: cmdStr, arg: argStr, summary: pLines[0] ?? "" });
           return;
         }
         if (d.kind === "cap-grant") {
@@ -591,7 +608,11 @@ function send(): void {
     const parts = text.slice(1).trim().split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const arg = parts.slice(1).join(" ");
+    addMessage("", text, "self");
     const lines = handleCommand(text);
+    if (cmd !== "help" && cmd !== "dump") {
+      sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
+    }
     if (lines.length > 0 && cmd !== "help" && cmd !== "grant") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
