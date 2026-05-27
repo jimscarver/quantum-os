@@ -333,6 +333,24 @@ wasm_capability_valid(hex: string): boolean
 
 ## Related
 
-- [quantum-logical-framework](https://github.com/jimscarver/quantum-logical-framework) — Lean 4 formal proofs; ZFA theory, Maxwell equations, Riemann program
-- [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) — capability-secure OS design
-- [Maxwell.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Maxwell.md) — Maxwell equations from ZFA
+**[quantum-logical-framework](https://github.com/jimscarver/quantum-logical-framework)** — the Lean 4 formal proof repo that underpins this app. Zero `sorry` blocks across 16 modules. Key documents:
+
+| Document | Relevant to |
+|---|---|
+| [README.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/README.md) | Overview; "Try in the browser" section with `/braket` and `/qucalc` examples |
+| [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) | `/braket` — `action`=ket, `lift`=bra, `parallel`=superposition; `bra_ket_always_balanced` proof |
+| [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) | `/qucalc` — ZFA as OS kernel; `full_zeno_prune` as security, GC, and error correction |
+| [QuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuCalc.md) | The 8-twist alphabet `{^v<>/\+-}`; ZFA generation engine |
+| [Maxwell.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Maxwell.md) | Maxwell equations from ZFA; `no_magnetic_monopoles` (∇·B=0) |
+| [Lagrangian_Formulation.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Lagrangian_Formulation.md) | ZFA as ℒ=0 (null Lagrangian = condition of origin); variational grounding |
+| [Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md) | Possibilist ontology; ZFA as the sole selection principle |
+
+**Lean source files** (machine-verified, zero `sorry`):
+
+| File | Theorems |
+|---|---|
+| [lean/RhoQuCalc.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) | `rho_process_always_zfa`, `action`, `lift`, `parallel` — `/id`, `/qucalc` |
+| [lean/BraKetRhoQuCalc.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean) | `bra_ket_always_balanced`, `action_topo_is_ket`, `lift_topo_is_bra` — `/braket` |
+| [lean/SpacetimeDynamics.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/SpacetimeDynamics.lean) | `Form.toMatrix_adjoint` — Hermitian matrix used by `/braket` |
+| [lean/QLF_Axioms.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean) | `achieves_ZFA`, `spectral_gap`, `full_zeno_prune` — `/zfa`, `/qucalc` |
+| [lean/QLF_Universality.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Universality.lean) | `qlf_universality` — every terminating computation IS a ZFA string |
