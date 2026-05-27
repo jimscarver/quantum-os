@@ -418,7 +418,7 @@ function handleCommand(raw: string): string[] {
 // Connect
 // ---------------------------------------------------------------------------
 
-async function connect(): Promise<void> {
+function connect(): void {
   if (qpeer) {
     qpeer.disconnect();
     qpeer = null;
@@ -441,6 +441,18 @@ async function connect(): Promise<void> {
   qpeer = new QOSPeer({
     signalingUrl,
     roomId,
+    onSignalingOpen() {
+      setStatus("connected", `connected · ${signalingUrl}`);
+      msgInput.disabled = false;
+      sendBtn.disabled = false;
+      renderPeers();
+      addMessage("", `joined room ${shortId(roomId)}`, "system");
+    },
+    onSignalingClose() {
+      setStatus("connecting", "reconnecting…");
+      msgInput.disabled = true;
+      sendBtn.disabled = true;
+    },
     onMessage(from, data) {
       if (typeof data === "object" && data !== null) {
         const d = data as Record<string, unknown>;
@@ -487,18 +499,7 @@ async function connect(): Promise<void> {
     },
   });
 
-  try {
-    await qpeer.connect();
-    setStatus("connected", `connected · ${signalingUrl}`);
-    msgInput.disabled = false;
-    sendBtn.disabled = false;
-    renderPeers();
-    addMessage("", `joined room ${shortId(roomId)}`, "system");
-  } catch (err) {
-    setStatus("disconnected", `failed: ${err}`);
-    connectBtn.textContent = "Connect";
-    qpeer = null;
-  }
+  qpeer.connect();
 }
 
 // ---------------------------------------------------------------------------

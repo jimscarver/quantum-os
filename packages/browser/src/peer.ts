@@ -13,6 +13,8 @@ export interface PeerConfig {
   signalingUrl: string;    // ws://localhost:4444
   roomId: string;          // ZFA capability token identifying the room
   iceServers?: RTCIceServer[];
+  onSignalingOpen?: () => void;                       // fires on every successful WS connect
+  onSignalingClose?: () => void;                      // fires when WS drops (before retry)
   onMessage?: (from: string, data: unknown) => void;
   onPeerJoined?: (peerId: string) => void;
   onPeerLeft?: (peerId: string) => void;
@@ -40,12 +42,17 @@ export class QOSPeer {
     this.peerId = generateCapability("peer");
   }
 
-  async connect(): Promise<void> {
+  connect(): void {
     this._disconnected = false;
     if (!validateCapability(this.config.roomId)) {
       console.warn(`[qos-peer] roomId ZFA check failed (may be cached token): ${this.config.roomId}`);
     }
-    await this._openSignaling();
+    this._openSignaling().catch(() => {
+      if (!this._disconnected) {
+        // Server unreachable (e.g. cold start) — retry same as reconnect path
+        this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 3000);
+      }
+    });
   }
 
   disconnect(): void {
@@ -94,11 +101,13 @@ export class QOSPeer {
     ws.onclose = () => {
       if (this._disconnected) return;
       console.warn("[qos-peer] signaling disconnected — reconnecting in 3s");
+      this.config.onSignalingClose?.();
       this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 3000);
     };
 
     // Join the room
     this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
+    this.config.onSignalingOpen?.();
   }
 
   private async _reconnectSignaling(): Promise<void> {
