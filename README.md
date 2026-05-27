@@ -92,14 +92,14 @@ Type these in the chat input after connecting. The `/help` list is shown automat
 Lists all available commands.
 ```
 QLF slash commands:
-  /help        — show this help
-  /id          — your peer ID and ZFA proof
-  /room        — room capability token
-  /cap [label] — generate a new ZFA capability
-  /zfa [token] — validate a capability token
-  /braket      — bra-ket duality via ZFA
-  /qucalc      — your peer as a RhoQuCalc process
-  //message    — send a message starting with /
+  /help            — show this help
+  /id              — your peer ID and ZFA proof
+  /room            — room capability token
+  /cap [label]     — generate a new ZFA capability
+  /zfa [token]     — validate a capability token
+  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)
+  /qucalc [twists] — evaluate RhoQuCalc twist sequence
+  //message        — send a message starting with /
 ```
 
 ### `/id`
@@ -136,41 +136,78 @@ Validates any `cap:label:hex` token — checks ZFA balance and reports the spect
 ```
 Lean anchor: [`achieves_ZFA`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
 
-### `/braket`
-Demonstrates bra-ket duality as ZFA balance: `action(f)` is the ket `|ψ⟩`, `lift(f)` is the bra `⟨ψ|`. Both achieve ZFA by construction. Two fresh capability tokens are generated — one labeled `ket`, one `bra` — each 32 twists, 16 positive / 16 negative.
+### `/braket <state>`
+Evaluates a bra-ket expression using the `Form` 2×2 Hermitian matrix algebra from `SpacetimeDynamics.lean`. States: `0`, `1`, `+`, `-`, `i`, `-i`. Multiple states (space-separated) compose as `parallel` (matrix addition = superposition).
+
+`Form.toMatrix = [[t+z, x−iy],[x+iy, t−z]]`
 
 Input:
 ```
-/braket
+/braket -i
 ```
 Output:
 ```
-· bra-ket duality (ZFA / RhoQuCalc):
-· |ψ⟩  action(Form)  twists [+,−]  eval = f.toMatrix
-· ⟨ψ|  lift(Form)    twists [−,+]  eval = f.toMatrix†
-· both ZFA-balanced: ✓  spectral gap: 0
-· bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
-· sample ket: cap:ket:47214365214747210367270165450523
-· sample bra: cap:bra:43270765472103250765614143652367
+· ket: |-i⟩
+·   RhoProcess: action(Form_-i)
+·   eval = Form.toMatrix:
+·     ⎡    0.5  0.5i ⎤
+·     ⎣ -0.5i   0.5 ⎦
+· bra: ⟨-i|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
+·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
+·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
+```
+
+Input:
+```
+/braket 0 1
+```
+Output:
+```
+· ket: |0⟩ + |1⟩
+·   RhoProcess: parallel(action(Form_0), action(Form_1))
+·   eval = Form.toMatrix:
+·     ⎡ 1  0 ⎤
+·     ⎣ 0  1 ⎦
+· bra: ⟨0| + ⟨1|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
+·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
+·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
 ```
 Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
-### `/qucalc`
-Shows your peer ID as a RhoQuCalc process tree — the same algebra used in the Lean proofs.
+### `/qucalc [twists]`
+Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, or a `cap:label:hex` token. No argument → show your peer's twist sequence.
+
+Twist alphabet: `^`=Up=0, `v`=Down=1, `>`=Right=2, `<`=Left=3, `/`=Slash=4, `\`=BSlash=5, `+`=Plus=6, `-`=Minus=7. Even values are positive (action); odd are negative (lift).
 
 Input:
 ```
-/qucalc
+/qucalc +-+-+-+-
 ```
 Output:
 ```
-· RhoQuCalc process (this peer):
-· action(f) ≅ |ψ⟩   twist: [+,−]   eval = f.toMatrix
-· lift(f)   ≅ ⟨ψ|   twist: [−,+]   eval = f.toMatrix†
-· parallel(action,lift)  → ZFA-balanced superposition
-· rho_process_always_zfa: ✓ (Lean-verified)
-· peer ID: cap:peer:45456323610301276721454361630503
-· twists: 32 (16 pos / 16 neg)  spectral gap: 0
+· RhoQuCalc process:
+·   input: +-+-+-+-
+·   twists: +-+-+-+-  (8 total)
+·   action (pos): count=4   lift (neg): count=4
+·   spectral gap: 0  ZFA-balanced: ✓
+·   process: parallel(action(Form), lift(Form))  → ZFA stable
+·   achieves_ZFA: ✓  stable under full_zeno_prune
+·   rho_process_always_zfa: ✓ (Lean-verified)
+```
+
+Input:
+```
+/qucalc +++
+```
+Output:
+```
+· RhoQuCalc process:
+·   input: +++
+·   twists: +++  (3 total)
+·   action (pos): count=3   lift (neg): count=0
+·   spectral gap: 3  ZFA-balanced: ✗
+·   process: UNBALANCED  → pruned by full_zeno_prune
+·   achieves_ZFA: ✗  gap=3  (not a physical process)
 ```
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`BraKetRhoQuCalc`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 

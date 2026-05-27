@@ -126,6 +126,89 @@ function twistStats(twists: Uint8Array): { pos: number; neg: number; gap: number
 }
 
 // ---------------------------------------------------------------------------
+// Form matrix math for /braket — toMatrix = [[t+z, x−iy],[x+iy, t−z]]
+// ---------------------------------------------------------------------------
+
+interface FormF { t: number; x: number; y: number; z: number }
+const STATE_FORMS: Record<string, FormF> = {
+  "0":  { t: 0.5, x: 0,    y: 0,    z:  0.5 },
+  "1":  { t: 0.5, x: 0,    y: 0,    z: -0.5 },
+  "+":  { t: 0.5, x: 0.5,  y: 0,    z:  0   },
+  "-":  { t: 0.5, x: -0.5, y: 0,    z:  0   },
+  "i":  { t: 0.5, x: 0,    y: 0.5,  z:  0   },
+  "-i": { t: 0.5, x: 0,    y: -0.5, z:  0   },
+};
+const STATE_KET: Record<string, string> = {
+  "0": "|0⟩", "1": "|1⟩", "+": "|+⟩", "-": "|-⟩", "i": "|i⟩", "-i": "|-i⟩",
+};
+const STATE_BRA: Record<string, string> = {
+  "0": "⟨0|", "1": "⟨1|", "+": "⟨+|", "-": "⟨-|", "i": "⟨i|", "-i": "⟨-i|",
+};
+
+type C2 = [number, number];
+type M2x2 = [[C2, C2], [C2, C2]];
+
+function formToMatrix(f: FormF): M2x2 {
+  return [
+    [[f.t + f.z, 0],    [f.x, -f.y]],
+    [[f.x,       f.y],  [f.t - f.z, 0]],
+  ];
+}
+
+function addM(a: M2x2, b: M2x2): M2x2 {
+  return [
+    [[a[0][0][0]+b[0][0][0], a[0][0][1]+b[0][0][1]], [a[0][1][0]+b[0][1][0], a[0][1][1]+b[0][1][1]]],
+    [[a[1][0][0]+b[1][0][0], a[1][0][1]+b[1][0][1]], [a[1][1][0]+b[1][1][0], a[1][1][1]+b[1][1][1]]],
+  ];
+}
+
+function fmtC2(c: C2): string {
+  const eps = 1e-10;
+  const r  = Math.abs(c[0]) < eps ? 0 : c[0];
+  const im = Math.abs(c[1]) < eps ? 0 : c[1];
+  const fr = (v: number) =>
+    Math.abs(v - Math.round(v)) < eps
+      ? String(Math.round(v))
+      : v.toFixed(3).replace(/\.?0+$/, "");
+  if (im === 0) return fr(r);
+  if (r  === 0) return Math.abs(im) === 1 ? (im > 0 ? "i" : "-i") : `${fr(im)}i`;
+  const iStr = Math.abs(im) === 1
+    ? (im > 0 ? "+i" : "-i")
+    : `${im > 0 ? "+" : ""}${fr(im)}i`;
+  return `${fr(r)}${iStr}`;
+}
+
+function fmtMatrix(m: M2x2): [string, string] {
+  const a = fmtC2(m[0][0]), b = fmtC2(m[0][1]);
+  const c = fmtC2(m[1][0]), d = fmtC2(m[1][1]);
+  const w = Math.max(a.length, c.length);
+  const pad = (s: string) => s.padStart(w);
+  return [`  ⎡ ${pad(a)}  ${b} ⎤`, `  ⎣ ${pad(c)}  ${d} ⎦`];
+}
+
+// ---------------------------------------------------------------------------
+// Twist helpers for /qucalc — alphabet {^=0, v=1, >=2, <=3, /=4, \=5, +=6, -=7}
+// ---------------------------------------------------------------------------
+
+const TWIST_SYM: Record<string, number> = {
+  "^": 0, "v": 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7,
+};
+const TWIST_NAME = ["^", "v", ">", "<", "/", "\\", "+", "-"];
+
+function twistToSymbol(t: number): string { return TWIST_NAME[t] ?? "?"; }
+function twistsToSymbolic(tw: Uint8Array): string { return [...tw].map(twistToSymbol).join(""); }
+
+function parseSymbolicTwists(s: string): Uint8Array | null {
+  const result: number[] = [];
+  for (const c of s.replace(/\s/g, "")) {
+    if (c >= "0" && c <= "7") result.push(Number(c));
+    else if (c in TWIST_SYM) result.push(TWIST_SYM[c]);
+    else return null;
+  }
+  return result.length > 0 ? new Uint8Array(result) : null;
+}
+
+// ---------------------------------------------------------------------------
 // Slash command handler
 // ---------------------------------------------------------------------------
 
@@ -138,14 +221,14 @@ function handleCommand(raw: string): void {
   switch (cmd) {
     case "help":
       sys("QLF slash commands:");
-      sys("  /help        — show this help");
-      sys("  /id          — your peer ID and ZFA proof");
-      sys("  /room        — room capability token");
-      sys("  /cap [label] — generate a new ZFA capability");
-      sys("  /zfa [token] — validate a capability token");
-      sys("  /braket      — bra-ket duality via ZFA");
-      sys("  /qucalc      — your peer as a RhoQuCalc process");
-      sys("  //message    — send a message starting with /");
+      sys("  /help            — show this help");
+      sys("  /id              — your peer ID and ZFA proof");
+      sys("  /room            — room capability token");
+      sys("  /cap [label]     — generate a new ZFA capability");
+      sys("  /zfa [token]     — validate a capability token");
+      sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
+      sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
+      sys("  //message        — send a message starting with /");
       break;
 
     case "id": {
@@ -202,32 +285,76 @@ function handleCommand(raw: string): void {
     }
 
     case "braket": {
-      const ket = generateCapability("ket");
-      const bra = generateCapability("bra");
-      const tw = tokenTwists(ket)!;
-      const { gap } = twistStats(tw);
-      sys("bra-ket duality (ZFA / RhoQuCalc):");
-      sys("  |ψ⟩  action(Form)  twists [+,−]  eval = f.toMatrix");
-      sys("  ⟨ψ|  lift(Form)    twists [−,+]  eval = f.toMatrix†");
-      sys(`  both ZFA-balanced: ✓  spectral gap: ${gap}`);
+      if (!arg) {
+        sys("usage: /braket <state> [state ...]");
+        sys("  states: 0  1  +  -  i  -i  (space-separated = superposition)");
+        sys("  examples: /braket 0   /braket + -   /braket -i");
+        break;
+      }
+      const rawToks = arg.trim().split(/\s+/);
+      const parsed: string[] = [];
+      for (let k = 0; k < rawToks.length; k++) {
+        if (rawToks[k] === "-" && k + 1 < rawToks.length && rawToks[k + 1] === "i") {
+          parsed.push("-i"); k++;
+        } else {
+          parsed.push(rawToks[k]);
+        }
+      }
+      const unknown = parsed.find(s => !(s in STATE_FORMS));
+      if (unknown) { sys(`unknown state: '${unknown}'  (valid: 0 1 + - i -i)`); break; }
+      let mat = formToMatrix(STATE_FORMS[parsed[0]]);
+      for (let k = 1; k < parsed.length; k++) mat = addM(mat, formToMatrix(STATE_FORMS[parsed[k]]));
+      const ketLabel = parsed.map(s => STATE_KET[s]).join(" + ");
+      const braLabel = parsed.map(s => STATE_BRA[s]).join(" + ");
+      const procLabel = parsed.length > 1
+        ? `parallel(${parsed.map(s => `action(Form_${s})`).join(", ")})`
+        : `action(Form_${parsed[0]})`;
+      sys(`ket: ${ketLabel}`);
+      sys(`  RhoProcess: ${procLabel}`);
+      sys("  eval = Form.toMatrix:");
+      for (const line of fmtMatrix(mat)) sys(line);
+      sys(`bra: ${braLabel}  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])`);
+      sys("  ZFA: action [+,−]  lift [−,+]  both balanced: ✓");
       sys("  bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)");
-      sys(`  sample ket: ${ket}`);
-      sys(`  sample bra: ${bra}`);
       break;
     }
 
     case "qucalc": {
-      const id = qpeer?.peerId ?? "(not connected)";
-      const tw = id !== "(not connected)" ? tokenTwists(id) : null;
-      sys("RhoQuCalc process (this peer):");
-      sys("  action(f) ≅ |ψ⟩   twist: [+,−]   eval = f.toMatrix");
-      sys("  lift(f)   ≅ ⟨ψ|   twist: [−,+]   eval = f.toMatrix†");
-      sys("  parallel(action,lift)  → ZFA-balanced superposition");
-      sys("  rho_process_always_zfa: ✓ (Lean-verified)");
-      sys(`  peer ID: ${id}`);
-      if (tw) {
-        const { pos, neg, gap } = twistStats(tw);
-        sys(`  twists: ${tw.length}  (${pos} pos / ${neg} neg)  spectral gap: ${gap}`);
+      let qtwists: Uint8Array | null = null;
+      let srcLabel = "";
+      if (!arg) {
+        const id = qpeer?.peerId ?? null;
+        if (!id) { sys("not connected (no peer ID); or pass twists as argument"); break; }
+        qtwists = tokenTwists(id);
+        srcLabel = `peer: ${id}`;
+      } else if (arg.trim().startsWith("cap:")) {
+        qtwists = tokenTwists(arg.trim());
+        srcLabel = `token: ${arg.trim()}`;
+      } else {
+        qtwists = parseSymbolicTwists(arg.trim());
+        srcLabel = `input: ${arg.trim()}`;
+      }
+      if (!qtwists || qtwists.length === 0) {
+        sys("usage: /qucalc [twists]");
+        sys("  twists: symbolic (^v<>/\\+-) or hex digits 0-7 or cap:label:hex");
+        sys("  examples: /qucalc +-+-+-+-   /qucalc ^v^v   /qucalc cap:peer:…");
+        sys("  (no arg: show your peer as a RhoQuCalc process)");
+        break;
+      }
+      const { pos, neg, gap, balanced } = twistStats(qtwists);
+      const symbolic = twistsToSymbolic(qtwists);
+      sys("RhoQuCalc process:");
+      sys(`  ${srcLabel}`);
+      sys(`  twists: ${symbolic}  (${qtwists.length} total)`);
+      sys(`  action (pos): count=${pos}   lift (neg): count=${neg}`);
+      sys(`  spectral gap: ${gap}  ZFA-balanced: ${balanced ? "✓" : "✗"}`);
+      if (balanced) {
+        sys("  process: parallel(action(Form), lift(Form))  → ZFA stable");
+        sys("  achieves_ZFA: ✓  stable under full_zeno_prune");
+        sys("  rho_process_always_zfa: ✓ (Lean-verified)");
+      } else {
+        sys("  process: UNBALANCED  → pruned by full_zeno_prune");
+        sys(`  achieves_ZFA: ✗  gap=${gap}  (not a physical process)`);
       }
       break;
     }
