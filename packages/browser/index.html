@@ -25,7 +25,19 @@
     }
 
     header h1 { font-size: 1rem; color: #7fdbca; letter-spacing: 0.05em; }
-    header .tag { font-size: 0.7rem; color: #555; }
+    header .tag { font-size: 0.7rem; color: #555; flex: 1; }
+
+    #sidebar-toggle {
+      display: none;
+      background: none;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #7fdbca;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0.3rem 0.5rem;
+      cursor: pointer;
+    }
 
     .layout {
       display: flex;
@@ -42,6 +54,34 @@
       flex-direction: column;
       gap: 1.2rem;
       overflow-y: auto;
+    }
+
+    /* Mobile: sidebar hidden by default, toggle button shown */
+    @media (max-width: 640px) {
+      #sidebar-toggle { display: block; }
+      .sidebar {
+        position: fixed;
+        top: 0; left: 0;
+        width: 80vw;
+        max-width: 300px;
+        height: 100vh;
+        z-index: 100;
+        background: #0d0d0d;
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+      }
+      .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 4px 0 20px rgba(0,0,0,0.6);
+      }
+      .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 99;
+        background: rgba(0,0,0,0.5);
+      }
+      .sidebar-overlay.open { display: block; }
     }
 
     .sidebar h2 { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.1em; }
@@ -190,12 +230,22 @@
 </head>
 <body>
   <header>
+    <button id="sidebar-toggle" aria-label="Toggle sidebar">☰</button>
     <h1>⬡ QuantumOS</h1>
     <span class="tag">peer-to-peer · ZFA capability model · WebRTC</span>
   </header>
 
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <div class="layout">
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
+      <div>
+        <h2>Your name</h2>
+        <input id="my-name" type="text" placeholder="set a display name…"
+               style="width:100%;background:#111;border:1px solid #333;border-radius:4px;
+                      color:#e0e0e0;font-family:inherit;font-size:0.7rem;padding:0.4rem 0.5rem;" />
+      </div>
+
       <div>
         <h2>Your ID</h2>
         <div class="id-box" id="my-id">generating…</div>

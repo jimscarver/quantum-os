@@ -16,6 +16,7 @@ export interface PeerConfig {
   onMessage?: (from: string, data: unknown) => void;
   onPeerJoined?: (peerId: string) => void;
   onPeerLeft?: (peerId: string) => void;
+  onChannelOpen?: (peerId: string) => void;
 }
 
 const DEFAULT_ICE: RTCIceServer[] = [
@@ -189,6 +190,7 @@ export class QOSPeer {
   private setupDataChannel(peerId: string, ch: RTCDataChannel): void {
     ch.onopen = () => {
       this.channels.set(peerId, ch);
+      this.config.onChannelOpen?.(peerId);
       console.log(`[qos-peer] data channel open with ${peerId}`);
     };
     ch.onclose = () => {
