@@ -168,7 +168,7 @@ function send(): void {
 function updateShareLink(): void {
   const url = window.location.href;
   shareLink.href = url;
-  shareLink.textContent = url.length > 80 ? url.slice(0, 80) + "…" : url;
+  shareLink.textContent = url;
 }
 
 copyBtn.addEventListener("click", () => {
@@ -183,14 +183,16 @@ copyBtn.addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 async function init(): Promise<void> {
-  await loadZfa();
-
+  // Set room ID and share link immediately — before WASM loads —
+  // so the URL is shareable the moment the page opens.
   const roomId = getRoomId();
-  const cap = generateCapability("peer");
-
-  myIdEl.textContent  = cap;
   roomIdEl.textContent = roomId;
   updateShareLink();
+
+  await loadZfa();
+
+  const cap = generateCapability("peer");
+  myIdEl.textContent  = cap;
 
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
