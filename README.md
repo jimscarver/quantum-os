@@ -23,6 +23,162 @@ The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). 
 
 ---
 
+## In-app QLF slash commands
+
+Type these in the chat input after connecting. The `/help` list is shown automatically at startup. Commands marked **shared** broadcast their output to all peers in the room.
+
+### `/help`
+Lists all available commands.
+```
+QLF slash commands:
+  /help            — show this help
+  /id              — your peer ID and ZFA proof
+  /room            — room capability token
+  /cap [label]     — generate a new ZFA capability
+  /grant [label]   — generate and share a ZFA capability token  [shared]
+  /zfa [token]     — validate a capability token
+  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)   [shared]
+  /qucalc [twists] — evaluate RhoQuCalc twist sequence          [shared]
+  //message        — send a message starting with /
+```
+
+### `/braket <state>` [shared]
+Evaluates a bra-ket expression using the `Form` 2×2 Hermitian matrix algebra from `SpacetimeDynamics.lean`. States: `0`, `1`, `+`, `-`, `i`, `-i`. Multiple states (space-separated) compose as `parallel` (matrix addition = superposition). Output broadcasts to all peers.
+
+`Form.toMatrix = [[t+z, x−iy],[x+iy, t−z]]`
+
+Input:
+```
+/braket +
+```
+Output:
+```
+· ket: |+⟩
+·   RhoProcess: action(Form_+)
+·   eval = Form.toMatrix:
+·   ⎡ 0.5  0.5 ⎤
+·   ⎣ 0.5  0.5 ⎦
+· bra: ⟨+|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
+·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
+·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
+```
+
+Input:
+```
+/braket 0 1
+```
+Output:
+```
+· ket: |0⟩ + |1⟩
+·   RhoProcess: parallel(action(Form_0), action(Form_1))
+·   eval = Form.toMatrix:
+·   ⎡ 1  0 ⎤
+·   ⎣ 0  1 ⎦
+· bra: ⟨0| + ⟨1|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
+·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
+·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
+```
+
+The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basis. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) for the full bra-ket ↔ RhoQuCalc correspondence.
+
+Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+
+### `/qucalc [twists]` [shared]
+Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, or a `cap:label:hex` token. No argument → show your peer's twist sequence. Click a peer name in the sidebar to prefill `/qucalc cap:peer:…`.
+
+Twist alphabet: `^`=Up=0, `v`=Down=1, `>`=Right=2, `<`=Left=3, `/`=Slash=4, `\`=BSlash=5, `+`=Plus=6, `-`=Minus=7. Even values are positive (action); odd are negative (lift).
+
+Input:
+```
+/qucalc +-+-
+```
+Output:
+```
+· RhoQuCalc process:
+·   input: +-+-
+·   twists: +-+-  (4 total)
+·   action (pos): count=2   lift (neg): count=2
+·   spectral gap: 0  ZFA-balanced: ✓
+·   process: parallel(action(Form), lift(Form))  → ZFA stable
+·   achieves_ZFA: ✓  stable under full_zeno_prune
+·   rho_process_always_zfa: ✓ (Lean-verified)
+```
+
+Input:
+```
+/qucalc +++
+```
+Output:
+```
+· RhoQuCalc process:
+·   input: +++
+·   twists: +++  (3 total)
+·   action (pos): count=3   lift (neg): count=0
+·   spectral gap: 3  ZFA-balanced: ✗
+·   process: UNBALANCED  → pruned by full_zeno_prune
+·   achieves_ZFA: ✗  gap=3  (not a physical process)
+```
+
+ZFA balance is the selection principle: `+-+-` (gap=0) is a stable physical process; `+++` (gap=3) is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
+
+Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+
+### `/grant [label]` [shared]
+Mints a fresh ZFA-balanced capability token with the given label and broadcasts it to all peers. Recipients see the token and a `/zfa` verification prompt. This is how peers share unforgeable capabilities with each other in a room.
+```
+/grant session
+```
+Output (you see):
+```
+granted: cap:session:024602460246024602460246…
+  twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
+```
+Output (peers see):
+```
+· alice granted capability:
+·   cap:session:024602460246024602460246…
+·   run /zfa cap:session:024602460246024602460246… to verify
+```
+
+### `/id`
+Shows your ZFA-balanced peer identity and confirms the `rho_process_always_zfa` invariant holds.
+```
+peer ID: cap:peer:024602460246024602460246…
+  twists: 32  (16 positive, 16 negative)
+  ZFA-balanced: ✓  spectral gap: 0
+  rho_process_always_zfa: ✓ (Lean-verified)
+```
+Lean anchor: [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean)
+
+### `/room`
+Shows the current room's ZFA capability token.
+```
+room: cap:room:024602460246024602460246…
+  twists: 32  (16 pos, 16 neg)  gap: 0  ZFA: ✓
+```
+
+### `/zfa [token]`
+Validates any `cap:label:hex` token — checks ZFA balance and reports the spectral gap.
+```
+/zfa cap:room:024602460246024602460246…
+  valid: ✓  spectral gap: 0
+  twists: 32 (16 positive, 16 negative)
+```
+Lean anchor: [`achieves_ZFA`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
+
+### `/cap [label]`
+Generates a fresh ZFA-balanced capability token locally (not shared).
+```
+generated: cap:peer:024602460246024602460246…
+  twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
+```
+Rust source: [`crates/zfa-core/src/capability.rs`](crates/zfa-core/src/capability.rs)
+
+### `//message`
+Sends a literal message that starts with `/` (escapes the command prefix).
+
+---
+
 ## Architecture
 
 ```
@@ -86,162 +242,6 @@ pnpm install
 # 5. Build signaling server
 pnpm build:signaling
 ```
-
----
-
-## In-app QLF slash commands
-
-Type these in the chat input after connecting. The `/help` list is shown automatically at startup. Commands marked **shared** broadcast their output to all peers in the room.
-
-### `/help`
-Lists all available commands.
-```
-QLF slash commands:
-  /help            — show this help
-  /id              — your peer ID and ZFA proof
-  /room            — room capability token
-  /cap [label]     — generate a new ZFA capability
-  /grant [label]   — generate and share a ZFA capability token  [shared]
-  /zfa [token]     — validate a capability token
-  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)   [shared]
-  /qucalc [twists] — evaluate RhoQuCalc twist sequence          [shared]
-  //message        — send a message starting with /
-```
-
-### `/id`
-Shows your ZFA-balanced peer identity and confirms the `rho_process_always_zfa` invariant holds.
-```
-peer ID: cap:peer:024602460246024602460246…
-  twists: 32  (16 positive, 16 negative)
-  ZFA-balanced: ✓  spectral gap: 0
-  rho_process_always_zfa: ✓ (Lean-verified)
-```
-Lean anchor: [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean)
-
-### `/room`
-Shows the current room's ZFA capability token.
-```
-room: cap:room:024602460246024602460246…
-  twists: 32  (16 pos, 16 neg)  gap: 0  ZFA: ✓
-```
-
-### `/cap [label]`
-Generates a fresh ZFA-balanced capability token with the given label (default `cap`).
-```
-generated: cap:peer:024602460246024602460246…
-  twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
-```
-Rust source: [`crates/zfa-core/src/capability.rs`](crates/zfa-core/src/capability.rs)
-
-### `/zfa [token]`
-Validates any `cap:label:hex` token — checks ZFA balance and reports the spectral gap.
-```
-/zfa cap:room:024602460246024602460246…
-  valid: ✓  spectral gap: 0
-  twists: 32 (16 positive, 16 negative)
-```
-Lean anchor: [`achieves_ZFA`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
-
-### `/braket <state>`
-Evaluates a bra-ket expression using the `Form` 2×2 Hermitian matrix algebra from `SpacetimeDynamics.lean`. States: `0`, `1`, `+`, `-`, `i`, `-i`. Multiple states (space-separated) compose as `parallel` (matrix addition = superposition).
-
-`Form.toMatrix = [[t+z, x−iy],[x+iy, t−z]]`
-
-Input:
-```
-/braket +
-```
-Output:
-```
-· ket: |+⟩
-·   RhoProcess: action(Form_+)
-·   eval = Form.toMatrix:
-·   ⎡ 0.5  0.5 ⎤
-·   ⎣ 0.5  0.5 ⎦
-· bra: ⟨+|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
-·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
-·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
-```
-
-Input:
-```
-/braket 0 1
-```
-Output:
-```
-· ket: |0⟩ + |1⟩
-·   RhoProcess: parallel(action(Form_0), action(Form_1))
-·   eval = Form.toMatrix:
-·   ⎡ 1  0 ⎤
-·   ⎣ 0  1 ⎦
-· bra: ⟨0| + ⟨1|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
-·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
-·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
-```
-
-The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basis. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) for the full bra-ket ↔ RhoQuCalc correspondence.
-
-Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
-
-### `/qucalc [twists]`
-Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, or a `cap:label:hex` token. No argument → show your peer's twist sequence.
-
-Twist alphabet: `^`=Up=0, `v`=Down=1, `>`=Right=2, `<`=Left=3, `/`=Slash=4, `\`=BSlash=5, `+`=Plus=6, `-`=Minus=7. Even values are positive (action); odd are negative (lift).
-
-Input:
-```
-/qucalc +-+-
-```
-Output:
-```
-· RhoQuCalc process:
-·   input: +-+-
-·   twists: +-+-  (4 total)
-·   action (pos): count=2   lift (neg): count=2
-·   spectral gap: 0  ZFA-balanced: ✓
-·   process: parallel(action(Form), lift(Form))  → ZFA stable
-·   achieves_ZFA: ✓  stable under full_zeno_prune
-·   rho_process_always_zfa: ✓ (Lean-verified)
-```
-
-Input:
-```
-/qucalc +++
-```
-Output:
-```
-· RhoQuCalc process:
-·   input: +++
-·   twists: +++  (3 total)
-·   action (pos): count=3   lift (neg): count=0
-·   spectral gap: 3  ZFA-balanced: ✗
-·   process: UNBALANCED  → pruned by full_zeno_prune
-·   achieves_ZFA: ✗  gap=3  (not a physical process)
-```
-
-ZFA balance is the selection principle: `+-+-` (gap=0) is a stable physical process; `+++` (gap=3) is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
-
-Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
-
-### `/grant [label]`
-Mints a fresh ZFA-balanced capability token with the given label and broadcasts it to all peers. Recipients see the token and a `/zfa` verification prompt. This is how peers share unforgeable capabilities with each other in a room.
-```
-/grant session
-```
-Output (you see):
-```
-granted: cap:session:024602460246024602460246…
-  twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
-```
-Output (peers see):
-```
-· alice granted capability:
-·   cap:session:024602460246024602460246…
-·   run /zfa cap:session:024602460246024602460246… to verify
-```
-
-### `//message`
-Sends a literal message that starts with `/` (escapes the command prefix).
 
 ---
 
