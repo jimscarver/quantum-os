@@ -450,16 +450,15 @@ async function connect(): Promise<void> {
           return;
         }
         if (d.kind === "qlf") {
-          const who = peerLabel(from);
           const cmdStr = String(d.cmd ?? "");
           const argStr = String(d.arg ?? "");
-          addMessage("", `${who} ran /${cmdStr}${argStr ? " " + argStr : ""}:`, "system");
+          addMessage(from, `/${cmdStr}${argStr ? " " + argStr : ""}`, "peer", peerLabel(from));
           for (const line of (d.lines as string[])) addMessage("", line, "system");
           return;
         }
         if (d.kind === "cap-grant") {
           const who = peerLabel(from);
-          addMessage("", `${who} granted capability:`, "system");
+          addMessage(from, `/grant ${String(d.label ?? "")}`, "peer", who);
           addMessage("", `  ${String(d.token ?? "")}`, "system");
           addMessage("", `  run /zfa ${String(d.token ?? "")} to verify`, "system");
           return;
