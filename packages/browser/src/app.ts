@@ -107,12 +107,20 @@ function renderRoomProcess(): void {
   }
   const gap = Math.abs(totalPos - totalNeg);
   const balanced = totalPos === totalNeg;
-  roomProcessEl.textContent = [
+  const lines = [
     "parallel(",
     ...peerLines,
     ")",
     `ZFA: ${balanced ? "✓" : "✗"}  gap: ${gap}  total twists: ${totalPos + totalNeg}`,
-  ].join("\n");
+  ];
+  if (qpeer) {
+    const ptw = tokenTwists(qpeer.peerId);
+    const pLevel = ptw ? zfaFreqLevel(ptw) : null;
+    if (pLevel !== null) {
+      lines.push(`freq level: ${pLevel}  C(${2*pLevel},${pLevel}) = ${zfaMultiplicity(pLevel).toLocaleString()}`);
+    }
+  }
+  roomProcessEl.textContent = lines.join("\n");
 }
 
 function renderPeers(): void {
@@ -158,6 +166,21 @@ function twistStats(twists: Uint8Array): { pos: number; neg: number; gap: number
   const neg = twists.length - pos;
   const gap = spectralGap(twists);
   return { pos, neg, gap, balanced: achievesZfa(twists) };
+}
+
+function binomial(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  if (k === 0 || k === n) return 1;
+  k = Math.min(k, n - k);
+  let r = 1;
+  for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1);
+  return Math.round(r);
+}
+
+function zfaMultiplicity(n: number): number { return binomial(2 * n, n); }
+
+function zfaFreqLevel(twists: Uint8Array): number | null {
+  return twists.length % 2 === 0 ? twists.length / 2 : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +288,7 @@ function handleCommand(raw: string): string[] {
       sys("  /zfa [token]     — validate a capability token");
       sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
+      sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  //message        — send a message starting with /");
       break;
 
@@ -397,6 +421,12 @@ function handleCommand(raw: string): string[] {
       sys(`  action (pos): count=${pos}   lift (neg): count=${neg}`);
       sys(`  spectral gap: ${gap}  ZFA-balanced: ${balanced ? "✓" : "✗"}`);
       if (balanced) {
+        const freqN = zfaFreqLevel(qtwists);
+        if (freqN !== null) {
+          const mult = zfaMultiplicity(freqN);
+          sys(`  frequency level: ${freqN}  C(${qtwists.length},${freqN}) = ${mult.toLocaleString()} arrangements`);
+          sys(`  relative frequency: ${freqN === 1 ? "fundamental (highest)" : `×1/2^${freqN-1} of fundamental`}`);
+        }
         sys("  process: parallel(action(Form), lift(Form))  → ZFA stable");
         sys("  achieves_ZFA: ✓  stable under full_zeno_prune");
         sys("  rho_process_always_zfa: ✓ (Lean-verified)");
@@ -404,6 +434,47 @@ function handleCommand(raw: string): string[] {
         sys("  process: UNBALANCED  → pruned by full_zeno_prune");
         sys(`  achieves_ZFA: ✗  gap=${gap}  (not a physical process)`);
       }
+      break;
+    }
+
+    case "freq": {
+      let highlight: number | null = null;
+      if (!arg && qpeer) {
+        const tw = tokenTwists(qpeer.peerId);
+        if (tw) highlight = zfaFreqLevel(tw);
+      } else if (arg) {
+        const trimmed = arg.trim();
+        if (/^\d+$/.test(trimmed)) {
+          highlight = parseInt(trimmed, 10);
+        } else if (trimmed.startsWith("cap:")) {
+          const tw = tokenTwists(trimmed);
+          if (tw) highlight = zfaFreqLevel(tw);
+        } else {
+          const tw = parseSymbolicTwists(trimmed);
+          if (tw) {
+            if (!achievesZfa(tw)) { sys("not ZFA-balanced — frequency level undefined"); break; }
+            highlight = zfaFreqLevel(tw);
+          }
+        }
+      }
+      sys("ZFA frequency spectrum:");
+      sys("  level n = length 2n  |  C(2n,n) arrangements  |  relative frequency");
+      sys("  each level resolves 2× before the next (2:1 harmonic)");
+      sys("");
+      for (let i = 1; i <= Math.max(10, highlight ?? 0) && i <= 10; i++) {
+        const mult = zfaMultiplicity(i);
+        const freqStr = (i === 1 ? "×1" : `×1/2^${i-1}`).padEnd(8);
+        const bar = "█".repeat(Math.max(1, Math.round(Math.log2(mult + 1))));
+        const marker = i === highlight ? "  ← you" : "";
+        sys(`  n=${String(i).padEnd(2)} len=${String(2*i).padEnd(3)} C(${2*i},${i})=${String(mult).padStart(12)}  ${freqStr} ${bar}${marker}`);
+      }
+      if (highlight !== null && highlight > 10) {
+        sys("  ...");
+        const mult = zfaMultiplicity(highlight);
+        sys(`  n=${highlight} len=${2*highlight} C(${2*highlight},${highlight})=${mult.toLocaleString()}  ×1/2^${highlight-1}  ← you`);
+      }
+      sys("");
+      sys("  C(2n,n) ~ 4^n/√(πn)  proven: QLF_Riemann.find_stable_states_length_even");
       break;
     }
 
