@@ -31,6 +31,8 @@ export class QOSPeer {
   private connections = new Map<string, RTCPeerConnection>();
   private channels = new Map<string, RTCDataChannel>();
   private config: PeerConfig;
+  private _disconnected = false;   // true after explicit disconnect()
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: PeerConfig) {
     this.config = config;
@@ -39,36 +41,21 @@ export class QOSPeer {
   }
 
   async connect(): Promise<void> {
+    this._disconnected = false;
     if (!validateCapability(this.config.roomId)) {
       console.warn(`[qos-peer] roomId ZFA check failed (may be cached token): ${this.config.roomId}`);
     }
-
-    this.ws = new WebSocket(this.config.signalingUrl);
-
-    await new Promise<void>((resolve, reject) => {
-      this.ws!.onopen = () => resolve();
-      this.ws!.onerror = (e) => reject(e);
-    });
-
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data) as SignalMsg;
-        this.handleSignal(msg);
-      } catch {
-        console.error("[qos-peer] invalid signal message");
-      }
-    };
-
-    this.ws.onclose = () => console.log("[qos-peer] signaling disconnected");
-
-    // Join the room
-    this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
+    await this._openSignaling();
   }
 
   disconnect(): void {
+    this._disconnected = true;
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     this.signal({ type: "leave", roomId: this.config.roomId, peerId: this.peerId });
     for (const pc of this.connections.values()) pc.close();
     this.ws?.close();
+    this.connections.clear();
+    this.channels.clear();
   }
 
   /// Send data to a specific peer via their data channel.
@@ -83,6 +70,45 @@ export class QOSPeer {
   broadcast(data: unknown): void {
     for (const peerId of this.channels.keys()) {
       this.send(peerId, data);
+    }
+  }
+
+  private async _openSignaling(): Promise<void> {
+    const ws = new WebSocket(this.config.signalingUrl);
+    this.ws = ws;
+
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = (e) => reject(e);
+    });
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data) as SignalMsg;
+        this.handleSignal(msg);
+      } catch {
+        console.error("[qos-peer] invalid signal message");
+      }
+    };
+
+    ws.onclose = () => {
+      if (this._disconnected) return;
+      console.warn("[qos-peer] signaling disconnected — reconnecting in 3s");
+      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 3000);
+    };
+
+    // Join the room
+    this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
+  }
+
+  private async _reconnectSignaling(): Promise<void> {
+    if (this._disconnected) return;
+    try {
+      await this._openSignaling();
+      console.log("[qos-peer] signaling reconnected");
+    } catch {
+      console.warn("[qos-peer] signaling reconnect failed — retrying in 5s");
+      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 5000);
     }
   }
 
@@ -168,6 +194,9 @@ export class QOSPeer {
   }
 
   private createPeerConnection(remotePeerId: string): RTCPeerConnection {
+    // Close any stale connection before creating a new one
+    this.connections.get(remotePeerId)?.close();
+
     const pc = new RTCPeerConnection({
       iceServers: this.config.iceServers ?? DEFAULT_ICE,
     });
@@ -181,6 +210,16 @@ export class QOSPeer {
         to: remotePeerId,
         candidate: event.candidate.toJSON(),
       });
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      console.log(`[qos-peer] connection to ${remotePeerId.slice(-8)} → ${state}`);
+      if (state === "failed") {
+        // Clean up — the signaling reconnect will re-establish via joined/offer flow
+        this.cleanup(remotePeerId);
+        this.config.onPeerLeft?.(remotePeerId);
+      }
     };
 
     this.connections.set(remotePeerId, pc);

@@ -37,9 +37,25 @@ export class SignalingServer {
     this._http.listen(this.port, () => {
       console.log(`[quantum-os signaling] listening on ws://0.0.0.0:${this.port}`);
     });
+
+    // Ping every 25s to keep Fly.io proxy from closing idle WebSocket connections.
+    // Browsers respond to protocol-level pings automatically with pongs.
+    const heartbeat = setInterval(() => {
+      for (const ws of this.wss.clients) {
+        const w = ws as WebSocket & { _alive?: boolean };
+        if (w._alive === false) { w.terminate(); continue; }
+        w._alive = false;
+        w.ping();
+      }
+    }, 25_000);
+    this.wss.on("close", () => clearInterval(heartbeat));
   }
 
   private onConnect(ws: WebSocket): void {
+    const w = ws as WebSocket & { _alive?: boolean };
+    w._alive = true;
+    w.on("pong", () => { w._alive = true; });
+
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data.toString()) as SignalMsg;
