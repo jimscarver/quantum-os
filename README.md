@@ -137,28 +137,40 @@ Validates any `cap:label:hex` token — checks ZFA balance and reports the spect
 Lean anchor: [`achieves_ZFA`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
 
 ### `/braket`
-Demonstrates bra-ket duality as ZFA balance: `action(f)` is the ket `|ψ⟩`, `lift(f)` is the bra `⟨ψ|`. Both achieve ZFA by construction.
+Demonstrates bra-ket duality as ZFA balance: `action(f)` is the ket `|ψ⟩`, `lift(f)` is the bra `⟨ψ|`. Both achieve ZFA by construction. Two fresh capability tokens are generated — one labeled `ket`, one `bra` — each 32 twists, 16 positive / 16 negative.
+
+Input:
 ```
-bra-ket duality (ZFA / RhoQuCalc):
-  |ψ⟩  action(Form)  twists [+,−]  eval = f.toMatrix
-  ⟨ψ|  lift(Form)    twists [−,+]  eval = f.toMatrix†
-  both ZFA-balanced: ✓  spectral gap: 0
-  bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
-  sample ket: cap:ket:024602460246…
-  sample bra: cap:bra:024602460246…
+/braket
+```
+Output:
+```
+· bra-ket duality (ZFA / RhoQuCalc):
+· |ψ⟩  action(Form)  twists [+,−]  eval = f.toMatrix
+· ⟨ψ|  lift(Form)    twists [−,+]  eval = f.toMatrix†
+· both ZFA-balanced: ✓  spectral gap: 0
+· bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
+· sample ket: cap:ket:47214365214747210367270165450523
+· sample bra: cap:bra:43270765472103250765614143652367
 ```
 Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/qucalc`
 Shows your peer ID as a RhoQuCalc process tree — the same algebra used in the Lean proofs.
+
+Input:
 ```
-RhoQuCalc process (this peer):
-  action(f) ≅ |ψ⟩   twist: [+,−]   eval = f.toMatrix
-  lift(f)   ≅ ⟨ψ|   twist: [−,+]   eval = f.toMatrix†
-  parallel(action,lift)  → ZFA-balanced superposition
-  rho_process_always_zfa: ✓ (Lean-verified)
-  peer ID: cap:peer:024602460246…
-  twists: 32 (16 pos / 16 neg)  spectral gap: 0
+/qucalc
+```
+Output:
+```
+· RhoQuCalc process (this peer):
+· action(f) ≅ |ψ⟩   twist: [+,−]   eval = f.toMatrix
+· lift(f)   ≅ ⟨ψ|   twist: [−,+]   eval = f.toMatrix†
+· parallel(action,lift)  → ZFA-balanced superposition
+· rho_process_always_zfa: ✓ (Lean-verified)
+· peer ID: cap:peer:45456323610301276721454361630503
+· twists: 32 (16 pos / 16 neg)  spectral gap: 0
 ```
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`BraKetRhoQuCalc`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
