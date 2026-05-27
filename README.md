@@ -1,20 +1,25 @@
 # quantum-os
 
+**Create reality together.** Two peers in a room share a ZFA process space — a combined `parallel(peer1, peer2, …)` that is provably ZFA-balanced by construction. The room is not a chat channel; it is a shared physical process where every identity is a capability token and every interaction is a verified quantum logical event.
+
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
 **[Open a room →](https://jimscarver.github.io/quantum-os/)**
 
-### How to connect with another peer
+### How to create reality together
 
 1. Open **https://jimscarver.github.io/quantum-os/** in your browser.
-2. Click **Connect** — the app joins a room identified by the URL hash and shows your peer ID.
-3. Copy the share link at the bottom of the page and send it to someone, or open it in a second tab.
-4. The second browser loads the same room URL and clicks **Connect**.
-5. Both peers see each other in the **Peers** list and can send messages.
+2. Click **Connect** — you join a room identified by a ZFA capability token in the URL hash. Your peer ID is a ZFA-balanced process.
+3. Copy the share link and send it to someone (or open a second tab).
+4. The second peer clicks **Connect** — both appear in the **Peers** list.
+5. The **Room Process** panel shows the combined `parallel(you, peer)` process — ZFA-balanced across all peers.
+6. Run QLF slash commands (`/braket +`, `/qucalc +-+-`) — output broadcasts to every peer in the room.
+7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
+8. Use `/grant [label]` to mint a ZFA capability and share it with the room.
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.fly.dev`) is used by default; edit the field to point at a self-hosted server.
 
-**Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities).
+**Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
 
 ---
 
@@ -86,7 +91,7 @@ pnpm build:signaling
 
 ## In-app QLF slash commands
 
-Type these in the chat input after connecting. The `/help` list is shown automatically at startup.
+Type these in the chat input after connecting. The `/help` list is shown automatically at startup. Commands marked **shared** broadcast their output to all peers in the room.
 
 ### `/help`
 Lists all available commands.
@@ -96,9 +101,10 @@ QLF slash commands:
   /id              — your peer ID and ZFA proof
   /room            — room capability token
   /cap [label]     — generate a new ZFA capability
+  /grant [label]   — generate and share a ZFA capability token  [shared]
   /zfa [token]     — validate a capability token
-  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)
-  /qucalc [twists] — evaluate RhoQuCalc twist sequence
+  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)   [shared]
+  /qucalc [twists] — evaluate RhoQuCalc twist sequence          [shared]
   //message        — send a message starting with /
 ```
 
@@ -217,6 +223,23 @@ ZFA balance is the selection principle: `+-+-` (gap=0) is a stable physical proc
 
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
+### `/grant [label]`
+Mints a fresh ZFA-balanced capability token with the given label and broadcasts it to all peers. Recipients see the token and a `/zfa` verification prompt. This is how peers share unforgeable capabilities with each other in a room.
+```
+/grant session
+```
+Output (you see):
+```
+granted: cap:session:024602460246024602460246…
+  twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
+```
+Output (peers see):
+```
+· alice granted capability:
+·   cap:session:024602460246024602460246…
+·   run /zfa cap:session:024602460246024602460246… to verify
+```
+
 ### `//message`
 Sends a literal message that starts with `/` (escapes the command prefix).
 
@@ -326,6 +349,10 @@ wasm_capability_valid(hex: string): boolean
 | Signaling server | ✓ deployed — wss://quantum-os-signaling.fly.dev |
 | Browser TypeScript | ✓ 0 type errors |
 | WebRTC peer | ✓ join/peers/offer/answer/ICE/data channel |
+| Collaborative QLF broadcast | ✓ `/braket`, `/qucalc`, `/id`, `/room` share output to all peers |
+| Room Process panel | ✓ `parallel(peer1, peer2, …)` ZFA balance shown in sidebar |
+| Capability token exchange | ✓ `/grant` mints and shares ZFA caps across peers |
+| Click-to-qucalc | ✓ click a peer → `/qucalc cap:peer:…` filled in input |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 
