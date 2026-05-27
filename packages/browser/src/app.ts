@@ -20,24 +20,25 @@ function getRoomId(): string {
 // DOM refs
 // ---------------------------------------------------------------------------
 
-const sidebarEl    = document.getElementById("sidebar")!;
-const overlayEl    = document.getElementById("sidebar-overlay")!;
-const toggleBtn    = document.getElementById("sidebar-toggle") as HTMLButtonElement;
-const myNameEl     = document.getElementById("my-name") as HTMLInputElement;
-const myIdEl       = document.getElementById("my-id")!;
-const roomIdEl     = document.getElementById("room-id")!;
-const DEFAULT_SIGNAL = "wss://quantum-os-signaling.fly.dev";
-const signalUrlEl  = document.getElementById("signal-url") as HTMLInputElement;
-const connectBtn   = document.getElementById("connect-btn") as HTMLButtonElement;
-const statusDot    = document.getElementById("status-dot")!;
-const statusText   = document.getElementById("status-text")!;
-const peerList     = document.getElementById("peer-list")!;
-const peerCount    = document.getElementById("peer-count")!;
-const messagesEl   = document.getElementById("messages")!;
-const msgInput     = document.getElementById("msg-input") as HTMLInputElement;
-const sendBtn      = document.getElementById("send-btn") as HTMLButtonElement;
-const shareLink    = document.getElementById("share-link") as HTMLAnchorElement;
-const copyBtn      = document.getElementById("copy-btn") as HTMLButtonElement;
+const sidebarEl       = document.getElementById("sidebar")!;
+const overlayEl       = document.getElementById("sidebar-overlay")!;
+const toggleBtn       = document.getElementById("sidebar-toggle") as HTMLButtonElement;
+const myNameEl        = document.getElementById("my-name") as HTMLInputElement;
+const myIdEl          = document.getElementById("my-id")!;
+const roomIdEl        = document.getElementById("room-id")!;
+const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.fly.dev";
+const signalUrlEl     = document.getElementById("signal-url") as HTMLInputElement;
+const connectBtn      = document.getElementById("connect-btn") as HTMLButtonElement;
+const statusDot       = document.getElementById("status-dot")!;
+const statusText      = document.getElementById("status-text")!;
+const peerList        = document.getElementById("peer-list")!;
+const peerCount       = document.getElementById("peer-count")!;
+const roomProcessEl   = document.getElementById("room-process")!;
+const messagesEl      = document.getElementById("messages")!;
+const msgInput        = document.getElementById("msg-input") as HTMLInputElement;
+const sendBtn         = document.getElementById("send-btn") as HTMLButtonElement;
+const shareLink       = document.getElementById("share-link") as HTMLAnchorElement;
+const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -87,6 +88,33 @@ function peerLabel(id: string): string {
   return peerNames.get(id) ?? shortId(id);
 }
 
+function renderRoomProcess(): void {
+  const allPeers = qpeer ? [qpeer.peerId, ...[...peers]] : [...peers];
+  if (allPeers.length === 0) { roomProcessEl.textContent = "—"; return; }
+
+  let totalPos = 0, totalNeg = 0;
+  const peerLines: string[] = [];
+  for (const id of allPeers) {
+    const tw = tokenTwists(id);
+    const label = id === qpeer?.peerId
+      ? (myName || shortId(id)) + " (you)"
+      : peerLabel(id);
+    if (tw) {
+      const { pos, neg } = twistStats(tw);
+      totalPos += pos; totalNeg += neg;
+      peerLines.push(`  action(${label})  ${pos}+/${neg}-`);
+    }
+  }
+  const gap = Math.abs(totalPos - totalNeg);
+  const balanced = totalPos === totalNeg;
+  roomProcessEl.textContent = [
+    "parallel(",
+    ...peerLines,
+    ")",
+    `ZFA: ${balanced ? "✓" : "✗"}  gap: ${gap}  total twists: ${totalPos + totalNeg}`,
+  ].join("\n");
+}
+
 function renderPeers(): void {
   peerCount.textContent = String(peers.size);
   peerList.innerHTML = "";
@@ -99,8 +127,15 @@ function renderPeers(): void {
   for (const id of peers) {
     const li = document.createElement("li");
     li.textContent = peerLabel(id);
+    li.title = id;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => {
+      msgInput.value = `/qucalc ${id}`;
+      msgInput.focus();
+    });
     peerList.appendChild(li);
   }
+  renderRoomProcess();
 }
 
 // ---------------------------------------------------------------------------
@@ -209,14 +244,15 @@ function parseSymbolicTwists(s: string): Uint8Array | null {
 }
 
 // ---------------------------------------------------------------------------
-// Slash command handler
+// Slash command handler — returns collected output lines for broadcast
 // ---------------------------------------------------------------------------
 
-function handleCommand(raw: string): void {
+function handleCommand(raw: string): string[] {
   const parts = raw.slice(1).trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
   const arg = parts.slice(1).join(" ");
-  const sys = (text: string) => addMessage("", text, "system");
+  const lines: string[] = [];
+  const sys = (text: string) => { addMessage("", text, "system"); lines.push(text); };
 
   switch (cmd) {
     case "help":
@@ -225,6 +261,7 @@ function handleCommand(raw: string): void {
       sys("  /id              — your peer ID and ZFA proof");
       sys("  /room            — room capability token");
       sys("  /cap [label]     — generate a new ZFA capability");
+      sys("  /grant [label]   — generate and share a ZFA capability token");
       sys("  /zfa [token]     — validate a capability token");
       sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
@@ -265,6 +302,17 @@ function handleCommand(raw: string): void {
       const { pos, neg } = twistStats(tw);
       sys(`generated: ${token}`);
       sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  ZFA-balanced: ✓`);
+      break;
+    }
+
+    case "grant": {
+      const label = arg || "cap";
+      const token = generateCapability(label);
+      const tw = tokenTwists(token)!;
+      const { pos, neg } = twistStats(tw);
+      sys(`granted: ${token}`);
+      sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  ZFA-balanced: ✓`);
+      if (qpeer) qpeer.broadcast({ kind: "cap-grant", token, label });
       break;
     }
 
@@ -362,6 +410,8 @@ function handleCommand(raw: string): void {
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
+
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +447,21 @@ async function connect(): Promise<void> {
         if (d.kind === "name") {
           peerNames.set(from, String(d.name ?? ""));
           renderPeers();
+          return;
+        }
+        if (d.kind === "qlf") {
+          const who = peerLabel(from);
+          const cmdStr = String(d.cmd ?? "");
+          const argStr = String(d.arg ?? "");
+          addMessage("", `${who} ran /${cmdStr}${argStr ? " " + argStr : ""}:`, "system");
+          for (const line of (d.lines as string[])) addMessage("", line, "system");
+          return;
+        }
+        if (d.kind === "cap-grant") {
+          const who = peerLabel(from);
+          addMessage("", `${who} granted capability:`, "system");
+          addMessage("", `  ${String(d.token ?? "")}`, "system");
+          addMessage("", `  run /zfa ${String(d.token ?? "")} to verify`, "system");
           return;
         }
         if (d.kind === "chat" || "text" in d) {
@@ -452,7 +517,13 @@ function send(): void {
     return;
   }
   if (text.startsWith("/")) {
-    handleCommand(text);
+    const parts = text.slice(1).trim().split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    const arg = parts.slice(1).join(" ");
+    const lines = handleCommand(text);
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant") {
+      qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
+    }
     return;
   }
   qpeer.broadcast({ kind: "chat", text });

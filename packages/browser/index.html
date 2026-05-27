@@ -116,6 +116,7 @@
       word-break: break-all;
     }
     #peer-list li:last-child { border-bottom: none; }
+    #peer-list li:not(.you):hover { color: #7fdbca; }
     #peer-list .you { color: #7fdbca; }
 
     .signal-row {
@@ -275,6 +276,11 @@
       <div>
         <h2>Peers (<span id="peer-count">0</span>)</h2>
         <ul id="peer-list"></ul>
+      </div>
+
+      <div>
+        <h2>Room Process</h2>
+        <div class="id-box" id="room-process" style="white-space:pre;">—</div>
       </div>
     </div>
 
