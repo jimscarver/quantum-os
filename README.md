@@ -143,16 +143,16 @@ Evaluates a bra-ket expression using the `Form` 2×2 Hermitian matrix algebra fr
 
 Input:
 ```
-/braket -i
+/braket +
 ```
 Output:
 ```
-· ket: |-i⟩
-·   RhoProcess: action(Form_-i)
+· ket: |+⟩
+·   RhoProcess: action(Form_+)
 ·   eval = Form.toMatrix:
-·     ⎡    0.5  0.5i ⎤
-·     ⎣ -0.5i   0.5 ⎦
-· bra: ⟨-i|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
+·   ⎡ 0.5  0.5 ⎤
+·   ⎣ 0.5  0.5 ⎦
+· bra: ⟨+|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
 ·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
 ·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
 ```
@@ -166,12 +166,15 @@ Output:
 · ket: |0⟩ + |1⟩
 ·   RhoProcess: parallel(action(Form_0), action(Form_1))
 ·   eval = Form.toMatrix:
-·     ⎡ 1  0 ⎤
-·     ⎣ 0  1 ⎦
+·   ⎡ 1  0 ⎤
+·   ⎣ 0  1 ⎦
 · bra: ⟨0| + ⟨1|  (eval = ket†  =  ket  [Hermitian: Form.toMatrix_adjoint ✓])
 ·   ZFA: action [+,−]  lift [−,+]  both balanced: ✓
 ·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
 ```
+
+The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basis. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) for the full bra-ket ↔ RhoQuCalc correspondence.
+
 Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/qucalc [twists]`
@@ -181,14 +184,14 @@ Twist alphabet: `^`=Up=0, `v`=Down=1, `>`=Right=2, `<`=Left=3, `/`=Slash=4, `\`=
 
 Input:
 ```
-/qucalc +-+-+-+-
+/qucalc +-+-
 ```
 Output:
 ```
 · RhoQuCalc process:
-·   input: +-+-+-+-
-·   twists: +-+-+-+-  (8 total)
-·   action (pos): count=4   lift (neg): count=4
+·   input: +-+-
+·   twists: +-+-  (4 total)
+·   action (pos): count=2   lift (neg): count=2
 ·   spectral gap: 0  ZFA-balanced: ✓
 ·   process: parallel(action(Form), lift(Form))  → ZFA stable
 ·   achieves_ZFA: ✓  stable under full_zeno_prune
@@ -209,7 +212,10 @@ Output:
 ·   process: UNBALANCED  → pruned by full_zeno_prune
 ·   achieves_ZFA: ✗  gap=3  (not a physical process)
 ```
-Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`BraKetRhoQuCalc`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+
+ZFA balance is the selection principle: `+-+-` (gap=0) is a stable physical process; `+++` (gap=3) is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
+
+Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `//message`
 Sends a literal message that starts with `/` (escapes the command prefix).
