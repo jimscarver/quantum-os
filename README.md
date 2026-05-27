@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[See it in action: Syllogism Demo →](SyllogismDemo.md)**
 
 ### How to create reality together
 
