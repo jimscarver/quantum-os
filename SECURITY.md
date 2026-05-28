@@ -87,7 +87,7 @@ The signaling server's SDP relay cannot be used to MITM the WebRTC connection �
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | No per-message size limit on signaling WebSocket | Medium | Open — reject messages > 64 KB |
+| 1 | No per-message size limit on signaling WebSocket | Medium | Fixed — `maxPayload: 65_536` on `WebSocketServer` |
 | 2 | No rate limiting on signaling connections or messages | Medium | Open — add ~10 msg/peer/sec |
 | 3 | Peer IDs logged in full on the signaling server | Low | Open — truncate to last 8 chars |
 | 4 | Hardcoded Google STUN server leaks peer IPs to Google | Low | Open — allow custom STUN config |
@@ -98,6 +98,7 @@ The signaling server's SDP relay cannot be used to MITM the WebRTC connection �
 | Issue | Fix |
 |-------|-----|
 | Relay `from` field forgery | `wsIndex` binding in `packages/signaling/src/server.ts` — validates `msg.from` against the sending WebSocket connection |
+| No message size limit | `maxPayload: 65_536` on `WebSocketServer` — oversized frames rejected at the protocol layer |
 
 ---
 
