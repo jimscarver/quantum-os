@@ -13,9 +13,10 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 3. Copy the share link and send it to someone (or open a second tab).
 4. The second peer clicks **Connect** — both appear in the **Peers** list.
 5. The **Room Process** panel shows the combined `parallel(you, peer)` process — ZFA-balanced across all peers.
-6. Run QLF slash commands (`/braket +`, `/qucalc +-+-`) — output broadcasts to every peer in the room.
+6. Run QLF slash commands (`/braket +`, `/qucalc ^v`) — output broadcasts to every peer in the room.
 7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
-8. Use `/grant [label]` to mint a ZFA capability and share it with the room.
+8. Use `/lemma name twists` to name a logical claim (`/lemma mortality ^v`); reference it with `@name` in any command (`/qucalc @mortality @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
+9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
 
@@ -35,10 +36,15 @@ QLF slash commands:
   /id              — your peer ID and ZFA proof
   /room            — room capability token
   /cap [label]     — generate a new ZFA capability
-  /grant [label]   — generate and share a ZFA capability token  [shared]
+  /grant [label]   — generate and share a ZFA capability token
   /zfa [token]     — validate a capability token
-  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)   [shared]
-  /qucalc [twists] — evaluate RhoQuCalc twist sequence          [shared]
+  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)
+  /qucalc [twists] — evaluate RhoQuCalc twist sequence
+  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
+  /dump            — summary of all logic shared this session
+  /lemma           — list named lemmas
+  /lemma <n> <tw>  — register @n as twist seq (or @ref1 @ref2, or cap:token)
+  @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
 
@@ -84,42 +90,46 @@ The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basi
 Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/qucalc [twists]` [shared]
-Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, or a `cap:label:hex` token. No argument → show your peer's twist sequence. Click a peer name in the sidebar to prefill `/qucalc cap:peer:…`.
+Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, a `cap:label:hex` token, or `@name` references to named lemmas. No argument → show your peer's twist sequence. Click a peer or lemma name in the sidebar to prefill the input.
 
 Twist alphabet: `^`=Up=0, `v`=Down=1, `>`=Right=2, `<`=Left=3, `/`=Slash=4, `\`=BSlash=5, `+`=Plus=6, `-`=Minus=7. Even values are positive (action); odd are negative (lift).
 
-Input:
+Input (compose named premises — see `/lemma` below):
 ```
-/qucalc +-+-
+/qucalc @mortality @socrates
 ```
 Output:
 ```
 · RhoQuCalc process:
-·   input: +-+-
-·   twists: +-+-  (4 total)
+·   composed: @mortality @socrates
+·   deduction composition:
+·     @mortality  →  ^v  (1+/1-)  ZFA: ✓
+·     @socrates   →  +-  (1+/1-)  ZFA: ✓
+·   composed: ^v+-  (4 total)
 ·   action (pos): count=2   lift (neg): count=2
 ·   spectral gap: 0  ZFA-balanced: ✓
+·   frequency level: 2  C(4,2) = 6 arrangements
 ·   process: parallel(action(Form), lift(Form))  → ZFA stable
 ·   achieves_ZFA: ✓  stable under full_zeno_prune
 ·   rho_process_always_zfa: ✓ (Lean-verified)
 ```
 
-Input:
+Input (unbalanced — invalid argument):
 ```
-/qucalc +++
+/qucalc ^v^v^
 ```
 Output:
 ```
 · RhoQuCalc process:
-·   input: +++
-·   twists: +++  (3 total)
-·   action (pos): count=3   lift (neg): count=0
-·   spectral gap: 3  ZFA-balanced: ✗
+·   input: ^v^v^
+·   twists: ^v^v^  (5 total)
+·   action (pos): count=3   lift (neg): count=2
+·   spectral gap: 1  ZFA-balanced: ✗
 ·   process: UNBALANCED  → pruned by full_zeno_prune
-·   achieves_ZFA: ✗  gap=3  (not a physical process)
+·   achieves_ZFA: ✗  gap=1  (not a physical process)
 ```
 
-ZFA balance is the selection principle: `+-+-` (gap=0) is a stable physical process; `+++` (gap=3) is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
+ZFA balance is the selection principle: `@major @minor` composed (gap=0) is a valid deduction; an unbalanced composition is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
 
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
@@ -139,6 +149,60 @@ Output (peers see):
 ·   cap:session:024602460246024602460246…
 ·   run /zfa cap:session:024602460246024602460246… to verify
 ```
+
+### `/lemma [name [twists]]` [shared]
+Names a logical claim so peers can reference it by `@name` in any command. Lemmas sync to all peers when registered and persist to `localStorage` per room URL — they survive page reloads.
+
+- `/lemma` — list all registered lemmas in the room
+- `/lemma name twists` — register `@name` as a twist sequence (symbolic, `cap:token`, or `@ref1 @ref2`)
+- `@name` anywhere in `/qucalc` args — expand and compose named lemmas
+
+When the twist sequence is ZFA-balanced, a `cap:name:hex` capability token is auto-minted and shown. The Lemmas panel in the sidebar lists all names as clickable items — click `@name` to prefill `/qucalc @name`.
+
+```
+/lemma mortality ^v
+```
+Output:
+```
+· lemma registered: @mortality  =  ^v
+·   twists: 2  (1+/1-)  ZFA: ✓
+·   cap: cap:mortality:01  (share with /zfa to verify)
+```
+
+```
+/lemma socrates +-
+```
+Output:
+```
+· lemma registered: @socrates  =  +-
+·   twists: 2  (1+/1-)  ZFA: ✓
+·   cap: cap:socrates:67  (share with /zfa to verify)
+```
+
+Chain lemmas to prove the conclusion ("Socrates is Mortal") from the two named premises:
+```
+/lemma mortal @mortality @socrates
+```
+Output:
+```
+· lemma registered: @mortal  =  ^v+-
+·   twists: 4  (2+/2-)  ZFA: ✓
+·   cap: cap:mortal:0167  (share with /zfa to verify)
+```
+
+List the full proof vocabulary:
+```
+/lemma
+```
+Output:
+```
+· lemmas (3):
+·   @mortality  =  ^v     [cap: cap:mortality:01]   (by Alice)
+·   @socrates   =  +-     [cap: cap:socrates:67]    (by Bob)
+·   @mortal     =  ^v+-   [cap: cap:mortal:0167]    (by Alice)
+```
+
+See [SyllogismDemo.md](SyllogismDemo.md) for the full collaborative walkthrough.
 
 ### `/id`
 Shows your ZFA-balanced peer identity and confirms the `rho_process_always_zfa` invariant holds.
