@@ -117,9 +117,19 @@ NIETZSCHE TYPES:  /grant fork-e
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Each philosopher now **owns** their left fork. The right fork belongs to their left neighbor. To eat, a philosopher must request their right fork from that neighbor via a chat message — the token string is the proof of transfer.
+Each philosopher registers their minted fork as a lemma so it can be passed later:
 
-**Result:** Five capability tokens minted, one per philosopher, one per fork. Possession is unforgeable — no two philosophers can simultaneously hold the same token.
+```
+ARISTOTLE TYPES:  /lemma fork-a cap:fork-a:01234567012345670123456701234567
+PLATO TYPES:      /lemma fork-b cap:fork-b:45674567456745674567456745674567
+DESCARTES TYPES:  /lemma fork-c cap:fork-c:23016723016723016723016723016723
+KANT TYPES:       /lemma fork-d cap:fork-d:67012367012367012367012367012367
+NIETZSCHE TYPES:  /lemma fork-e cap:fork-e:30127530127530127530127530127530
+```
+
+Each philosopher now **owns** their left fork. The right fork belongs to their left neighbor. To eat, a philosopher uses `/request` to signal need and `/pass` to transfer — no token strings to copy.
+
+**Result:** Five capability tokens minted and registered, one per philosopher, one per fork. Possession is unforgeable — no two philosophers can simultaneously hold the same token.
 
 ---
 
@@ -170,39 +180,51 @@ ARISTOTLE TYPES:  /lemma aristotle-hungry
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Aristotle requests fork-B by chat:
+Aristotle requests fork-B:
 
 ```
-ARISTOTLE TYPES:  //Plato — I'm hungry. May I have fork-B?
-```
-
-Plato passes the token string:
-
-```
-PLATO TYPES:  //Aristotle, fork-B is yours:
-PLATO TYPES:  //  cap:fork-b:45674567456745674567456745674567
-```
-
-Aristotle verifies the received token and registers both forks as lemmas:
-
-```
-ARISTOTLE TYPES:  /zfa cap:fork-b:45674567456745674567456745674567
+ARISTOTLE TYPES:  /request fork-b
 ```
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  · token: cap:fork-b:45674567…                               │
-│  ·   valid: ✓  spectral gap: 0                               │
-│  ·   twists: 32  (16 positive, 16 negative)                  │
+│  · requested @fork-b — waiting for holder to /pass it        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+**Plato's window** — sees the request and a ready-to-use prompt:
+
 ```
-ARISTOTLE TYPES:  /lemma fork-a cap:fork-a:01234567012345670123456701234567
-ARISTOTLE TYPES:  /lemma fork-b cap:fork-b:45674567456745674567456745674567
+┌──────────────────────────────────────────────────────────────┐
+│  Aristotle  requests @fork-b                                  │
+│  · you hold @fork-b — type /pass fork-b Aristotle to transfer│
+└──────────────────────────────────────────────────────────────┘
 ```
 
-Both fork lemmas sync to all peers. Aristotle now composes them to verify he can eat:
+Plato passes with one command:
+
+```
+PLATO TYPES:  /pass fork-b aristotle
+```
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  · @fork-b transferred to Aristotle — removed from your lemmas│
+│    cap: cap:fork-b:45674567…                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Aristotle's window** — fork-B arrives automatically:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Plato  passes @fork-b                                        │
+│  · @fork-b received from Plato  [cap: cap:fork-b:45674567…]  │
+│  · run /zfa cap:fork-b:45674567… to verify                   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Fork-B is now in Aristotle's lemma store, removed from Plato's. Aristotle composes to verify he can eat:
 
 ```
 ARISTOTLE TYPES:  /qucalc @fork-a @fork-b
@@ -218,14 +240,15 @@ ARISTOTLE TYPES:  /qucalc @fork-a @fork-b
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Aristotle eats. When finished he returns fork-B:
+Aristotle eats. When finished he returns fork-B with one command:
 
 ```
-ARISTOTLE TYPES:  //Plato — done. Fork-B returned:
-ARISTOTLE TYPES:  //  cap:fork-b:45674567456745674567456745674567
+ARISTOTLE TYPES:  /pass fork-b plato
 ```
 
-**Result:** Aristotle ate. The token transfer was explicit and verifiable at every step. Fork-B left Plato's possession and returned to it — never duplicated.
+Plato's window shows `@fork-b received from Aristotle` and the lemma reappears in his sidebar.
+
+**Result:** Aristotle ate. Every transfer was a single command — no token strings to copy. Fork-B left Plato's possession and returned to it, tracked by the lemma store at each step.
 
 ---
 
@@ -233,7 +256,14 @@ ARISTOTLE TYPES:  //  cap:fork-b:45674567456745674567456745674567
 
 Aristotle is hungry again. Simultaneously, Descartes is hungry. Their forks don't overlap — Aristotle needs A and B; Descartes needs C and D. No conflict.
 
-Both request their right forks (Plato passes fork-B; Kant passes fork-D) and verify concurrently:
+Both request their right forks and verify concurrently:
+
+```
+ARISTOTLE TYPES:   /request fork-b    →  Plato: /pass fork-b aristotle
+DESCARTES TYPES:   /request fork-d    →  Kant:  /pass fork-d descartes
+```
+
+Forks arrive automatically. Both compose:
 
 ```
 ARISTOTLE TYPES:   /qucalc @fork-a @fork-b
@@ -286,20 +316,18 @@ Nietzsche needs **fork-E** (left, already has it) and **fork-A** (right, held by
 Nietzsche is the only philosopher who "reaches across" — he requests the right fork (A) before using the left fork (E) he already holds. This breaks the circular dependency: at most four philosophers can be simultaneously waiting for a right fork, and the chain is not circular.
 
 ```
-NIETZSCHE TYPES:  //Aristotle — may I have fork-A when you're done?
+NIETZSCHE TYPES:  /request fork-a
 ```
 
-Aristotle finishes eating and returns fork-A:
+Aristotle sees the request prompt. He finishes eating, then:
 
 ```
-ARISTOTLE TYPES:  //Nietzsche, fork-A is yours:
-ARISTOTLE TYPES:  //  cap:fork-a:01234567012345670123456701234567
+ARISTOTLE TYPES:  /pass fork-a nietzsche
 ```
 
-Nietzsche registers and composes:
+Fork-A arrives in Nietzsche's lemma store automatically. Nietzsche composes:
 
 ```
-NIETZSCHE TYPES:  /lemma fork-a cap:fork-a:01234567012345670123456701234567
 NIETZSCHE TYPES:  /qucalc @fork-a @fork-e
 ```
 
@@ -322,7 +350,7 @@ The classical deadlock state: all five philosophers hold their left fork and wai
 In the capability model:
 
 - **Holding** a fork = possessing its `cap:fork-X:hex` token — a real, auditable positive claim
-- **Waiting** = a chat request with no token in hand — no unbalanced twist state exists in the system
+- **Waiting** = a `/request` broadcast with no token in hand — no unbalanced twist state exists in the system
 
 The Room Process `parallel(Aristotle, Plato, Descartes, Kant, Nietzsche)` is always ZFA-balanced. By `decoherence_impossibility` (machine-verified in Lean 4: `rho_process_always_zfa`), parallel composition of ZFA-balanced processes stays balanced — a spectral gap cannot be created by composition.
 
@@ -360,16 +388,16 @@ ARISTOTLE TYPES:  /id
 │ Aristotle    │   cap:fork-a:01…  │ Plato (you)  │   cap:fork-b:45…  │
 │   (you)      │   ZFA: ✓          │ Aristotle →  │   ZFA: ✓          │
 │ Plato     →  │                   │ Descartes →  │                   │
-│ Descartes →  │ · fork-B from     │ Kant      →  │ · //Aristotle,    │
-│ Kant      →  │   Plato ✓         │ Nietzsche →  │   fork-B is yours │
-│ Nietzsche →  │                   │              │                   │
-│              │ · @fork-a @fork-b │ Lemmas (12+) │ · //Aristotle,    │
-│ Lemmas (12+) │   gap:0 ✓         │ @plato ←     │   fork-B returned │
-│ @aristotle ← │   Aristotle eats  │ @plato-      │                   │
-│ @aristotle-  │                   │   thinking ← │ · @fork-a @fork-e │
-│   thinking ← │ · //Nietzsche,    │ @fork-b ←    │   gap:0 ✓         │
-│ @fork-a ←    │   fork-A is yours │ …            │   Nietzsche eats  │
-│ @fork-b ←    │   cap:fork-a:01…  │              │                   │
+│ Descartes →  │ · /request fork-b │ Kant      →  │ · Aristotle       │
+│ Kant      →  │   → Plato passes  │ Nietzsche →  │   requests @fork-b│
+│ Nietzsche →  │                   │              │ · /pass fork-b    │
+│              │ · @fork-a @fork-b │ Lemmas (12+) │   aristotle ✓     │
+│ Lemmas (12+) │   gap:0 ✓         │ @plato ←     │                   │
+│ @aristotle ← │   Aristotle eats  │ @plato-      │ · Nietzsche       │
+│ @aristotle-  │                   │   thinking ← │   requests @fork-a│
+│   thinking ← │ · /pass fork-a    │              │ · @fork-a @fork-e │
+│ @fork-a ←    │   nietzsche ✓     │ …            │   gap:0 ✓         │
+│ @fork-b ←    │                   │              │   Nietzsche eats  │
 │ …            │                   │ Room Process │                   │
 │              │                   │ parallel(    │                   │
 │ Room Process │                   │  Aristotle   │                   │
@@ -397,7 +425,7 @@ The room was the table. No server tracked fork ownership. No lock manager arbitr
 | 2 | All | `/lemma <name>-thinking` | State registered, synced to all peers |
 | 3 | Aristotle | `/qucalc @fork-a @fork-b` | Holds both forks — gap:0 ✓ — eats |
 | 4 | Aristotle + Descartes | concurrent `/qucalc` | Non-adjacent eating — gap:0 ✓ both |
-| 5 | Nietzsche | request fork-A before fork-E | Ordering rule breaks circular wait |
+| 5 | Nietzsche | `/request fork-a` → Aristotle: `/pass fork-a nietzsche` | Ordering rule breaks circular wait |
 | 6 | Room | `parallel(5 peers)` | ZFA:✓ gap:0 throughout — deadlock unreachable |
 
 Three properties together make the table safe:
