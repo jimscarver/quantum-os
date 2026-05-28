@@ -130,6 +130,17 @@ function peerLabel(id: string): string {
   return peerNames.get(id) ?? shortId(id);
 }
 
+function findPeerByName(name: string): string | null {
+  const lower = name.toLowerCase();
+  for (const [id, peerName] of peerNames) {
+    if (peerName.toLowerCase() === lower) return id;
+  }
+  for (const [id, peerName] of peerNames) {
+    if (peerName.toLowerCase().startsWith(lower)) return id;
+  }
+  return null;
+}
+
 function renderRoomProcess(): void {
   const allPeers = qpeer ? [qpeer.peerId, ...[...peers]] : [...peers];
   if (allPeers.length === 0) { roomProcessEl.textContent = "—"; return; }
@@ -378,6 +389,8 @@ function handleCommand(raw: string): string[] {
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
       sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
+      sys("  /request <n>     — request @n from whoever holds it");
+      sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -662,6 +675,37 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "request": {
+      const lemmaName = arg.trim();
+      if (!lemmaName) { sys("usage: /request <lemma-name>"); break; }
+      if (!qpeer) { sys("not connected"); break; }
+      if (lemmaStore.has(lemmaName)) { sys(`you already hold @${lemmaName}`); break; }
+      const myLabel = myName || shortId(qpeer.peerId);
+      qpeer.broadcast({ kind: "lemma-request", name: lemmaName, fromName: myLabel });
+      sys(`· requested @${lemmaName} — waiting for holder to /pass it`);
+      break;
+    }
+
+    case "pass": {
+      const passParts = arg.trim().split(/\s+/);
+      const passLemma = passParts[0];
+      const targetName = passParts.slice(1).join(" ").trim();
+      if (!passLemma || !targetName) { sys("usage: /pass <lemma-name> <peer-name>"); break; }
+      if (!qpeer) { sys("not connected"); break; }
+      const passEntry = lemmaStore.get(passLemma);
+      if (!passEntry) { sys(`you don't hold @${passLemma} — nothing to pass`); break; }
+      const targetId = findPeerByName(targetName);
+      if (!targetId) { sys(`unknown peer: '${targetName}'  (check Peers list for exact name)`); break; }
+      const sent = qpeer.send(targetId, { kind: "lemma-pass", name: passLemma, twists: passEntry.twists, cap: passEntry.cap });
+      if (!sent) { sys(`cannot reach ${targetName} — data channel not open`); break; }
+      lemmaStore.delete(passLemma);
+      saveLemmas();
+      renderLemmas();
+      sys(`· @${passLemma} transferred to ${targetName} — removed from your lemmas`);
+      if (passEntry.cap) sys(`  cap: ${passEntry.cap}`);
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -745,6 +789,30 @@ function connect(): void {
             addMessage("", `  @${name} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
             saveLemmas();
             renderLemmas();
+          }
+          return;
+        }
+        if (d.kind === "lemma-request") {
+          const name = String(d.name ?? "").trim();
+          const fromName = String(d.fromName ?? peerLabel(from));
+          addMessage(from, `requests @${name}`, "peer", fromName);
+          if (lemmaStore.has(name)) {
+            addMessage("", `  · you hold @${name} — type /pass ${name} ${fromName} to transfer`, "system");
+          }
+          return;
+        }
+        if (d.kind === "lemma-pass") {
+          const name = String(d.name ?? "").trim();
+          const twists = String(d.twists ?? "").trim();
+          const cap = d.cap ? String(d.cap) : undefined;
+          const who = peerLabel(from);
+          if (name && twists) {
+            lemmaStore.set(name, { twists, who, cap });
+            saveLemmas();
+            renderLemmas();
+            addMessage(from, `passes @${name}`, "peer", who);
+            addMessage("", `  · @${name} received from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
+            if (cap) addMessage("", `  · run /zfa ${cap} to verify`, "system");
           }
           return;
         }
