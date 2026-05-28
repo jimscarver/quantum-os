@@ -28,7 +28,7 @@ export class SignalingServer {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", rooms: this.rooms.size }));
     });
-    this.wss = new WebSocketServer({ server: http });
+    this.wss = new WebSocketServer({ server: http, maxPayload: 65_536 });
     this._http = http;
   }
 
