@@ -14,6 +14,9 @@ type SignalMsg =
   | { type: "left";      roomId: string; peerId: string }    // server → others
   | { type: "error";     message: string };
 
+const RATE_LIMIT = 20;       // max messages per window per connection
+const RATE_WINDOW_MS = 1_000; // window size in ms
+
 export class SignalingServer {
   private wss: WebSocketServer;
   private rooms = new Map<string, Room>();
@@ -21,6 +24,8 @@ export class SignalingServer {
   private peerIndex = new Map<string, { roomId: string; ws: WebSocket }>();
   // ws → peerId for relay authentication
   private wsIndex = new Map<WebSocket, string>();
+  // ws → rate-limit state
+  private rateMap = new Map<WebSocket, { count: number; windowStart: number }>();
 
   constructor(private port: number) {
     // HTTP server handles both health checks (GET /) and WS upgrades.
@@ -58,7 +63,13 @@ export class SignalingServer {
     w._alive = true;
     w.on("pong", () => { w._alive = true; });
 
+    this.rateMap.set(ws, { count: 0, windowStart: Date.now() });
+
     ws.on("message", (data) => {
+      if (!this.checkRate(ws)) {
+        this.send(ws, { type: "error", message: "rate limit exceeded" });
+        return;
+      }
       try {
         const msg = JSON.parse(data.toString()) as SignalMsg;
         this.handle(ws, msg);
@@ -68,6 +79,18 @@ export class SignalingServer {
     });
 
     ws.on("close", () => this.onDisconnect(ws));
+  }
+
+  private checkRate(ws: WebSocket): boolean {
+    const now = Date.now();
+    const state = this.rateMap.get(ws);
+    if (!state) return false;
+    if (now - state.windowStart >= RATE_WINDOW_MS) {
+      state.count = 1;
+      state.windowStart = now;
+      return true;
+    }
+    return ++state.count <= RATE_LIMIT;
   }
 
   private handle(ws: WebSocket, msg: SignalMsg): void {
@@ -122,6 +145,7 @@ export class SignalingServer {
   }
 
   private onDisconnect(ws: WebSocket): void {
+    this.rateMap.delete(ws);
     // Find the single peer on this socket and remove only them.
     for (const [peerId, { roomId, ws: peerWs }] of this.peerIndex) {
       if (peerWs !== ws) continue;
