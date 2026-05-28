@@ -15,7 +15,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 5. The **Room Process** panel shows the combined `parallel(you, peer)` process — ZFA-balanced across all peers.
 6. Run QLF slash commands (`/braket +`, `/qucalc ^v`) — output broadcasts to every peer in the room.
 7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
-8. Use `/lemma name twists` to name a logical claim (`/lemma mortality ^v`); reference it with `@name` in any command (`/qucalc @mortality @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
+8. Use `/lemma name` to name a logical claim — twists are auto-allocated from the name, or supply them explicitly (`/lemma mortality ^v`). Reference with `@name` in any command (`/qucalc @mortality @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
 9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
@@ -43,7 +43,7 @@ QLF slash commands:
   /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
-  /lemma <n> <tw>  — register @n as twist seq (or @ref1 @ref2, or cap:token)
+  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -154,11 +154,24 @@ Output (peers see):
 Names a logical claim so peers can reference it by `@name` in any command. Lemmas sync to all peers when registered and persist to `localStorage` per room URL — they survive page reloads.
 
 - `/lemma` — list all registered lemmas in the room
-- `/lemma name twists` — register `@name` as a twist sequence (symbolic, `cap:token`, or `@ref1 @ref2`)
+- `/lemma name` — register `@name` with auto-allocated twists derived deterministically from the name (any peer typing the same command gets the same twists — no server needed)
+- `/lemma name twists` — register `@name` with explicit twists (symbolic, `cap:token`, or `@ref1 @ref2`)
 - `@name` anywhere in `/qucalc` args — expand and compose named lemmas
 
 When the twist sequence is ZFA-balanced, a `cap:name:hex` capability token is auto-minted and shown. The Lemmas panel in the sidebar lists all names as clickable items — click `@name` to prefill `/qucalc @name`.
 
+Auto-allocate twists from the name (simplest form):
+```
+/lemma mortality
+```
+Output:
+```
+· lemma registered: @mortality  =  <auto>  (auto-allocated)
+·   twists: 18  (9+/9-)  ZFA: ✓
+·   cap: cap:mortality:…  (share with /zfa to verify)
+```
+
+Or supply explicit twists when you want a specific encoding:
 ```
 /lemma mortality ^v
 ```

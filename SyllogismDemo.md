@@ -6,6 +6,8 @@ A step-by-step walkthrough of two peers — **Alice** and **Bob** — using quan
 
 Each step shows both browser windows side by side. The room URL is shared; both peers are connected. Lemmas registered by either peer appear in the **Lemmas** sidebar panel and persist across page reloads for the same room.
 
+> **Tip:** You can omit the twist argument — `/lemma mortality` auto-allocates a deterministic ZFA-balanced sequence from the name, giving the same twists on every client without any coordination. The steps below supply explicit twists to show the logical encoding; both forms produce identical results for `/qucalc` and `/zfa`.
+
 ---
 
 ## Setup: Both peers connect
@@ -300,6 +302,15 @@ The room was the coprocessor. Neither peer needed a shared server, a database, o
 | 3 | Alice | `/qucalc @mortality @socrates` | — | Deduction: Middle Term cancels, gap 0 ✓ |
 | 4 | Bob | `/braket 0 1` | — | Conclusion: `\|0⟩ + \|1⟩ = I` (completeness) |
 | 5 | Alice | `/lemma mortal @mortality @socrates` | `@mortal` | Proof sealed: `cap:mortal:0167` unforgeable |
+
+Steps 1 and 2 use explicit twist sequences to illustrate the ZFA encoding. The same proof works with auto-allocation — just omit the twists:
+
+```
+/lemma mortality     ← same as /lemma mortality ^v (or any balanced sequence)
+/lemma socrates      ← same as /lemma socrates +-
+```
+
+Both peers always derive the same twists for the same name, so the cap tokens match without any coordination.
 
 The Lemmas panel gives both peers a shared, navigable vocabulary of proved claims — click any `@name` to expand it with `/qucalc`. Lemmas persist in localStorage per room, so the proof survives a page reload. An invalid syllogism would produce a non-zero spectral gap at step 3, and the auto-minted capability token would fail `/zfa` verification — unbalanced tokens are algebraically impossible to construct.
 
