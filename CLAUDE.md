@@ -96,6 +96,11 @@ Named logical claims shared across peers, persisted to `localStorage` per room U
 - Broadcasts `{kind: "lemma", name, twists, cap, who}` to all peers on register
 - `allocateTwists(name)`: each character yields one pos twist `(code & 3)*2` and one neg twist `((code>>2)&3)*2+1` — always balanced, always deterministic
 
+**Transfer commands** (peer-to-peer, not broadcast):
+- `/request name` — broadcasts `{kind: "lemma-request", name, fromName}`; holder's window shows a prompt with the ready-to-type `/pass` command
+- `/pass name peer-name` — looks up `peerNames` to find peerId, sends `{kind: "lemma-pass", name, twists, cap}` directly via data channel, deletes from sender's `lemmaStore`; recipient auto-registers and sees confirmation
+- `findPeerByName(name)`: exact then prefix match on `peerNames` map (case-insensitive)
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -128,10 +133,12 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/qucalc [twists]` | Evaluate RhoQuCalc twist sequence; accepts `@name` refs |
 | `/freq [n\|twists]` | ZFA frequency spectrum (C(2n,n) arrangements) |
 | `/lemma [name [tw]]` | Register/list named lemmas; omit twists to auto-allocate |
+| `/request <name>` | Broadcast that you need `@name`; holder sees a `/pass` prompt |
+| `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`.
+Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. `/request` broadcasts `{kind: "lemma-request"}` to all peers; `/pass` sends `{kind: "lemma-pass"}` directly to the target peer only.
 
 ---
 

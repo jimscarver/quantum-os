@@ -17,6 +17,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
 8. Use `/lemma name` to name a logical claim — twists are auto-allocated from the name, or supply them explicitly (`/lemma mortality ^v`). Reference with `@name` in any command (`/qucalc @mortality @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
 9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
+10. Use `/request name` to signal you need a named lemma; the holder sees a prompt and can `/pass name peer` to transfer it directly — no token strings to copy.
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
 
@@ -44,6 +45,8 @@ QLF slash commands:
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name
+  /request <n>     — request @n from whoever holds it
+  /pass <n> <peer> — transfer @n directly to a named peer
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -216,6 +219,37 @@ Output:
 ```
 
 See [SyllogismDemo.md](SyllogismDemo.md) for the full collaborative walkthrough.
+
+### `/request <name>` and `/pass <name> <peer>` [direct]
+
+Transfer a named lemma (and its capability token) directly between peers — no token strings to copy.
+
+- `/request name` — broadcasts that you need `@name`; whoever holds it sees a prompt with the exact `/pass` command to respond
+- `/pass name peer-name` — transfers `@name` to the named peer via their data channel; removes it from your lemma store; the recipient auto-registers it
+
+```
+Aristotle:  /request fork-b
+```
+Plato sees:
+```
+· Aristotle requests @fork-b
+· you hold @fork-b — type /pass fork-b Aristotle to transfer
+```
+Plato types:
+```
+/pass fork-b aristotle
+```
+Output on Plato's side:
+```
+· @fork-b transferred to Aristotle — removed from your lemmas
+```
+Aristotle's window automatically shows:
+```
+· @fork-b received from Plato  [cap: cap:fork-b:…]
+· run /zfa cap:fork-b:… to verify
+```
+
+`/pass` always requires explicit consent — the holder must type the command. `/request` is a broadcast signal, not an automatic transfer. The Dijkstra ordering protocol in [DiningPhilosophersDemo.md](DiningPhilosophersDemo.md) shows these commands in a concurrency context.
 
 ### `/id`
 Shows your ZFA-balanced peer identity and confirms the `rho_process_always_zfa` invariant holds.
