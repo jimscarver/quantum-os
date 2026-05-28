@@ -129,7 +129,7 @@ export class SignalingServer {
     // Tell existing peers that someone joined.
     room.broadcast(peerId, { type: "joined", roomId, peerId });
 
-    console.log(`[join]  room=${roomId} peer=${peerId} size=${room.size}`);
+    console.log(`[join]  room=…${roomId.slice(-8)} peer=…${peerId.slice(-8)} size=${room.size}`);
   }
 
   private onLeave(roomId: string, peerId: string): void {
@@ -141,7 +141,7 @@ export class SignalingServer {
     if (entry) this.wsIndex.delete(entry.ws);
     room.broadcast(peerId, { type: "left", roomId, peerId });
     if (room.isEmpty) this.rooms.delete(roomId);
-    console.log(`[leave] room=${roomId} peer=${peerId}`);
+    console.log(`[leave] room=…${roomId.slice(-8)} peer=…${peerId.slice(-8)}`);
   }
 
   private onDisconnect(ws: WebSocket): void {

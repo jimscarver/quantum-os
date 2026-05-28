@@ -267,7 +267,12 @@
           <input id="signal-url" type="text" value="wss://quantum-os-signaling.onrender.com" />
           <button id="connect-btn">Connect</button>
         </div>
-        <div style="margin-top:0.5rem; font-size:0.65rem;">
+        <div style="margin-top:0.4rem; font-size:0.65rem; display:flex; align-items:center; gap:0.4rem;">
+          <span style="color:#555; white-space:nowrap;">STUN:</span>
+          <input id="stun-url" type="text" value="stun:stun.l.google.com:19302"
+            style="flex:1; font-size:0.65rem; background:#111; color:#ccc; border:1px solid #333; border-radius:3px; padding:2px 4px;" />
+        </div>
+        <div style="margin-top:0.3rem; font-size:0.65rem;">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text" style="color:#555">disconnected</span>
         </div>

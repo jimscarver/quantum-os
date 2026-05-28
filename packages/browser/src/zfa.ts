@@ -71,9 +71,10 @@ export function validateCapability(token: string): boolean {
   if (_wasm) return _wasm.wasm_capability_valid(token);
   const parts = token.split(":");
   if (parts.length < 3 || parts[0] !== "cap") return false;
-  // Each hex char encodes one twist value (0–7); parse single digits, not pairs.
-  const twistBytes = Uint8Array.from(
-    [...parts[2]].map(c => parseInt(c, 16)).filter(n => n >= 0 && n < 8)
-  );
+  // Each char encodes one twist value (0–7). Reject any char outside that range
+  // rather than silently filtering, which would let malformed tokens pass.
+  const hexStr = parts[2];
+  if (hexStr.length === 0 || !/^[0-7]+$/.test(hexStr)) return false;
+  const twistBytes = Uint8Array.from([...hexStr].map(c => parseInt(c, 10)));
   return achievesZfa(twistBytes);
 }

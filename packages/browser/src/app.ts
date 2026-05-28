@@ -28,6 +28,7 @@ const myIdEl          = document.getElementById("my-id")!;
 const roomIdEl        = document.getElementById("room-id")!;
 const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.onrender.com";
 const signalUrlEl     = document.getElementById("signal-url") as HTMLInputElement;
+const stunUrlEl       = document.getElementById("stun-url") as HTMLInputElement;
 const connectBtn      = document.getElementById("connect-btn") as HTMLButtonElement;
 const statusDot       = document.getElementById("status-dot")!;
 const statusText      = document.getElementById("status-text")!;
@@ -520,6 +521,7 @@ function connect(): void {
 
   const roomId = getRoomId();
   const signalingUrl = signalUrlEl.value.trim();
+  const stunUrl = stunUrlEl.value.trim();
 
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
   connectBtn.textContent = "Disconnect";
@@ -527,6 +529,7 @@ function connect(): void {
   qpeer = new QOSPeer({
     signalingUrl,
     roomId,
+    iceServers: stunUrl ? [{ urls: stunUrl }] : undefined,
     onSignalingOpen() {
       setStatus("connected", `connected · ${signalingUrl}`);
       msgInput.disabled = false;

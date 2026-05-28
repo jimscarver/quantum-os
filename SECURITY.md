@@ -89,9 +89,9 @@ The signaling server's SDP relay cannot be used to MITM the WebRTC connection �
 |---|-------|----------|--------|
 | 1 | No per-message size limit on signaling WebSocket | Medium | Fixed — `maxPayload: 65_536` on `WebSocketServer` |
 | 2 | No rate limiting on signaling connections or messages | Medium | Fixed — 20 msg/sec per connection (fixed window) |
-| 3 | Peer IDs logged in full on the signaling server | Low | Open — truncate to last 8 chars |
-| 4 | Hardcoded Google STUN server leaks peer IPs to Google | Low | Open — allow custom STUN config |
-| 5 | Lenient hex parsing in fallback `validateCapability()` | Low | Open — strict 0-7 char validation |
+| 3 | Peer IDs logged in full on the signaling server | Low | Fixed — logs show last 8 chars only (`…abcd1234`) |
+| 4 | Hardcoded Google STUN server leaks peer IPs to Google | Low | Fixed — STUN URL editable in sidebar; empty value disables STUN |
+| 5 | Lenient hex parsing in fallback `validateCapability()` | Low | Fixed — rejects tokens with any char outside `[0-7]` |
 
 ### Already fixed
 
@@ -100,6 +100,9 @@ The signaling server's SDP relay cannot be used to MITM the WebRTC connection �
 | Relay `from` field forgery | `wsIndex` binding in `packages/signaling/src/server.ts` — validates `msg.from` against the sending WebSocket connection |
 | No message size limit | `maxPayload: 65_536` on `WebSocketServer` — oversized frames rejected at the protocol layer |
 | No rate limiting | Fixed-window rate limiter in `onConnect` — 20 msg/sec per connection; excess messages receive an error and are dropped |
+| Full peer/room IDs in logs | Signaling server logs truncated to last 8 chars (`…abcd1234`) |
+| Hardcoded Google STUN | STUN URL now user-configurable in the sidebar; defaults to `stun:stun.l.google.com:19302` |
+| Lenient hex parsing in `validateCapability()` | Rejects tokens with any char outside `[0-7]` before processing |
 
 ---
 
