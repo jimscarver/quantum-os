@@ -19,6 +19,8 @@ export class SignalingServer {
   private rooms = new Map<string, Room>();
   // peerId → { roomId, ws } for cleanup on disconnect
   private peerIndex = new Map<string, { roomId: string; ws: WebSocket }>();
+  // ws → peerId for relay authentication
+  private wsIndex = new Map<WebSocket, string>();
 
   constructor(private port: number) {
     // HTTP server handles both health checks (GET /) and WS upgrades.
@@ -76,7 +78,7 @@ export class SignalingServer {
       case "offer":
       case "answer":
       case "ice":
-        this.relay(msg);
+        this.relay(ws, msg);
         break;
       case "leave":
         this.onLeave(msg.roomId, msg.peerId);
@@ -96,6 +98,7 @@ export class SignalingServer {
     const peer: Peer = { id: peerId, ws, joinedAt: Date.now() };
     room.add(peer);
     this.peerIndex.set(peerId, { roomId, ws });
+    this.wsIndex.set(ws, peerId);
 
     // Tell the joiner who else is in the room.
     this.send(ws, { type: "peers", roomId, peers: room.peerIds().filter(id => id !== peerId) });
@@ -109,8 +112,10 @@ export class SignalingServer {
   private onLeave(roomId: string, peerId: string): void {
     const room = this.rooms.get(roomId);
     if (!room) return;
+    const entry = this.peerIndex.get(peerId);
     room.remove(peerId);
     this.peerIndex.delete(peerId);
+    if (entry) this.wsIndex.delete(entry.ws);
     room.broadcast(peerId, { type: "left", roomId, peerId });
     if (room.isEmpty) this.rooms.delete(roomId);
     console.log(`[leave] room=${roomId} peer=${peerId}`);
@@ -125,9 +130,13 @@ export class SignalingServer {
     }
   }
 
-  private relay(msg: Extract<SignalMsg, { to: string; from: string; roomId: string }>): void {
+  private relay(ws: WebSocket, msg: Extract<SignalMsg, { to: string; from: string; roomId: string }>): void {
     const room = this.rooms.get(msg.roomId);
     if (!room) return;
+    if (this.wsIndex.get(ws) !== msg.from) {
+      this.send(ws, { type: "error", message: "relay from mismatch" });
+      return;
+    }
     room.send(msg.to, msg);
   }
 

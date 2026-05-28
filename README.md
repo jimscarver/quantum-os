@@ -198,6 +198,8 @@ packages/
 
 ## ZFA Security Model
 
+See [SECURITY.md](SECURITY.md) for the full threat model, known issues, and vulnerability reporting policy.
+
 The 8-twist alphabet `{^, v, <, >, /, \, +, -}` encodes all processes. A history is **ZFA-balanced** when `count_pos = count_neg` (spectral gap = 0). Every capability token, peer identity, and room ID is ZFA-balanced by construction — unbalanced tokens are algebraically impossible to construct, not merely rejected at runtime.
 
 Key invariants (machine-verified in [QLF](https://github.com/jimscarver/quantum-logical-framework)):
