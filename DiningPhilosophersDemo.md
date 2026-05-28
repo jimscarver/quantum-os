@@ -117,17 +117,7 @@ NIETZSCHE TYPES:  /grant fork-e
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Each philosopher registers their minted fork as a lemma so it can be passed later:
-
-```
-ARISTOTLE TYPES:  /lemma fork-a cap:fork-a:01234567012345670123456701234567
-PLATO TYPES:      /lemma fork-b cap:fork-b:45674567456745674567456745674567
-DESCARTES TYPES:  /lemma fork-c cap:fork-c:23016723016723016723016723016723
-KANT TYPES:       /lemma fork-d cap:fork-d:67012367012367012367012367012367
-NIETZSCHE TYPES:  /lemma fork-e cap:fork-e:30127530127530127530127530127530
-```
-
-Each philosopher now **owns** their left fork. The right fork belongs to their left neighbor. To eat, a philosopher uses `/request` to signal need and `/pass` to transfer — no token strings to copy.
+Each philosopher now **owns** their left fork — `/grant` automatically registers it as `@fork-X` in the local lemma store. The right fork belongs to their left neighbor. To eat, a philosopher uses `/request` to signal need and `/pass` to transfer — no token strings to copy.
 
 **Result:** Five capability tokens minted and registered, one per philosopher, one per fork. Possession is unforgeable — no two philosophers can simultaneously hold the same token.
 

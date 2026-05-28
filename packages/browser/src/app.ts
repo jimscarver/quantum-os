@@ -437,8 +437,13 @@ function handleCommand(raw: string): string[] {
       const token = generateCapability(label);
       const tw = tokenTwists(token)!;
       const { pos, neg } = twistStats(tw);
+      const grantWho = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+      lemmaStore.set(label, { twists: token, who: grantWho, cap: token });
+      saveLemmas();
+      renderLemmas();
       sys(`granted: ${token}`);
       sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  ZFA-balanced: ✓`);
+      sys(`  registered as @${label} — use /pass ${label} <peer> to transfer`);
       if (qpeer) qpeer.broadcast({ kind: "cap-grant", token, label });
       break;
     }

@@ -137,20 +137,21 @@ ZFA balance is the selection principle: `@major @minor` composed (gap=0) is a va
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/grant [label]` [shared]
-Mints a fresh ZFA-balanced capability token with the given label and broadcasts it to all peers. Recipients see the token and a `/zfa` verification prompt. This is how peers share unforgeable capabilities with each other in a room.
+Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.
 ```
-/grant session
+/grant fork-b
 ```
 Output (you see):
 ```
-granted: cap:session:024602460246024602460246…
+granted: cap:fork-b:024602460246024602460246…
   twists: 32  (16 pos, 16 neg)  ZFA-balanced: ✓
+  registered as @fork-b — use /pass fork-b <peer> to transfer
 ```
 Output (peers see):
 ```
-· alice granted capability:
-·   cap:session:024602460246024602460246…
-·   run /zfa cap:session:024602460246024602460246… to verify
+· Plato  /grant fork-b
+·   cap:fork-b:024602460246024602460246…
+·   run /zfa cap:fork-b:… to verify
 ```
 
 ### `/lemma [name [twists]]` [shared]
