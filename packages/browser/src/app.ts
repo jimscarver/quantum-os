@@ -62,6 +62,17 @@ function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
 }
 
+function allocateTwists(name: string): Uint8Array {
+  // Deterministic ZFA-balanced sequence: each char yields one pos + one neg twist.
+  const result: number[] = [];
+  for (const c of name) {
+    const code = c.charCodeAt(0);
+    result.push((code & 3) * 2);            // pos: 0, 2, 4, or 6
+    result.push(((code >> 2) & 3) * 2 + 1); // neg: 1, 3, 5, or 7
+  }
+  return new Uint8Array(result);
+}
+
 function saveLemmas(): void {
   const data = Object.fromEntries([...lemmaStore.entries()].map(([k, v]) => [k, v]));
   localStorage.setItem(`qos-lemmas-${getRoomId()}`, JSON.stringify(data));
@@ -363,7 +374,7 @@ function handleCommand(raw: string): string[] {
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
-      sys("  /lemma <n> <tw>  — register @n as twist seq (or @ref1 @ref2, or cap:token)");
+      sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -432,17 +443,20 @@ function handleCommand(raw: string): string[] {
       const lemmaParts = arg.trim().split(/\s+/);
       const lemmaName = lemmaParts[0];
       const lemmaTwistsArg = lemmaParts.slice(1).join(" ").trim();
-      if (!lemmaName || !lemmaTwistsArg) {
-        sys("usage: /lemma <name> <twists|@ref1 @ref2|cap:token>");
-        sys("  examples:  /lemma mortal ^v   /lemma syllogism @major @minor   /lemma proof cap:label:…");
+      if (!lemmaName) {
+        sys("usage: /lemma <name> [twists|@ref1 @ref2|cap:token]");
+        sys("  omit twists to auto-allocate from the name");
         break;
       }
       if (!/^[a-zA-Z0-9_-]+$/.test(lemmaName)) {
         sys(`invalid lemma name: '${lemmaName}'  (use letters, digits, _ or -)`);
         break;
       }
+      const isAutoAlloc = !lemmaTwistsArg;
       let resolvedTwistsStr: string;
-      if (lemmaTwistsArg.includes("@")) {
+      if (isAutoAlloc) {
+        resolvedTwistsStr = twistsToSymbolic(allocateTwists(lemmaName));
+      } else if (lemmaTwistsArg.includes("@")) {
         const result = expandLemmaRefs(lemmaTwistsArg);
         if (!result) {
           const badName = lemmaTwistsArg.split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
@@ -463,7 +477,7 @@ function handleCommand(raw: string): string[] {
       const lemWho = myName || (qpeer ? shortId(qpeer.peerId) : "local");
       const lemCap = lBal ? lemmaToCapToken(lemmaName, checkTw) : undefined;
       lemmaStore.set(lemmaName, { twists: resolvedTwistsStr, who: lemWho, cap: lemCap });
-      sys(`lemma registered: @${lemmaName}  =  ${resolvedTwistsStr}`);
+      sys(`lemma registered: @${lemmaName}  =  ${resolvedTwistsStr}${isAutoAlloc ? "  (auto-allocated)" : ""}`);
       sys(`  twists: ${checkTw.length}  (${lPos}+/${lNeg}-)  ZFA: ${lBal ? "✓" : "✗"}`);
       if (lemCap) sys(`  cap: ${lemCap}  (share with /zfa to verify)`);
       if (qpeer) qpeer.broadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
