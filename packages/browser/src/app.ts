@@ -40,6 +40,8 @@ const msgInput        = document.getElementById("msg-input") as HTMLInputElement
 const sendBtn         = document.getElementById("send-btn") as HTMLButtonElement;
 const shareLink       = document.getElementById("share-link") as HTMLAnchorElement;
 const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
+const lemmaListEl     = document.getElementById("lemma-list")!;
+const lemmaCountEl    = document.getElementById("lemma-count")!;
 
 // ---------------------------------------------------------------------------
 // State
@@ -52,6 +54,28 @@ let qpeer: QOSPeer | null = null;
 
 type LogEntry = { who: string; cmd: string; arg: string; summary: string };
 const sessionLog: LogEntry[] = [];
+
+interface LemmaEntry { twists: string; who: string; cap?: string }
+const lemmaStore = new Map<string, LemmaEntry>();
+
+function lemmaToCapToken(name: string, tw: Uint8Array): string {
+  return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
+}
+
+function saveLemmas(): void {
+  const data = Object.fromEntries([...lemmaStore.entries()].map(([k, v]) => [k, v]));
+  localStorage.setItem(`qos-lemmas-${getRoomId()}`, JSON.stringify(data));
+}
+
+function loadLemmas(): void {
+  const raw = localStorage.getItem(`qos-lemmas-${getRoomId()}`);
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw) as Record<string, LemmaEntry>;
+    for (const [name, entry] of Object.entries(data)) lemmaStore.set(name, entry);
+    renderLemmas();
+  } catch { /* ignore corrupt data */ }
+}
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -148,6 +172,19 @@ function renderPeers(): void {
     peerList.appendChild(li);
   }
   renderRoomProcess();
+}
+
+function renderLemmas(): void {
+  lemmaCountEl.textContent = String(lemmaStore.size);
+  lemmaListEl.innerHTML = "";
+  for (const [name, entry] of lemmaStore) {
+    const li = document.createElement("li");
+    li.textContent = `@${name}`;
+    li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => { msgInput.value = `/qucalc @${name}`; msgInput.focus(); });
+    lemmaListEl.appendChild(li);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +307,37 @@ function parseSymbolicTwists(s: string): Uint8Array | null {
   return result.length > 0 ? new Uint8Array(result) : null;
 }
 
+function resolveLemmaToBytes(twistsStr: string): Uint8Array | null {
+  if (twistsStr.startsWith("cap:")) return tokenTwists(twistsStr);
+  return parseSymbolicTwists(twistsStr);
+}
+
+function expandLemmaRefs(arg: string): {
+  expanded: string;
+  components: Array<{ label: string | null; twists: string }>;
+} | null {
+  const tokens = arg.trim().split(/\s+/);
+  const components: Array<{ label: string | null; twists: string }> = [];
+  const parts: string[] = [];
+  for (const tok of tokens) {
+    if (tok.startsWith("@")) {
+      const name = tok.slice(1);
+      const entry = lemmaStore.get(name);
+      if (!entry) return null;
+      const tw = tokenTwists(entry.twists);
+      const resolved = entry.twists.startsWith("cap:") && tw
+        ? twistsToSymbolic(tw)
+        : entry.twists;
+      parts.push(resolved);
+      components.push({ label: name, twists: resolved });
+    } else if (tok.length > 0) {
+      parts.push(tok);
+      components.push({ label: null, twists: tok });
+    }
+  }
+  return { expanded: parts.join(""), components };
+}
+
 // ---------------------------------------------------------------------------
 // Slash command handler — returns collected output lines for broadcast
 // ---------------------------------------------------------------------------
@@ -294,6 +362,9 @@ function handleCommand(raw: string): string[] {
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  /dump            — summary of all logic shared this session");
+      sys("  /lemma           — list named lemmas");
+      sys("  /lemma <n> <tw>  — register @n as twist seq (or @ref1 @ref2, or cap:token)");
+      sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
 
@@ -342,6 +413,62 @@ function handleCommand(raw: string): string[] {
       sys(`granted: ${token}`);
       sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  ZFA-balanced: ✓`);
       if (qpeer) qpeer.broadcast({ kind: "cap-grant", token, label });
+      break;
+    }
+
+    case "lemma": {
+      if (!arg) {
+        if (lemmaStore.size === 0) {
+          sys("no lemmas registered yet");
+          sys("  usage: /lemma <name> <twists|@ref1 @ref2|cap:token>");
+        } else {
+          sys(`lemmas (${lemmaStore.size}):`);
+          for (const [name, entry] of lemmaStore) {
+            sys(`  @${name}  =  ${entry.twists}${entry.cap ? `  [cap: ${entry.cap}]` : ""}  (by ${entry.who})`);
+          }
+        }
+        break;
+      }
+      const lemmaParts = arg.trim().split(/\s+/);
+      const lemmaName = lemmaParts[0];
+      const lemmaTwistsArg = lemmaParts.slice(1).join(" ").trim();
+      if (!lemmaName || !lemmaTwistsArg) {
+        sys("usage: /lemma <name> <twists|@ref1 @ref2|cap:token>");
+        sys("  examples:  /lemma mortal ^v   /lemma syllogism @major @minor   /lemma proof cap:label:…");
+        break;
+      }
+      if (!/^[a-zA-Z0-9_-]+$/.test(lemmaName)) {
+        sys(`invalid lemma name: '${lemmaName}'  (use letters, digits, _ or -)`);
+        break;
+      }
+      let resolvedTwistsStr: string;
+      if (lemmaTwistsArg.includes("@")) {
+        const result = expandLemmaRefs(lemmaTwistsArg);
+        if (!result) {
+          const badName = lemmaTwistsArg.split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
+          sys(`unknown lemma reference: ${badName ?? "@?"}`);
+          break;
+        }
+        resolvedTwistsStr = result.expanded;
+      } else {
+        resolvedTwistsStr = lemmaTwistsArg;
+      }
+      const checkTw = resolveLemmaToBytes(resolvedTwistsStr);
+      if (!checkTw || checkTw.length === 0) {
+        sys(`cannot parse twists: '${resolvedTwistsStr}'`);
+        sys("  valid: symbolic (^v<>/\\\\+-), hex digits 0-7, or cap:label:hex");
+        break;
+      }
+      const { pos: lPos, neg: lNeg, balanced: lBal } = twistStats(checkTw);
+      const lemWho = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+      const lemCap = lBal ? lemmaToCapToken(lemmaName, checkTw) : undefined;
+      lemmaStore.set(lemmaName, { twists: resolvedTwistsStr, who: lemWho, cap: lemCap });
+      sys(`lemma registered: @${lemmaName}  =  ${resolvedTwistsStr}`);
+      sys(`  twists: ${checkTw.length}  (${lPos}+/${lNeg}-)  ZFA: ${lBal ? "✓" : "✗"}`);
+      if (lemCap) sys(`  cap: ${lemCap}  (share with /zfa to verify)`);
+      if (qpeer) qpeer.broadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
+      saveLemmas();
+      renderLemmas();
       break;
     }
 
@@ -399,11 +526,22 @@ function handleCommand(raw: string): string[] {
     case "qucalc": {
       let qtwists: Uint8Array | null = null;
       let srcLabel = "";
+      let components: Array<{ label: string | null; twists: string }> | null = null;
       if (!arg) {
         const id = qpeer?.peerId ?? null;
         if (!id) { sys("not connected (no peer ID); or pass twists as argument"); break; }
         qtwists = tokenTwists(id);
         srcLabel = `peer: ${id}`;
+      } else if (arg.trim().includes("@")) {
+        const result = expandLemmaRefs(arg.trim());
+        if (!result) {
+          const badName = arg.trim().split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
+          sys(`unknown lemma: ${badName ?? "@?"}  (type /lemma to list)`);
+          break;
+        }
+        qtwists = parseSymbolicTwists(result.expanded);
+        components = result.components;
+        srcLabel = `composed: ${arg.trim()}`;
       } else if (arg.trim().startsWith("cap:")) {
         qtwists = tokenTwists(arg.trim());
         srcLabel = `token: ${arg.trim()}`;
@@ -415,6 +553,7 @@ function handleCommand(raw: string): string[] {
         sys("usage: /qucalc [twists]");
         sys("  twists: symbolic (^v<>/\\+-) or hex digits 0-7 or cap:label:hex");
         sys("  examples: /qucalc +-+-+-+-   /qucalc ^v^v   /qucalc cap:peer:…");
+        sys("  @name:   /qucalc @major @minor   (use named lemmas, see /lemma)");
         sys("  (no arg: show your peer as a RhoQuCalc process)");
         break;
       }
@@ -422,7 +561,19 @@ function handleCommand(raw: string): string[] {
       const symbolic = twistsToSymbolic(qtwists);
       sys("RhoQuCalc process:");
       sys(`  ${srcLabel}`);
-      sys(`  twists: ${symbolic}  (${qtwists.length} total)`);
+      if (components && components.filter(c => c.label !== null).length > 1) {
+        sys("  deduction composition:");
+        for (const c of components) {
+          const tw = parseSymbolicTwists(c.twists);
+          if (!tw) continue;
+          const s = twistStats(tw);
+          const lbl = c.label ? `@${c.label}` : `(${c.twists})`;
+          sys(`    ${lbl}  →  ${c.twists}  (${s.pos}+/${s.neg}-)  ZFA: ${s.balanced ? "✓" : "✗"}`);
+        }
+        sys(`  composed: ${symbolic}  (${qtwists.length} total)`);
+      } else {
+        sys(`  twists: ${symbolic}  (${qtwists.length} total)`);
+      }
       sys(`  action (pos): count=${pos}   lift (neg): count=${neg}`);
       sys(`  spectral gap: ${gap}  ZFA-balanced: ${balanced ? "✓" : "✗"}`);
       if (balanced) {
@@ -566,6 +717,20 @@ function connect(): void {
           addMessage("", `  run /zfa ${String(d.token ?? "")} to verify`, "system");
           return;
         }
+        if (d.kind === "lemma") {
+          const name = String(d.name ?? "").trim();
+          const twists = String(d.twists ?? "").trim();
+          const cap = d.cap ? String(d.cap) : undefined;
+          const who = peerLabel(from);
+          if (name && twists) {
+            lemmaStore.set(name, { twists, who, cap });
+            addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
+            addMessage("", `  @${name} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
+            saveLemmas();
+            renderLemmas();
+          }
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -616,7 +781,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -669,6 +834,7 @@ async function init(): Promise<void> {
   });
 
   await loadZfa();
+  loadLemmas();
 
   const cap = generateCapability("peer");
   myIdEl.textContent = cap;
