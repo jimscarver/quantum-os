@@ -49,6 +49,9 @@ const lemmaCountEl    = document.getElementById("lemma-count")!;
 
 const peers = new Set<string>();
 const peerNames = new Map<string, string>();   // peerId → display name
+// Debounce signaling-only disconnects: peerId → timer. If a peer rejoins before
+// the timer fires (signaling blip), suppress the left/joined pair entirely.
+const pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
 let myName: string = localStorage.getItem("qos-name") ?? "";
 let qpeer: QOSPeer | null = null;
 
@@ -757,15 +760,30 @@ function connect(): void {
       if (myName) qpeer?.send(peerId, { kind: "name", name: myName });
     },
     onPeerJoined(id) {
+      const pending = pendingLeaves.get(id);
+      if (pending !== undefined) {
+        // Signaling blip — peer reconnected before the leave timer fired; suppress both.
+        clearTimeout(pending);
+        pendingLeaves.delete(id);
+        peers.add(id);
+        renderPeers();
+        return;
+      }
+      if (peers.has(id)) return;   // already known (e.g. duplicate signal on reconnect)
       peers.add(id);
       renderPeers();
       addMessage("", `${peerLabel(id)} joined`, "system");
     },
     onPeerLeft(id) {
-      peers.delete(id);
-      renderPeers();
-      addMessage("", `${peerLabel(id)} left`, "system");
-      peerNames.delete(id);
+      // Delay the visual/state update so a fast signaling reconnect suppresses the noise.
+      const timer = setTimeout(() => {
+        pendingLeaves.delete(id);
+        peers.delete(id);
+        renderPeers();
+        addMessage("", `${peerLabel(id)} left`, "system");
+        peerNames.delete(id);
+      }, 6_000);
+      pendingLeaves.set(id, timer);
     },
   });
 

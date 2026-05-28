@@ -124,8 +124,11 @@ export class QOSPeer {
   private handleSignal(msg: SignalMsg): void {
     switch (msg.type) {
       case "peers":
-        // Notify app and initiate connections to existing peers in the room
+        // On signaling reconnect the server re-sends the peers list. Skip peers
+        // where the WebRTC data channel is still open — no need to re-establish.
         for (const peerId of msg.peers) {
+          const ch = this.channels.get(peerId);
+          if (ch?.readyState === "open") continue;
           this.config.onPeerJoined?.(peerId);
           this.initiateConnection(peerId);
         }
