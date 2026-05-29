@@ -45,6 +45,10 @@ const shareLink       = document.getElementById("share-link") as HTMLAnchorEleme
 const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
 const lemmaListEl     = document.getElementById("lemma-list")!;
 const lemmaCountEl    = document.getElementById("lemma-count")!;
+const currencyListEl  = document.getElementById("currency-list")!;
+const currencyCountEl = document.getElementById("currency-count")!;
+const noteListEl      = document.getElementById("note-list")!;
+const noteCountEl     = document.getElementById("note-count")!;
 
 // ---------------------------------------------------------------------------
 // State
@@ -124,6 +128,7 @@ function loadNotes(): void {
   tryLoad<NoteEntry>  (`qos-notes-${room}`,       (k, v) => noteStore.set(k, v));
   tryLoad<ReceiptEntry>(`qos-receipts-${room}`,   (k, v) => receiptStore.set(k, v));
   tryLoad<RedemptionRecord>(`qos-redemptions-${room}`, (k, v) => redemptionsHonored.set(k, v));
+  renderNotes();
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +249,33 @@ function renderLemmas(): void {
     li.style.cursor = "pointer";
     li.addEventListener("click", () => { msgInput.value = `/qucalc @${name}`; msgInput.focus(); });
     lemmaListEl.appendChild(li);
+  }
+}
+
+function renderNotes(): void {
+  currencyCountEl.textContent = String(currencyTokens.size);
+  currencyListEl.innerHTML = "";
+  for (const [currency, token] of currencyTokens) {
+    const li = document.createElement("li");
+    li.textContent = `✦ ${currency}`;
+    li.title = `${token}  (you issue ${currency})`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => { msgInput.value = `/note grant ${currency} `; msgInput.focus(); });
+    currencyListEl.appendChild(li);
+  }
+  noteCountEl.textContent = String(noteStore.size);
+  noteListEl.innerHTML = "";
+  for (const n of noteStore.values()) {
+    const li = document.createElement("li");
+    const fromTag = n.receivedFrom ? `  (from ${n.receivedFrom})` : "";
+    li.textContent = `${n.currency} ${n.denomination}${fromTag}`;
+    li.title = n.token;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => {
+      msgInput.value = `/note pass ${n.currency} ${n.denomination} `;
+      msgInput.focus();
+    });
+    noteListEl.appendChild(li);
   }
 }
 
@@ -856,6 +888,7 @@ function handleCommand(raw: string): string[] {
           const token = mintCurrencyToken(currency);
           currencyTokens.set(currency, token);
           saveNotes();
+          renderNotes();
           const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
           sys(`declared currency: ${currency}`);
           sys(`  authority: ${token}`);
@@ -878,6 +911,7 @@ function handleCommand(raw: string): string[] {
           const note = mintNote(currency, N);
           noteStore.set(note, { token: note, currency, denomination: N });
           saveNotes();
+          renderNotes();
           const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
           sys(`minted: ${currency} ${N}`);
           sys(`  ${note}`);
@@ -907,6 +941,7 @@ function handleCommand(raw: string): string[] {
             break;
           }
           saveNotes();
+          renderNotes();
           sys(`· ${currency} ${N} → ${targetName}`);
           sys(`  ${detached.outgoing}`);
           if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
@@ -935,6 +970,7 @@ function handleCommand(raw: string): string[] {
             break;
           }
           saveNotes();
+          renderNotes();
           sys(`· redeemed ${currency} ${N} → ${issuerName}`);
           sys(`  awaiting receipt…`);
           if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
@@ -954,6 +990,7 @@ function handleCommand(raw: string): string[] {
           noteStore.set(t1, { token: t1, currency: held.currency, denomination: a });
           noteStore.set(t2, { token: t2, currency: held.currency, denomination: held.denomination - a });
           saveNotes();
+          renderNotes();
           sys(`split ${held.currency} ${held.denomination}:`);
           sys(`  ${a}  ${t1}`);
           sys(`  ${held.denomination - a}  ${t2}`);
@@ -974,6 +1011,7 @@ function handleCommand(raw: string): string[] {
           noteStore.delete(t2Arg);
           noteStore.set(merged, { token: merged, currency: h1.currency, denomination: h1.denomination + h2.denomination });
           saveNotes();
+          renderNotes();
           sys(`merged ${h1.currency}: ${h1.denomination} + ${h2.denomination} = ${h1.denomination + h2.denomination}`);
           sys(`  ${merged}`);
           break;
@@ -1034,6 +1072,7 @@ function connect(): void {
       msgInput.disabled = false;
       sendBtn.disabled = false;
       renderPeers();
+      toggleSidebar(false);   // free the chat once connected (no-op on desktop)
       addMessage("", `joined room ${shortId(roomId)}`, "system");
     },
     onSignalingClose() {
@@ -1135,6 +1174,7 @@ function connect(): void {
           }
           noteStore.set(token, { token, currency, denomination: N, receivedFrom: who });
           saveNotes();
+          renderNotes();
           addMessage(from, `passes ${currency} ${N}`, "peer", who);
           addMessage("", `  · received ${currency} ${N} from ${who}`, "system");
           addMessage("", `    ${token}`, "system");
@@ -1161,6 +1201,7 @@ function connect(): void {
           const myLabel = myName || (qpeer ? shortId(qpeer.peerId) : "local");
           redemptionsHonored.set(token, { token, currency, denomination: N, redeemer: who, at: Date.now() });
           saveNotes();
+          renderNotes();
           const ok = qpeer?.send(from, { kind: "note-receipt", currency, denomination: N, token: receipt, original: token, issuer: myLabel });
           if (!ok) {
             addMessage("", `  · receipt minted but could not deliver — peer unreachable`, "system");
@@ -1185,6 +1226,7 @@ function connect(): void {
           }
           receiptStore.set(token, { token, currency, denomination: N, issuer });
           saveNotes();
+          renderNotes();
           addMessage(from, `issues receipt for ${currency} ${N}`, "peer", issuer);
           addMessage("", `  · ${currency} ${N} redemption honored by ${issuer}`, "system");
           addMessage("", `    ${token}`, "system");
@@ -1322,6 +1364,10 @@ async function init(): Promise<void> {
   const sig = qp.get("signal");
   if (sig) signalUrlEl.value = sig;
   else signalUrlEl.value = DEFAULT_SIGNAL;
+
+  // Keep the sidebar visible on narrow screens until the user connects, so
+  // the Connect button is reachable without finding the hamburger toggle.
+  toggleSidebar(true);
 
   handleCommand("/help");
 }
