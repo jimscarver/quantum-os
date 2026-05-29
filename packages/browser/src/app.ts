@@ -7,6 +7,9 @@ import { parseNoteLabel, denomination as noteDenomination,
 import { newProposalId, conservationCheck,
          uniqueParticipants, shortRdvId, cyclicSwap,
          type Proposal, type Row, type CommitRow } from "./rendezvous.js";
+import { newDynCapState, signEnvelope, verifyEnvelope,
+         serializeState, deserializeState, serializeChain, deserializeChain,
+         type DynCapState, type ChainEntry, type DyncapField, type VerifyResult } from "./dyncap.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -68,13 +71,13 @@ let qpeer: QOSPeer | null = null;
 type LogEntry = { who: string; cmd: string; arg: string; summary: string };
 const sessionLog: LogEntry[] = [];
 
-interface LemmaEntry { twists: string; who: string; cap?: string }
+interface LemmaEntry { twists: string; who: string; cap?: string; dyncap?: DyncapField }
 const lemmaStore = new Map<string, LemmaEntry>();
 
 interface NoteEntry { token: string; currency: string; denomination: number; receivedFrom?: string }
 interface ReceiptEntry { token: string; currency: string; denomination: number; issuer: string }
 interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
-interface KnownCurrency { currency: string; token: string; issuer: string }
+interface KnownCurrency { currency: string; token: string; issuer: string; dyncap?: DyncapField }
 const currencyTokens = new Map<string, string>();          // currency → cap:token-<currency>:…  (mine, with bearer authority)
 const noteStore = new Map<string, NoteEntry>();             // token → entry
 const receiptStore = new Map<string, ReceiptEntry>();       // token → entry
@@ -98,6 +101,13 @@ const proposals        = new Map<string, ProposalState>();  // proposal id → s
 const proposalTimers   = new Map<string, number>();         // proposal id → setTimeout handle
 
 const RDV_TIMEOUT_MS = 60_000;
+
+// Dyncap: hash-only dynamic capabilities. The seed is per-device (cross-room);
+// chain state (per-peer TOFU anchor + seq + witness ring) is per-room.
+let dyncapState: DynCapState | null = null;            // mine — initialized in init()
+const dyncapChains = new Map<string, ChainEntry>();    // peerId → chain state on receivers
+// Promise queue to serialize outbound signed envelopes (preserves seq ordering).
+let signQueue: Promise<void> = Promise.resolve();
 
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
@@ -139,6 +149,80 @@ function saveNotes(): void {
   localStorage.setItem(`qos-locked-notes-${room}`,     JSON.stringify(Object.fromEntries(lockedNotes)));
 }
 
+function saveDyncap(): void {
+  if (dyncapState) localStorage.setItem("qos-dyncap-state", serializeState(dyncapState));
+  localStorage.setItem(`qos-dyncap-chains-${getRoomId()}`, serializeChain(dyncapChains));
+}
+
+async function loadDyncap(): Promise<void> {
+  const raw = localStorage.getItem("qos-dyncap-state");
+  if (raw) {
+    const loaded = await deserializeState(raw);
+    if (loaded) dyncapState = loaded;
+  }
+  if (!dyncapState) {
+    dyncapState = await newDynCapState();
+    localStorage.setItem("qos-dyncap-state", serializeState(dyncapState));
+  }
+}
+
+// Sign-and-broadcast: enqueues the signing so seq order is preserved across
+// concurrent outbound envelopes. Falls back to an unsigned send if dyncap
+// hasn't been initialized yet (early-init edge cases).
+function signedBroadcast(envelope: Record<string, unknown>): void {
+  signQueue = signQueue.then(async () => {
+    if (!qpeer) return;
+    if (!dyncapState) { qpeer.broadcast(envelope); return; }
+    const dyncap = await signEnvelope(dyncapState, getRoomId(), envelope);
+    saveDyncap();
+    qpeer.broadcast({ ...envelope, dyncap });
+  }).catch(() => { /* swallow signing errors so the queue keeps moving */ });
+}
+
+function signedSend(peerId: string, envelope: Record<string, unknown>): boolean {
+  // For direct sends we return synchronously (false if no peer/channel);
+  // signing is queued and fires on the same channel.
+  if (!qpeer) return false;
+  signQueue = signQueue.then(async () => {
+    if (!qpeer || !dyncapState) return;
+    const dyncap = await signEnvelope(dyncapState, getRoomId(), envelope);
+    saveDyncap();
+    qpeer.send(peerId, { ...envelope, dyncap });
+  }).catch(() => { /* swallow */ });
+  return true;
+}
+
+/// Verify an inbound envelope's dyncap if present. Returns a status string for
+/// chat display (empty when no dyncap was carried). On fork detection, the
+/// affected peer is flagged contested and the user is notified.
+async function verifyDyncapIfPresent(from: string, d: Record<string, unknown>): Promise<string> {
+  const raw = d.dyncap;
+  if (!raw || typeof raw !== "object") return "";
+  const dyncap = raw as DyncapField;
+  const prior = dyncapChains.get(from);
+  const result: VerifyResult = await verifyEnvelope(prior, getRoomId(), d, dyncap);
+  switch (result.kind) {
+    case "ok":
+    case "tofu":
+      dyncapChains.set(from, result.entry);
+      saveDyncap();
+      return result.kind === "tofu" ? "  · dyncap anchor pinned (TOFU)" : "";
+    case "anchor-mismatch":
+      addMessage("", `  ⚠ dyncap anchor mismatch from ${peerLabel(from)}  expected: ${prior?.anchor.slice(0,16)}…  got: ${dyncap.anchor.slice(0,16)}…`, "system");
+      return "  · refused: anchor mismatch";
+    case "fork": {
+      const entry = prior ? { ...prior, contested: true } : prior;
+      if (entry) { dyncapChains.set(from, entry); saveDyncap(); }
+      addMessage("", `  ⚠ dyncap FORK detected for ${peerLabel(from)} at seq ${result.seq} — identity contested`, "system");
+      return "  · refused: fork";
+    }
+    case "replay":
+      return "  · refused: replay";
+    case "invalid":
+      return `  · refused: invalid dyncap (${result.reason})`;
+  }
+}
+
 function loadNotes(): void {
   const room = getRoomId();
   const tryLoad = <T>(key: string, set: (k: string, v: T) => void) => {
@@ -154,6 +238,11 @@ function loadNotes(): void {
   tryLoad<ReceiptEntry>    (`qos-receipts-${room}`,         (k, v) => receiptStore.set(k, v));
   tryLoad<RedemptionRecord>(`qos-redemptions-${room}`,      (k, v) => redemptionsHonored.set(k, v));
   tryLoad<KnownCurrency>   (`qos-known-currencies-${room}`, (k, v) => knownCurrencies.set(k, v));
+  // Dyncap chain state (per-room)
+  const dynChainRaw = localStorage.getItem(`qos-dyncap-chains-${room}`);
+  if (dynChainRaw) {
+    for (const [k, v] of deserializeChain(dynChainRaw)) dyncapChains.set(k, v);
+  }
   // Locked notes from a previous session are orphans: their proposal state
   // lived in memory only and is gone after reload. Release each back to the
   // wallet so the user doesn't lose value across a refresh.
@@ -644,6 +733,7 @@ function handleCommand(raw: string): string[] {
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
+      sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -754,7 +844,7 @@ function handleCommand(raw: string): string[] {
       sys(`lemma registered: @${lemmaName}  =  ${resolvedTwistsStr}${isAutoAlloc ? "  (auto-allocated)" : ""}`);
       sys(`  twists: ${checkTw.length}  (${lPos}+/${lNeg}-)  ZFA: ${lBal ? "✓" : "✗"}`);
       if (lemCap) sys(`  cap: ${lemCap}  (share with /zfa to verify)`);
-      if (qpeer) qpeer.broadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
+      signedBroadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
       saveLemmas();
       renderLemmas();
       break;
@@ -1079,7 +1169,7 @@ function handleCommand(raw: string): string[] {
           sys(`declared currency: ${currency}`);
           sys(`  authority: ${token}`);
           sys(`  you can now /note grant ${currency} <N>`);
-          if (qpeer) qpeer.broadcast({ kind: "note-declare", currency, token, who });
+          signedBroadcast({ kind: "note-declare", currency, token, who });
           break;
         }
 
@@ -1415,6 +1505,28 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "dyncap": {
+      const sub = (arg.trim().split(/\s+/)[0] || "status").toLowerCase();
+      if (sub === "whoami" || sub === "status") {
+        if (!dyncapState) { sys("dyncap not initialized"); break; }
+        sys(`dyncap anchor: cap:peer/dyn:${dyncapState.anchor}`);
+        sys(`  seq so far:   ${dyncapState.seq}`);
+        sys(`  chain peers:  ${dyncapChains.size}`);
+      } else if (sub === "peers") {
+        if (dyncapChains.size === 0) { sys("no dyncap peers tracked yet"); break; }
+        sys(`tracked peers (${dyncapChains.size}):`);
+        for (const [peerId, entry] of dyncapChains) {
+          const flag = entry.contested ? "  ⚠ CONTESTED" : "";
+          sys(`  ${peerLabel(peerId)}  anchor: ${entry.anchor.slice(0, 16)}…  lastSeq: ${entry.lastSeq}${flag}`);
+        }
+      } else {
+        sys(`unknown subcommand: /dyncap ${sub}`);
+        sys("  /dyncap [status]  — show your anchor, current seq, tracked peer count");
+        sys("  /dyncap peers     — list tracked peers with their pinned anchors");
+      }
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -1464,12 +1576,15 @@ function connect(): void {
       msgInput.disabled = true;
       sendBtn.disabled = true;
     },
-    onMessage(from, data) {
+    async onMessage(from, data) {
       if (typeof data === "object" && data !== null) {
         const d = data as Record<string, unknown>;
         if (d.kind === "name") {
+          const status = await verifyDyncapIfPresent(from, d);
+          if (status.startsWith("  · refused")) return;
           peerNames.set(from, String(d.name ?? ""));
           renderPeers();
+          if (status) addMessage("", `${peerLabel(from)} ${status.trim()}`, "system");
           return;
         }
         if (d.kind === "qlf") {
@@ -1489,14 +1604,21 @@ function connect(): void {
           return;
         }
         if (d.kind === "lemma") {
+          const status = await verifyDyncapIfPresent(from, d);
+          if (status.startsWith("  · refused")) {
+            addMessage(from, `/lemma ${String(d.name ?? "")}`, "peer", peerLabel(from));
+            addMessage("", status, "system");
+            return;
+          }
           const name = String(d.name ?? "").trim();
           const twists = String(d.twists ?? "").trim();
           const cap = d.cap ? String(d.cap) : undefined;
           const who = peerLabel(from);
+          const dyncap = (d.dyncap as DyncapField | undefined);
           if (name && twists) {
-            lemmaStore.set(name, { twists, who, cap });
+            lemmaStore.set(name, { twists, who, cap, dyncap });
             addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
-            addMessage("", `  @${name} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
+            addMessage("", `  @${name} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
             saveLemmas();
             renderLemmas();
           }
@@ -1527,9 +1649,16 @@ function connect(): void {
           return;
         }
         if (d.kind === "note-declare") {
+          const status = await verifyDyncapIfPresent(from, d);
+          if (status.startsWith("  · refused")) {
+            addMessage(from, `/note declare ${String(d.currency ?? "")}`, "peer", peerLabel(from));
+            addMessage("", status, "system");
+            return;
+          }
           const currency = String(d.currency ?? "");
           const token    = String(d.token ?? "");
           const who      = peerLabel(from);
+          const dyncap   = (d.dyncap as DyncapField | undefined);
           addMessage(from, `/note declare ${currency}`, "peer", who);
           const parsed = parseNoteLabel(token);
           const valid  = parsed?.kind === "token" && parsed.currency === currency && validateCapability(token);
@@ -1538,11 +1667,11 @@ function connect(): void {
             return;
           }
           if (!knownCurrencies.has(token)) {
-            knownCurrencies.set(token, { currency, token, issuer: who });
+            knownCurrencies.set(token, { currency, token, issuer: who, dyncap });
             saveNotes();
             renderNotes();
           }
-          addMessage("", `  · ${who} issues ${currency}  authority: ${token}`, "system");
+          addMessage("", `  · ${who} issues ${currency}  authority: ${token}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
           return;
         }
         if (d.kind === "note-grant") {
@@ -1630,7 +1759,7 @@ function connect(): void {
         if (d.kind === "sync-lemmas") {
           const raw = d.entries;
           if (!Array.isArray(raw)) return;
-          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string }>;
+          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField }>;
           const who = peerLabel(from);
           let added = 0;
           for (const e of entries) {
@@ -1640,7 +1769,7 @@ function connect(): void {
             if (lemmaStore.has(name)) continue;
             const tw = resolveLemmaToBytes(twists);
             if (!tw || !achievesZfa(tw)) continue;
-            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap });
+            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap });
             added++;
           }
           if (added > 0) {
@@ -1654,7 +1783,7 @@ function connect(): void {
         if (d.kind === "sync-currencies") {
           const raw = d.entries;
           if (!Array.isArray(raw)) return;
-          const entries = raw as Array<{ currency?: string; token?: string; issuer?: string }>;
+          const entries = raw as Array<{ currency?: string; token?: string; issuer?: string; dyncap?: DyncapField }>;
           const who = peerLabel(from);
           let added = 0;
           for (const e of entries) {
@@ -1665,7 +1794,7 @@ function connect(): void {
             const parsed = parseNoteLabel(token);
             if (!parsed || parsed.kind !== "token" || parsed.currency !== currency) continue;
             if (!validateCapability(token)) continue;
-            knownCurrencies.set(token, { currency, token, issuer: e.issuer || who });
+            knownCurrencies.set(token, { currency, token, issuer: e.issuer || who, dyncap: e.dyncap });
             added++;
           }
           if (added > 0) {
@@ -1807,18 +1936,20 @@ function connect(): void {
       addMessage(from, JSON.stringify(data), "peer", peerLabel(from));
     },
     onChannelOpen(peerId) {
-      if (myName) qpeer?.send(peerId, { kind: "name", name: myName });
+      // Always send a name envelope (carries the dyncap anchor for TOFU
+      // bootstrap even when the user hasn't set a display name yet).
+      signedSend(peerId, { kind: "name", name: myName });
       // Catch up the new peer with public room state. Held notes / receipts
       // / redemption logs stay private; only the room-knowledge stores ship.
       if (lemmaStore.size > 0) {
         const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
-          name, twists: e.twists, who: e.who, cap: e.cap,
+          name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap,
         }));
-        qpeer?.send(peerId, { kind: "sync-lemmas", entries });
+        signedSend(peerId, { kind: "sync-lemmas", entries });
       }
       if (knownCurrencies.size > 0) {
         const entries = Array.from(knownCurrencies.values());
-        qpeer?.send(peerId, { kind: "sync-currencies", entries });
+        signedSend(peerId, { kind: "sync-currencies", entries });
       }
     },
     onPeerJoined(id) {
@@ -1875,7 +2006,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -1924,10 +2055,11 @@ async function init(): Promise<void> {
     myName = myNameEl.value.trim();
     localStorage.setItem("qos-name", myName);
     renderPeers();
-    if (qpeer) qpeer.broadcast({ kind: "name", name: myName });
+    if (qpeer) signedBroadcast({ kind: "name", name: myName });
   });
 
   await loadZfa();
+  await loadDyncap();
   loadLemmas();
   loadNotes();
 
