@@ -71,10 +71,12 @@ const lemmaStore = new Map<string, LemmaEntry>();
 interface NoteEntry { token: string; currency: string; denomination: number; receivedFrom?: string }
 interface ReceiptEntry { token: string; currency: string; denomination: number; issuer: string }
 interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
-const currencyTokens = new Map<string, string>();          // currency → cap:token-<currency>:…
+interface KnownCurrency { currency: string; token: string; issuer: string }
+const currencyTokens = new Map<string, string>();          // currency → cap:token-<currency>:…  (mine, with bearer authority)
 const noteStore = new Map<string, NoteEntry>();             // token → entry
 const receiptStore = new Map<string, ReceiptEntry>();       // token → entry
 const redemptionsHonored = new Map<string, RedemptionRecord>(); // redeemed-token → record
+const knownCurrencies = new Map<string, KnownCurrency>();   // token → entry  (public registry: everyone's declarations)
 
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
@@ -108,10 +110,11 @@ function loadLemmas(): void {
 
 function saveNotes(): void {
   const room = getRoomId();
-  localStorage.setItem(`qos-currencies-${room}`, JSON.stringify(Object.fromEntries(currencyTokens)));
-  localStorage.setItem(`qos-notes-${room}`,      JSON.stringify(Object.fromEntries(noteStore)));
-  localStorage.setItem(`qos-receipts-${room}`,   JSON.stringify(Object.fromEntries(receiptStore)));
-  localStorage.setItem(`qos-redemptions-${room}`,JSON.stringify(Object.fromEntries(redemptionsHonored)));
+  localStorage.setItem(`qos-currencies-${room}`,       JSON.stringify(Object.fromEntries(currencyTokens)));
+  localStorage.setItem(`qos-notes-${room}`,            JSON.stringify(Object.fromEntries(noteStore)));
+  localStorage.setItem(`qos-receipts-${room}`,         JSON.stringify(Object.fromEntries(receiptStore)));
+  localStorage.setItem(`qos-redemptions-${room}`,      JSON.stringify(Object.fromEntries(redemptionsHonored)));
+  localStorage.setItem(`qos-known-currencies-${room}`, JSON.stringify(Object.fromEntries(knownCurrencies)));
 }
 
 function loadNotes(): void {
@@ -124,10 +127,19 @@ function loadNotes(): void {
       for (const [k, v] of Object.entries(data)) set(k, v);
     } catch { /* ignore */ }
   };
-  tryLoad<string>     (`qos-currencies-${room}`,  (k, v) => currencyTokens.set(k, v));
-  tryLoad<NoteEntry>  (`qos-notes-${room}`,       (k, v) => noteStore.set(k, v));
-  tryLoad<ReceiptEntry>(`qos-receipts-${room}`,   (k, v) => receiptStore.set(k, v));
-  tryLoad<RedemptionRecord>(`qos-redemptions-${room}`, (k, v) => redemptionsHonored.set(k, v));
+  tryLoad<string>          (`qos-currencies-${room}`,       (k, v) => currencyTokens.set(k, v));
+  tryLoad<NoteEntry>       (`qos-notes-${room}`,            (k, v) => noteStore.set(k, v));
+  tryLoad<ReceiptEntry>    (`qos-receipts-${room}`,         (k, v) => receiptStore.set(k, v));
+  tryLoad<RedemptionRecord>(`qos-redemptions-${room}`,      (k, v) => redemptionsHonored.set(k, v));
+  tryLoad<KnownCurrency>   (`qos-known-currencies-${room}`, (k, v) => knownCurrencies.set(k, v));
+  // Migration: seed knownCurrencies from currencies I issue if the registry is empty.
+  if (knownCurrencies.size === 0 && currencyTokens.size > 0) {
+    const me = myName || "you";
+    for (const [currency, token] of currencyTokens) {
+      knownCurrencies.set(token, { currency, token, issuer: me });
+    }
+    saveNotes();
+  }
   renderNotes();
 }
 
@@ -253,14 +265,32 @@ function renderLemmas(): void {
 }
 
 function renderNotes(): void {
-  currencyCountEl.textContent = String(currencyTokens.size);
+  currencyCountEl.textContent = String(knownCurrencies.size);
   currencyListEl.innerHTML = "";
-  for (const [currency, token] of currencyTokens) {
+  // List my own issued currencies first (with ✦), then others (with issuer label).
+  const mine: KnownCurrency[]  = [];
+  const others: KnownCurrency[] = [];
+  for (const entry of knownCurrencies.values()) {
+    if (currencyTokens.get(entry.currency) === entry.token) mine.push(entry);
+    else others.push(entry);
+  }
+  for (const entry of mine) {
     const li = document.createElement("li");
-    li.textContent = `✦ ${currency}`;
-    li.title = `${token}  (you issue ${currency})`;
+    li.textContent = `✦ ${entry.currency}`;
+    li.title = `${entry.token}  (you issue ${entry.currency})`;
     li.style.cursor = "pointer";
-    li.addEventListener("click", () => { msgInput.value = `/note grant ${currency} `; msgInput.focus(); });
+    li.addEventListener("click", () => { msgInput.value = `/note grant ${entry.currency} `; msgInput.focus(); });
+    currencyListEl.appendChild(li);
+  }
+  for (const entry of others) {
+    const li = document.createElement("li");
+    li.textContent = `${entry.currency}  (by ${entry.issuer})`;
+    li.title = `${entry.token}  (issued by ${entry.issuer})`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => {
+      msgInput.value = `/note redeem ${entry.currency} `;
+      msgInput.focus();
+    });
     currencyListEl.appendChild(li);
   }
   noteCountEl.textContent = String(noteStore.size);
@@ -887,9 +917,10 @@ function handleCommand(raw: string): string[] {
           }
           const token = mintCurrencyToken(currency);
           currencyTokens.set(currency, token);
+          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+          knownCurrencies.set(token, { currency, token, issuer: who });
           saveNotes();
           renderNotes();
-          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
           sys(`declared currency: ${currency}`);
           sys(`  authority: ${token}`);
           sys(`  you can now /note grant ${currency} <N>`);
@@ -1147,6 +1178,17 @@ function connect(): void {
           const token    = String(d.token ?? "");
           const who      = peerLabel(from);
           addMessage(from, `/note declare ${currency}`, "peer", who);
+          const parsed = parseNoteLabel(token);
+          const valid  = parsed?.kind === "token" && parsed.currency === currency && validateCapability(token);
+          if (!valid) {
+            addMessage("", `  · refused: malformed currency authority token`, "system");
+            return;
+          }
+          if (!knownCurrencies.has(token)) {
+            knownCurrencies.set(token, { currency, token, issuer: who });
+            saveNotes();
+            renderNotes();
+          }
           addMessage("", `  · ${who} issues ${currency}  authority: ${token}`, "system");
           return;
         }
@@ -1232,6 +1274,55 @@ function connect(): void {
           addMessage("", `    ${token}`, "system");
           return;
         }
+        if (d.kind === "sync-lemmas") {
+          const raw = d.entries;
+          if (!Array.isArray(raw)) return;
+          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string }>;
+          const who = peerLabel(from);
+          let added = 0;
+          for (const e of entries) {
+            const name   = String(e.name   ?? "").trim();
+            const twists = String(e.twists ?? "").trim();
+            if (!name || !twists) continue;
+            if (lemmaStore.has(name)) continue;
+            const tw = resolveLemmaToBytes(twists);
+            if (!tw || !achievesZfa(tw)) continue;
+            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap });
+            added++;
+          }
+          if (added > 0) {
+            saveLemmas();
+            renderLemmas();
+            addMessage(from, `sync`, "peer", who);
+            addMessage("", `  · synced ${added} lemma${added === 1 ? "" : "s"} from ${who}`, "system");
+          }
+          return;
+        }
+        if (d.kind === "sync-currencies") {
+          const raw = d.entries;
+          if (!Array.isArray(raw)) return;
+          const entries = raw as Array<{ currency?: string; token?: string; issuer?: string }>;
+          const who = peerLabel(from);
+          let added = 0;
+          for (const e of entries) {
+            const currency = String(e.currency ?? "").trim();
+            const token    = String(e.token    ?? "").trim();
+            if (!currency || !token) continue;
+            if (knownCurrencies.has(token)) continue;
+            const parsed = parseNoteLabel(token);
+            if (!parsed || parsed.kind !== "token" || parsed.currency !== currency) continue;
+            if (!validateCapability(token)) continue;
+            knownCurrencies.set(token, { currency, token, issuer: e.issuer || who });
+            added++;
+          }
+          if (added > 0) {
+            saveNotes();
+            renderNotes();
+            addMessage(from, `sync`, "peer", who);
+            addMessage("", `  · synced ${added} currenc${added === 1 ? "y" : "ies"} from ${who}`, "system");
+          }
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -1242,6 +1333,18 @@ function connect(): void {
     },
     onChannelOpen(peerId) {
       if (myName) qpeer?.send(peerId, { kind: "name", name: myName });
+      // Catch up the new peer with public room state. Held notes / receipts
+      // / redemption logs stay private; only the room-knowledge stores ship.
+      if (lemmaStore.size > 0) {
+        const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
+          name, twists: e.twists, who: e.who, cap: e.cap,
+        }));
+        qpeer?.send(peerId, { kind: "sync-lemmas", entries });
+      }
+      if (knownCurrencies.size > 0) {
+        const entries = Array.from(knownCurrencies.values());
+        qpeer?.send(peerId, { kind: "sync-currencies", entries });
+      }
     },
     onPeerJoined(id) {
       const pending = pendingLeaves.get(id);
