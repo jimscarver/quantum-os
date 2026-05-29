@@ -28,6 +28,8 @@ quantum-os is a peer-to-peer browser application. The security boundary is the *
 | Holder double-spend across rooms | A malicious holder can copy a note's bytes before `/note pass`/`/note redeem` and try to spend it in a different room. Same-room re-spend is rejected (token is gone from `noteStore`); cross-room re-spend is undetectable. Wave 3 (dynamic caps) is the planned mitigation. |
 | Rendezvous commit divergence | Multi-party commit is best-effort. If `rdv-commit` is lost in flight to some participants, they time out and keep their gives; participants who received it apply the swap, producing transient global conservation violation. True atomicity needs consensus. |
 | Proposer-issued asymmetric commits | The proposer signs nothing — each participant validates only its own row. A malicious proposer could in principle deliver mutually inconsistent commits to different participants; downstream inconsistencies surface later but are not prevented at commit time. |
+| Sync-envelope authorship forgery | `sync-lemmas` and `sync-currencies` carry per-entry `who` / `issuer` fields. The receiver validates label and ZFA balance but cannot verify the claim. A malicious peer can forward a sync envelope with entries that claim Alice authored a lemma or declared a currency she never touched; receivers will accept these as fact. The live `lemma` and `note-declare` paths are not affected because they derive authorship from the wire-level sender's peer ID. |
+| Sync flooding | A malicious peer can stuff a `sync-lemmas` / `sync-currencies` envelope with arbitrarily many balanced entries (each is just a fresh random ZFA-balanced token bearing any claimed label). All pass validation; all land in the receiver's stores. No per-peer or per-envelope cap is enforced. |
 
 ---
 
@@ -94,7 +96,24 @@ The `/note` and `/rdv` features extend the bearer-capability model from peer ide
 
 **Locking, not consensus.** During an in-flight rendezvous, an accepted `gives` token moves from `noteStore` to `lockedNotes`; `/note pass` / `/note redeem` cannot see it. On abort/reject/timeout the lock is released back to `noteStore`. On crash the lock is persisted, but the proposal context is in-memory only — on reload, orphaned locks return to the wallet (so value is never lost across a crash), which means the proposer side may see a stale acceptance that no longer corresponds to a held token. This is the same "best-effort" trust posture as `/note pass`.
 
-**Sync is gossip with re-validation.** When a new peer joins, every existing peer sends snapshots of `lemmaStore` and `knownCurrencies` over each new data channel. Each entry is re-validated on receipt with the same checks as live events — no entry is trusted because it came from a sync. Held notes, receipts, the issuer's `redemptionsHonored` log, and in-flight rendezvous proposals are *never* gossiped: they're private bearer state.
+**Sync is gossip with structural — not authorship — re-validation.** When a new peer joins, every existing peer sends snapshots of `lemmaStore` and `knownCurrencies` over each new data channel. Each entry is re-validated against the same label and ZFA-balance checks the live `lemma` / `note-declare` handlers use, so malformed or unbalanced entries are silently dropped. **What re-validation does not catch is forged authorship.** A `sync-currencies` entry carries `{ currency, token, issuer }`; a `sync-lemmas` entry carries `{ name, twists, who }`. A malicious peer can construct a fresh ZFA-balanced token of any label and claim any `issuer` / `who`. The receiver will store it as fact because there is no signature scheme that binds the token bytes to a specific identity. The live note-declare and lemma broadcast paths are safe from this — they derive authorship from the wire-level sender's peer ID, which the signaling server validates via `wsIndex` — but the sync envelope's per-entry author claim is structurally untrusted. The planned mitigation is dynamic capabilities (Wave 3): identity becomes a continuously-proven trajectory, and a sync entry's `issuer` field gains a verifiable signature instead of a bare claim.
+
+Held notes, receipts, the issuer's `redemptionsHonored` log, and in-flight rendezvous proposals are *never* gossiped — they're private bearer state.
+
+### The shared root: no consensus
+
+Several of the limits above are facets of the same architectural choice. quantum-os is a peer-to-peer per-room system **with no consensus mechanism**, so it cannot provide global consistency over the room's history. Specifically:
+
+- **Cross-room double-spend** of a bearer note is undetectable because there is no shared nullifier set.
+- **Multi-party rendezvous atomicity** is best-effort because there is no agreement protocol that binds all participants to the same commit / abort decision.
+- **Sync-envelope authorship forgery** is undetectable because there is no ordered, agreed-upon log of who declared what when.
+- **Proposer-issued asymmetric commits** are undetectable at commit time because there is no broadcast-with-equivocation-detection layer.
+
+Each of these has a known solution in the consensus literature — nullifier SMTs in zk-rollups (DarkWow's approach), Byzantine fault tolerant commit (PBFT, HotStuff), append-only signed logs with equivocation detection (CONIKS, Certificate Transparency). quantum-os deliberately omits all of them in exchange for a different set of properties: zero infrastructure, instantaneous per-room operation, and the algebraic guarantee that every individual capability is ZFA-balanced by construction.
+
+**A consensus layer is the right primary mitigation** for the entire class of forge-and-equivocate attacks against the gossip, transfer, and rendezvous flows. The planned wave-3 dynamic-capability work narrows the trust gap by making identity a continuously-proven trajectory (signatures across a ratcheting state), which closes authorship forgery without a global ledger; closing cross-room double-spend and asymmetric commits still requires either consensus or a tamper-evident log.
+
+In the meantime, the bearer-and-room-scoped trust model should be read literally: if you wouldn't hand someone the bytes of a `cap:note-USD:…` token in person, don't `/note pass` it to them, and don't trust a fresh sync envelope from a peer you don't recognize.
 
 ---
 
