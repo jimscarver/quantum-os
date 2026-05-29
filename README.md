@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Rendezvous Demo →](RendezvousDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
 
 ### How to create reality together
 
@@ -314,6 +314,8 @@ rdv-abort    proposer    → each participant   (releases locks)
 **Locking**: while a token is locked for a proposal it moves out of `noteStore` (so `/note pass`, `/note redeem`, etc. don't see it) into a separate `lockedNotes` map. Released back on abort / reject / timeout; consumed on commit (replaced by the gets token).
 
 **Atomicity caveat**: best-effort, same trust model as `/note pass`. If a commit message is lost in flight, the recipient who got it diverges from the one who didn't. True multi-party atomicity needs a consensus layer, which is out of scope.
+
+See [RendezvousDemo.md](RendezvousDemo.md) for a full Alice/Bob walkthrough — proposal lifecycle, locking, failure modes, and a discussion of how N-of-N multisig fits the current protocol while K-of-N threshold multisig needs either a threshold conservation predicate or real signatures (wave-3 dynamic capabilities).
 
 Example flow (Alice has USD 100, Bob has EUR 100):
 
