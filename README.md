@@ -47,6 +47,8 @@ QLF slash commands:
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name
   /request <n>     — request @n from whoever holds it
   /pass <n> <peer> — transfer @n directly to a named peer
+  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)
+  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -251,6 +253,80 @@ Aristotle's window automatically shows:
 ```
 
 `/pass` always requires explicit consent — the holder must type the command. `/request` is a broadcast signal, not an automatic transfer. The Dijkstra ordering protocol in [DiningPhilosophersDemo.md](DiningPhilosophersDemo.md) shows these commands in a concurrency context.
+
+### `/note [sub]` [direct]
+
+Promissory notes as ZFA twist sequences. A note is a bearer capability `cap:note-<currency>:<balanced hex>` whose **denomination equals `hex.length / 2`**. Conservation falls out of the existing ZFA balance invariant — split partitions a balanced sequence into two balanced halves, merge concatenates two balanced sequences, and the per-currency denomination total is exactly the sum of positive twists across all held notes of that currency.
+
+Lifecycle modeled on DarkWow's TokenMint → Mint → Transfer → Redeem, implemented over the room's data channel with no ZK, Pedersen, or consensus.
+
+| Subcommand | Effect |
+|---|---|
+| `/note declare <currency>` | Mints `cap:token-<currency>:…` as your issuer authority and broadcasts the declaration to the room. |
+| `/note grant <currency> <N>` | Requires you to hold `cap:token-<currency>`; mints `cap:note-<currency>:hex(2N)` and stores it locally. The denomination-N note never leaves your wallet (no bearer-token broadcast). |
+| `/note pass <currency> <N> <peer>` | Finds a held note ≥ N (auto-splits if larger), direct-sends the N-piece to the peer. Atomic: removed from your wallet, registered on the recipient's. |
+| `/note redeem <currency> <N> <issuer>` | Direct-sends a note back to the issuer; their handler verifies they hold the matching `cap:token-…`, mints `cap:receipt-<currency>:hex(2N)` back to you, and logs the redemption locally. |
+| `/note split <token> <a>` | Partitions a held note into denominations `(a, N−a)`; both halves stay balanced by construction. |
+| `/note merge <t1> <t2>` | Concatenates two notes of the same currency. Sum of balanced is balanced. |
+| `/note list` / `/note balance [currency]` | Wallet view (also rendered in the sidebar). |
+
+The **Currencies** and **Notes** blocks in the sidebar show held authorities and notes at a glance. Click a currency to prefill `/note grant`; click a note to prefill `/note pass`. Currencies you didn't issue appear with the issuer's label and prefill `/note redeem`.
+
+Example flow (two peers Alice and Bob):
+
+```
+Alice:  /note declare USD
+        /note grant USD 100
+Alice:  /note pass USD 30 Bob
+Bob:    /note redeem USD 30 Alice
+```
+
+After this sequence: Alice's wallet holds USD 70 (change) and a `redemptionsHonored` log entry; Bob holds `cap:receipt-USD:hex(60)` — a permanent, non-transferable record that Alice honored a USD 30 redemption.
+
+**Conservation**: every operation preserves `count_pos == count_neg` per token. Splitting/merging never changes the total denomination of a wallet. The same Lean invariant that proves `rho_process_always_zfa` covers split (partition of a balanced sequence) and merge (parallel composition of balanced sequences).
+
+**Privacy boundary**: declarations and grant *announcements* broadcast (so the room knows what currencies exist and who issues them). Held notes, receipts, and the issuer's redemption log are private — never sent without an explicit `/note pass` or `/note redeem`.
+
+### `/rdv [sub]` [direct]
+
+N-party atomic rendezvous: a single composite move across N participants, with ZFA conservation enforced over the joint composition. Each participant contributes a `gives` token and receives a `gets` token; the protocol requires `multiset(gives) == multiset(gets)` — value flows in a closed cycle. The MVP exposes the 2-party bilateral swap (`/rdv swap`); the underlying protocol generalizes to N parties (cyclic).
+
+Protocol (5 direct-send wire kinds, never broadcast):
+
+```
+rdv-propose  proposer    → each participant   (carries the proposal)
+rdv-accept   participant → proposer           (carries the committed gives token)
+rdv-reject   participant → proposer
+rdv-commit   proposer    → each participant   (carries final assignments)
+rdv-abort    proposer    → each participant   (releases locks)
+```
+
+| Subcommand | Effect |
+|---|---|
+| `/rdv swap <giveCur> <giveN> <getCur> <getN> <peer>` | Locks your gives token, sends a proposal to the peer, sets a 60s timeout. |
+| `/rdv accept <id>` | Locks your gives token, sends accept to the proposer. The proposer commits once all participants have accepted. |
+| `/rdv reject <id>` | Declines; the proposer aborts the proposal and releases all participant locks. |
+| `/rdv abort <id>` | Proposer cancels; sends `rdv-abort` to participants. |
+| `/rdv list` | Shows pending proposals and currently locked notes. |
+
+**Locking**: while a token is locked for a proposal it moves out of `noteStore` (so `/note pass`, `/note redeem`, etc. don't see it) into a separate `lockedNotes` map. Released back on abort / reject / timeout; consumed on commit (replaced by the gets token).
+
+**Atomicity caveat**: best-effort, same trust model as `/note pass`. If a commit message is lost in flight, the recipient who got it diverges from the one who didn't. True multi-party atomicity needs a consensus layer, which is out of scope.
+
+Example flow (Alice has USD 100, Bob has EUR 100):
+
+```
+Alice:  /rdv swap USD 30 EUR 20 Bob
+        → · proposed rendezvous a3f1c2…  expires in 60s
+Bob:    /rdv accept a3f1c2
+        → · accepted rendezvous a3f1c2 — locked EUR 20; awaiting commit…
+Alice:  → · committed rdv a3f1c2
+Bob:    → · rdv a3f1c2 settled
+```
+
+After settlement: Alice holds USD 70 + EUR 20, Bob holds EUR 80 + USD 30. Both wallets total identical-denominated value to before; only the assignment changed.
+
+**Sync on join**: when a new peer joins, every existing peer sends them a snapshot of `lemmaStore` and the room's currency registry (`knownCurrencies`) over each new data channel. Late joiners see currencies declared before they arrived; they do *not* see held notes, receipts, or in-flight rendezvous proposals — only room-knowledge stores are gossiped.
 
 ### `/id`
 Shows your ZFA-balanced peer identity and confirms the `rho_process_always_zfa` invariant holds.
@@ -477,6 +553,11 @@ wasm_capability_valid(hex: string): boolean
 | Room Process panel | ✓ `parallel(peer1, peer2, …)` ZFA balance shown in sidebar |
 | Capability token exchange | ✓ `/grant` mints and shares ZFA caps across peers |
 | Click-to-qucalc | ✓ click a peer → `/qucalc cap:peer:…` filled in input |
+| Promissory notes | ✓ `/note declare`/`grant`/`pass`/`redeem`/`split`/`merge` — bearer denomination as twist length |
+| Receipt coins | ✓ `cap:receipt-<currency>:…` issued back to redeemer; permanent, non-transferable |
+| Sidebar wallet | ✓ Currencies + Notes blocks render from per-room localStorage |
+| Room state sync | ✓ on data-channel open, exchange lemma store + currency registry; bearer state stays private |
+| N-party rendezvous | ✓ `/rdv swap`/`accept`/`reject`/`abort` with ZFA conservation over joint composition; token locking + 60s timeout |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 

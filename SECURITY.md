@@ -23,6 +23,11 @@ quantum-os is a peer-to-peer browser application. The security boundary is the *
 | Signaling server operator | The operator can observe room membership (who joined when) and disrupt signaling; they cannot read peer data |
 | STUN server IP disclosure | ICE candidate gathering uses `stun.l.google.com`; Google observes peer IPs. Use a self-hosted STUN/TURN server to avoid this. |
 | Physical link intercept | Signaling channel uses WSS (TLS) in production; a CA compromise could allow MITM of signaling (but not WebRTC data channels) |
+| Bearer-note exfiltration | Held `cap:note-<currency>:…` tokens are pure bearer; URL leakage, clipboard exfil, screen recording, or browser-extension scraping is full compromise |
+| Issuer impersonation across sessions | Anyone can `/note declare <currency>`. The room trusts that "Alice's USD" was declared by the peer named Alice; a compromised peer session can mint forgeable authorities |
+| Holder double-spend across rooms | A malicious holder can copy a note's bytes before `/note pass`/`/note redeem` and try to spend it in a different room. Same-room re-spend is rejected (token is gone from `noteStore`); cross-room re-spend is undetectable. Wave 3 (dynamic caps) is the planned mitigation. |
+| Rendezvous commit divergence | Multi-party commit is best-effort. If `rdv-commit` is lost in flight to some participants, they time out and keep their gives; participants who received it apply the swap, producing transient global conservation violation. True atomicity needs consensus. |
+| Proposer-issued asymmetric commits | The proposer signs nothing — each participant validates only its own row. A malicious proposer could in principle deliver mutually inconsistent commits to different participants; downstream inconsistencies surface later but are not prevented at commit time. |
 
 ---
 
@@ -78,6 +83,18 @@ All peer-to-peer data channel traffic is protected by the WebRTC security stack:
 - ICE candidates are gathered via STUN (`stun.l.google.com:19302` by default)
 
 The signaling server's SDP relay cannot be used to MITM the WebRTC connection — each peer's DTLS certificate fingerprint is included in the SDP and verified during the DTLS handshake.
+
+### Promissory notes, rendezvous, and bearer semantics
+
+The `/note` and `/rdv` features extend the bearer-capability model from peer identity to value-bearing instruments. All defenses scale the same way: possession of bytes is authority; no protocol enforces who *should* possess them.
+
+**Validation at every boundary.** Every inbound envelope that carries a token (`note-declare`, `note-pass`, `note-redeem`, `note-receipt`, `rdv-propose`, `rdv-accept`, `rdv-commit`, `sync-lemmas`, `sync-currencies`) re-parses the label (`parseNoteLabel`), checks the declared currency / denomination matches the embedded twist sequence, and runs `validateCapability` for ZFA balance before mutating local state. Malformed or unbalanced entries are silently dropped.
+
+**Conservation as a typing rule.** `conservationCheck(rows)` rejects rendezvous proposals whose `gives` and `gets` multisets do not match per `(currency, denomination)`. Split and merge on notes preserve `count_pos == count_neg` by construction — a denomination-N note that splits into (a, N−a) produces two ZFA-balanced halves whose lengths sum to the original. The same Lean invariant (`rho_process_always_zfa`) covers these operations.
+
+**Locking, not consensus.** During an in-flight rendezvous, an accepted `gives` token moves from `noteStore` to `lockedNotes`; `/note pass` / `/note redeem` cannot see it. On abort/reject/timeout the lock is released back to `noteStore`. On crash the lock is persisted, but the proposal context is in-memory only — on reload, orphaned locks return to the wallet (so value is never lost across a crash), which means the proposer side may see a stale acceptance that no longer corresponds to a held token. This is the same "best-effort" trust posture as `/note pass`.
+
+**Sync is gossip with re-validation.** When a new peer joins, every existing peer sends snapshots of `lemmaStore` and `knownCurrencies` over each new data channel. Each entry is re-validated on receipt with the same checks as live events — no entry is trusted because it came from a sync. Held notes, receipts, the issuer's `redemptionsHonored` log, and in-flight rendezvous proposals are *never* gossiped: they're private bearer state.
 
 ---
 

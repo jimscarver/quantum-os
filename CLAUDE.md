@@ -31,9 +31,11 @@ quantum-os/
 │   ├── browser/            Vite + TypeScript browser app (GitHub Pages)
 │   │   ├── index.html      Layout + CSS (sidebar, chat, share row)
 │   │   └── src/
-│   │       ├── app.ts      All UI logic, slash commands, lemma system, peer callbacks
+│   │       ├── app.ts      All UI logic, slash commands, lemma/note/rdv stores, peer callbacks
 │   │       ├── peer.ts     QOSPeer class — WebRTC + signaling WebSocket
 │   │       ├── zfa.ts      Browser-side ZFA helpers (validateCapability, tokenTwists, …)
+│   │       ├── notes.ts    Promissory note primitives (mint, split, merge, parseNoteLabel, denomination)
+│   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
 │   │   └── src/
@@ -101,6 +103,42 @@ Named logical claims shared across peers, persisted to `localStorage` per room U
 - `/pass name peer-name` — looks up `peerNames` to find peerId, sends `{kind: "lemma-pass", name, twists, cap}` directly via data channel, deletes from sender's `lemmaStore`; recipient auto-registers and sees confirmation
 - `findPeerByName(name)`: exact then prefix match on `peerNames` map (case-insensitive)
 
+### Promissory notes (`/note` — `notes.ts` + `app.ts`)
+
+Bearer instruments as ZFA capabilities. Format `cap:note-<currency>:<balanced hex>`; **denomination = `hex.length / 2`**. Conservation falls out of the existing balance invariant — split/merge preserve `count_pos == count_neg`.
+
+Three label kinds parsed by `parseNoteLabel`: `token` (issuer authority), `note` (bearer denomination), `receipt` (permanent redemption record). Lifecycle vocabulary borrowed from DarkWow's TokenMint → Mint → Transfer → Redeem, but implemented with no ZK, no Pedersen, no consensus.
+
+Stores (per-room `localStorage`):
+- `currencyTokens: Map<currency, token>` — currencies *I issue* (private bearer authority)
+- `knownCurrencies: Map<token, KnownCurrency>` — *public* registry of every declared currency in the room (populated from `note-declare` broadcasts and `sync-currencies` snapshots)
+- `noteStore: Map<token, NoteEntry>` — bearer notes I currently hold
+- `receiptStore: Map<token, ReceiptEntry>` — redemption receipts (permanent, non-transferable)
+- `redemptionsHonored: Map<token, RedemptionRecord>` — issuer-side accounting
+
+Wire kinds: `note-declare` (broadcast), `note-grant` (broadcast — currency + denomination only, the bearer token stays private), `note-pass` / `note-redeem` / `note-receipt` (direct).
+
+The sidebar's **Currencies** block shows `currencyTokens` entries with `✦` and others' declarations with the issuer's name; **Notes** shows `noteStore`. Click handlers prefill the input. Receipts and redemptions are chat-only.
+
+### Rendezvous (`/rdv` — `rendezvous.ts` + `app.ts`)
+
+N-party atomic synchronization. Each participant contributes a `gives` token and receives a `gets` token; `conservationCheck(rows)` enforces `multiset(gives) == multiset(gets)` over the joint composition.
+
+Protocol (5 direct-send wire kinds, never broadcast): `rdv-propose`, `rdv-accept`, `rdv-reject`, `rdv-commit`, `rdv-abort`. The proposer collects accepts (each accept carries the participant's committed gives token), and on all-accepts builds commit rows via the cyclic mapping `row[i].gets = next-row.gives` and dispatches `rdv-commit`. Each participant applies locally: `lockedNotes.delete(givesToken); noteStore.set(getsToken, …)`.
+
+Locking: accepted-but-not-yet-committed tokens move from `noteStore` to `lockedNotes` (so `/note pass` etc. don't see them). Released on abort/reject/timeout. On reload, locks are orphaned (proposal state is in-memory only) and auto-released back to `noteStore` in `loadNotes()` — so value is never lost across a crash.
+
+Atomicity is best-effort, same trust model as `/note pass`. 60s default timeout via `scheduleProposalTimeout` / `proposalTimedOut`.
+
+### Room state sync on data channel open
+
+When a new data channel opens (`onChannelOpen(peerId)` in `connect()`), the peer sends the new arrival:
+- `name` (existing) — display name
+- `sync-lemmas` — `Array<{name, twists, who, cap?}>` from `lemmaStore`
+- `sync-currencies` — `Array<KnownCurrency>` from `knownCurrencies`
+
+Inbound handlers validate every entry with the same label/ZFA-balance checks as the live `lemma` / `note-declare` flows. First-write-wins dedupe by lemma name; currency dedupe by token. Held notes / receipts / redemptions are *never* gossiped — they're private bearer state.
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -135,10 +173,12 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/lemma [name [tw]]` | Register/list named lemmas; omit twists to auto-allocate |
 | `/request <name>` | Broadcast that you need `@name`; holder sees a `/pass` prompt |
 | `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
+| `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
+| `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. `/request` broadcasts `{kind: "lemma-request"}` to all peers; `/pass` sends `{kind: "lemma-pass"}` directly to the target peer only.
+Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note and rendezvous subcommands send purpose-specific envelopes (`note-declare`, `note-pass`, `rdv-propose`, …) so a generic qlf rebroadcast would be redundant.
 
 ---
 
@@ -203,7 +243,9 @@ On failure: `gh run view <run-id> --log-failed`
 
 | File | What to touch it for |
 |------|----------------------|
-| `packages/browser/src/app.ts` | All slash commands, lemma system, UI logic, peer callbacks |
+| `packages/browser/src/app.ts` | All slash commands, lemma/note/rdv stores, UI logic, peer callbacks |
+| `packages/browser/src/notes.ts` | Note primitives (mintNote, splitNote, mergeNotes, parseNoteLabel, denomination) |
+| `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
 | `packages/browser/index.html` | Layout, CSS, sidebar structure |
