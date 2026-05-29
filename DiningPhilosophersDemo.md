@@ -368,6 +368,51 @@ ARISTOTLE TYPES:  /id
 
 ---
 
+## Step 7 — The rendezvous lens: atomic acquisition as a single event
+
+The Dijkstra ordering rule is the *classical* fix for circular wait. It works, and the demo above uses it. But it works by carefully sequencing two unilateral actions — request, then receive — and adding a global ordering rule on top to ensure the sequence cannot form a cycle. The reasoning is operational, not algebraic.
+
+The [rendezvous primitive](README.md#rdv-sub-direct) gives the same problem an algebraic frame:
+
+> Eating is not "acquire fork-L, then acquire fork-R, then put them down." Eating is **a single composite event** over three participants — the philosopher and the two fork-holders — that either commits as a whole or not at all.
+
+If acquisition of both forks is one atomic event, deadlock is impossible *by definition*: there is no partial state in which the philosopher holds one fork and waits for the other. The classical pre-condition for deadlock — incremental allocation — never appears.
+
+What this would look like at the command level, with an n-party atomic-acquisition rendezvous:
+
+```
+NIETZSCHE TYPES:  /rdv eat fork-e Nietzsche fork-a Aristotle
+                  · proposes 3-party rendezvous (eat-Nietzsche-08f3a1)
+                  · expires in 60s
+```
+
+Aristotle (who holds fork-a) sees:
+
+```
+Nietzsche  proposes rendezvous 08f3a1
+  · 3-party atomic acquisition: Nietzsche holds fork-e, you lend fork-a
+  · /rdv accept 08f3a1   or   /rdv reject 08f3a1
+```
+
+Nietzsche similarly accepts his own row. On all-accepts the proposer dispatches `rdv-commit` to every participant; each participant atomically transitions:
+- Nietzsche: gains fork-a, retains fork-e, gains an "eating" marker — and the inverse return happens automatically on the second composite event when he finishes.
+- Aristotle: marks fork-a as on-loan to Nietzsche; cannot lend it again until the second event releases it.
+
+**Five concurrent eat-events from all five philosophers cannot deadlock**, because each is a single atomic transition. The proposer's conservation check would reject a configuration that tried to lock the same fork into two simultaneous eat-events, the same way the existing `conservationCheck` rejects a `/rdv swap` that double-spends an input.
+
+### What the current `/rdv` MVP does and doesn't cover
+
+The shipped MVP (commit `ea17b38`) exposes **2-party value-balanced swap** via `/rdv swap`. The underlying protocol in [`rendezvous.ts`](packages/browser/src/rendezvous.ts) — propose / accept / commit / abort, with multiset conservation over `(currency, denomination)` pairs — generalizes to n-party rendezvous on the wire; only the user-facing commands and the conservation check's semantics need to grow:
+
+- Currently: `multiset(gives) == multiset(gets)` over `(currency, denomination)` pairs — fits *value swap*.
+- For dining philosophers: a *resource acquisition* event with bracketing release. Same propose/accept/commit machinery, different conservation predicate (acquisitions match a future release event).
+
+So the rendezvous-edition narrative above is **aspirational at the command layer** but **already half-built at the protocol layer**. The ordering-rule version below (the demo's main body) remains the working implementation.
+
+The conceptual win is what matters: deadlock-freedom by *algebraic atomicity* rather than by *protocol discipline*. The classical computer-science result is that the dining philosophers problem requires a protocol; the rendezvous reading is that the problem dissolves once eating is the right *kind* of event.
+
+---
+
 ## Full session view
 
 ```
@@ -426,6 +471,16 @@ Three properties together make the table safe:
 
 The classical dining philosophers problem requires a protocol to prevent deadlock. In QuantumOS, two of the three properties — unforgeability and detectability — come for free from the ZFA capability model. The ordering rule adds the third.
 
-**[Open a room and try it →](https://jimscarver.github.io/quantum-os/)**
+The [rendezvous lens (Step 7)](#step-7--the-rendezvous-lens-atomic-acquisition-as-a-single-event) replaces the third property with an even stronger one: if eating is a single composite event rather than a sequence of two unilateral acquisitions, deadlock is unreachable by definition. Ordering is no longer needed — atomicity does its work.
 
-See [SyllogismDemo.md](SyllogismDemo.md) for how the same lemma and `/qucalc` system works for logical deduction rather than resource management.
+---
+
+## Related
+
+- [SyllogismDemo.md](SyllogismDemo.md) — the same `/lemma` and `/qucalc` system used for logical deduction
+- [PromissoryNoteDemo.md](PromissoryNoteDemo.md) — bearer notes as ZFA twist sequences; `/note declare` → `/note grant` → `/note pass` → `/note redeem` with receipt
+- [README § `/rdv`](README.md#rdv-sub-direct) — n-party atomic rendezvous; current MVP exposes 2-party value swap
+- [`packages/browser/src/rendezvous.ts`](packages/browser/src/rendezvous.ts) — protocol module: `Proposal`, `Row`, `CommitRow`, `conservationCheck`, `cyclicSwap`
+- [SECURITY.md § no consensus](SECURITY.md#the-shared-root-no-consensus) — why best-effort atomicity is the right primary mitigation only in some places, and where a consensus mechanism would be needed instead
+
+**[Open a room and try it →](https://jimscarver.github.io/quantum-os/)**
