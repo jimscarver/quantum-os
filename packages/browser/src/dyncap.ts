@@ -78,7 +78,11 @@ export function fromHex(hex: string): Uint8Array {
 // ---------------------------------------------------------------------------
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const buf = await crypto.subtle.digest("SHA-256", data);
+  // The `data as BufferSource` cast quiets a TS strictness about
+  // `Uint8Array<ArrayBufferLike>` potentially being SharedArrayBuffer-backed.
+  // Our Uint8Arrays come from `new Uint8Array(n)`, `getRandomValues`, or
+  // `TextEncoder.encode` — all ArrayBuffer-backed in practice.
+  const buf = await crypto.subtle.digest("SHA-256", data as BufferSource);
   return new Uint8Array(buf);
 }
 
