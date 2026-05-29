@@ -36,6 +36,7 @@ quantum-os/
 │   │       ├── zfa.ts      Browser-side ZFA helpers (validateCapability, tokenTwists, …)
 │   │       ├── notes.ts    Promissory note primitives (mint, split, merge, parseNoteLabel, denomination)
 │   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
+│   │       ├── dyncap.ts   Hash-only dynamic capabilities (sign/verify envelopes; SHA-256 only)
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
 │   │   └── src/
@@ -130,6 +131,25 @@ Locking: accepted-but-not-yet-committed tokens move from `noteStore` to `lockedN
 
 Atomicity is best-effort, same trust model as `/note pass`. 60s default timeout via `scheduleProposalTimeout` / `proposalTimedOut`.
 
+### Dynamic capabilities (`/dyncap` — `dyncap.ts` + `app.ts`)
+
+Hash-only identity layer. Uses `crypto.subtle.digest("SHA-256", …)` — browser built-in, no external library, no keypairs, no signatures.
+
+State per peer (private, in `localStorage` under `qos-dyncap-state`, cross-room):
+- `seed: Uint8Array(32)` — generated at first launch, never broadcast
+- `anchor: string` — hex of `H(seed)`, 64 chars; the peer's permanent identity
+- `seq: number` — monotonically incremented per signed envelope
+
+Signed envelope grows: `dyncap: { anchor, seq, witness }` where `witness = H(seed || seq_le32 || room_id_bytes || payload_hash)`. `payload_hash` covers a canonical serialization (sorted keys, JSON, dyncap stripped) of the envelope.
+
+Receivers maintain `dyncapChains: Map<peerId, ChainEntry>` per room. TOFU-pin the first observed anchor. Subsequent envelopes must extend the chain — monotonic `seq`, unseen `witness`. Two valid envelopes at the same `seq` under the same anchor are a *fork*; the entry is flagged `contested` and the user is warned via `⚠` chat line.
+
+Outbound wired in: `signedBroadcast` and `signedSend` are drop-in wrappers replacing direct `qpeer.broadcast` / `qpeer.send` for envelope kinds we sign. A `signQueue: Promise` chain serializes outbound signings so `seq` ordering is preserved across concurrent broadcasts.
+
+Currently signed: `name`, `lemma`, `note-declare`, `sync-lemmas`, `sync-currencies`. `LemmaEntry` and `KnownCurrency` gained an optional `dyncap?: DyncapField` field so sync-forwarded entries carry the original author's chain step. Inner-entry verification against the original author's anchor (cross-peer lookup) is a future revision.
+
+Trust ceiling: TOFU at first contact + chain-tamper / replay / fork detection. Cannot mathematically verify the seed (hash-only). Race condition if a clone broadcasts before the real holder. Cross-room continuity not provided. See SECURITY.md for full threat enumeration.
+
 ### Room state sync on data channel open
 
 When a new data channel opens (`onChannelOpen(peerId)` in `connect()`), the peer sends the new arrival:
@@ -175,10 +195,11 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
+| `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note and rendezvous subcommands send purpose-specific envelopes (`note-declare`, `note-pass`, `rdv-propose`, …) so a generic qlf rebroadcast would be redundant.
+Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, and dyncap subcommands send purpose-specific envelopes (`note-declare`, `rdv-propose`, dyncap-signed `lemma` / `name` / `note-declare` / `sync-*`, …) so a generic qlf rebroadcast would be redundant.
 
 ---
 
@@ -246,6 +267,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/app.ts` | All slash commands, lemma/note/rdv stores, UI logic, peer callbacks |
 | `packages/browser/src/notes.ts` | Note primitives (mintNote, splitNote, mergeNotes, parseNoteLabel, denomination) |
 | `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
+| `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
 | `packages/browser/index.html` | Layout, CSS, sidebar structure |

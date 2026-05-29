@@ -244,29 +244,11 @@ See [SECURITY.md § Rendezvous commit divergence](SECURITY.md#what-the-system-do
 
 ---
 
-## Can we do multisig?
+## Multisig
 
-Yes — but only the full N-of-N case fits the current protocol cleanly. The more common K-of-N case (any K of N keyholders authorize) needs work that isn't shipped.
+A `/rdv` proposal commits only when every listed participant accepts, which is structurally an N-of-N multi-party signature. Combined with `/dyncap` (which gives each peer a TOFU-anchored chain identity), the rendezvous becomes a verifiable cosignature event: identity is bound at the dyncap layer, atomicity at the rendezvous layer.
 
-### N-of-N "witness ceremony" — fits today
-
-A rendezvous already requires *all N* listed participants to accept before commit. That is structurally a 3-of-3 (or N-of-N) multi-party signature: no one party can force the move; any one party can veto by rejecting or timing out.
-
-The conservation predicate requires each row to balance. Two ways to do that for a witness ceremony:
-
-1. **Trivial self-loop.** Each participant gives a single denomination-1 token of currency `witness` and gets a different denomination-1 token of currency `witness`. Multisets are `{(witness,1)×N}` on each side — balanced. The cyclic mapping shuffles witness tokens around the participants; functionally a no-op since the currency is uniform.
-2. **Value-bearing co-issuance.** Three co-issuers want to jointly mint a USD note of denomination N to a recipient. Each issuer holds a `cap:cosig-USD-<self>:hex(2)` (denomination 1 in their own per-issuer currency). The proposed rendezvous: each issuer gives 1 of their cosig-token and gets 1 of their cosig-token (a self-loop, each issuer's row balances). To get the recipient on the receiving end of a freshly minted USD N requires extending the protocol — the recipient's row has no `gives`. **That's the gap.**
-
-So: a pure N-of-N **witness ceremony** (everyone signs, no value flows) can be done today by making each participant's row a self-loop in some shared `witness` currency. The fact that the proposal succeeded *is* the multi-party assertion.
-
-### K-of-N threshold — not shipped
-
-K-of-N multisig (e.g., any 2 of 3 cosigners can mint USD) needs either:
-
-- **A threshold conservation predicate** that accepts the swap if any K rows are valid and present, treating absent rows as nominal. This is a small change to `conservationCheck` plus a way for the proposer to indicate the threshold.
-- **Real signatures**, so a proposal can carry K standalone signatures over the proposal hash without requiring K live data-channel participants. This is part of the planned wave-3 dynamic-capability work — once a peer's identity is a continuously-proven trajectory, threshold-signature schemes become natural.
-
-Today's protocol is **all-or-nothing on the participant set**, which is fine for atomic swap and full multi-party agreement but not for thresholded authorization. The right next step is the K-of-N conservation variant; it does not require dynamic caps, just a small protocol extension. The signature-based version arrives with wave 3.
+See [**MultisigDemo.md**](MultisigDemo.md) for a 2-of-2 walkthrough using `/dyncap` + `/rdv` to atomically exchange attestation tokens. K-of-N threshold multisig — any K of N keyholders authorize — needs either a threshold conservation predicate (a small protocol extension) or signature-strength identity beyond what hash-only dyncap provides.
 
 ---
 
@@ -286,6 +268,7 @@ Today's protocol is **all-or-nothing on the participant set**, which is fine for
 - [`packages/browser/src/app.ts`](packages/browser/src/app.ts) — dispatcher case `rdv`, inbound `rdv-*` handlers, lock/unlock helpers
 - [PromissoryNoteDemo.md](PromissoryNoteDemo.md) — bearer notes as ZFA twist sequences; `/note declare`/`grant`/`pass`/`redeem`
 - [DiningPhilosophersDemo.md § Step 7](DiningPhilosophersDemo.md#step-7--the-rendezvous-lens-atomic-acquisition-as-a-single-event) — atomic resource acquisition as a single composite event (aspirational n-party variant)
+- [MultisigDemo.md](MultisigDemo.md) — 2-of-2 cosignature using `/dyncap` + `/rdv`
 - [SECURITY.md § Rendezvous and no consensus](SECURITY.md#the-shared-root-no-consensus) — what best-effort atomicity buys and where consensus is needed
 
 **[Open a room and try it →](https://jimscarver.github.io/quantum-os/)**

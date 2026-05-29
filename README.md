@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Rendezvous Demo →](RendezvousDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Rendezvous Demo →](RendezvousDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
 
 ### How to create reality together
 
@@ -49,6 +49,7 @@ QLF slash commands:
   /pass <n> <peer> — transfer @n directly to a named peer
   /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)
   /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)
+  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -315,7 +316,24 @@ rdv-abort    proposer    → each participant   (releases locks)
 
 **Atomicity caveat**: best-effort, same trust model as `/note pass`. If a commit message is lost in flight, the recipient who got it diverges from the one who didn't. True multi-party atomicity needs a consensus layer, which is out of scope.
 
-See [RendezvousDemo.md](RendezvousDemo.md) for a full Alice/Bob walkthrough — proposal lifecycle, locking, failure modes, and a discussion of how N-of-N multisig fits the current protocol while K-of-N threshold multisig needs either a threshold conservation predicate or real signatures (wave-3 dynamic capabilities).
+See [RendezvousDemo.md](RendezvousDemo.md) for a full Alice/Bob walkthrough — proposal lifecycle, locking, failure modes. The N-of-N multisig discussion lives in its own demo: [MultisigDemo.md](MultisigDemo.md) shows 2-of-2 cosignature using `/dyncap` + `/rdv` (atomic exchange of dyncap-signed attestation tokens). K-of-N threshold multisig needs either a threshold conservation predicate or signature-strength identity beyond what hash-only dyncap provides.
+
+### `/dyncap [sub]`
+
+Hash-only dynamic capabilities. Each peer keeps a private 32-byte `seed` (per-device, persisted to `localStorage` outside the per-room namespace) and publishes `anchor = H(seed)` at name-handshake. Each signable envelope gains a `dyncap` field carrying `{anchor, seq, witness}`, where `witness = H(seed || seq_le32 || room_id_bytes || payload_hash)`.
+
+Uses only `crypto.subtle.digest("SHA-256", …)` — browser built-in, no external library, no keypairs, no signatures.
+
+| Subcommand | Effect |
+|---|---|
+| `/dyncap status` (or just `/dyncap`) | Show your anchor, current seq, and number of tracked peer chains. |
+| `/dyncap peers` | List tracked peers with their TOFU-pinned anchors and last-seen seq; flags `⚠ CONTESTED` if a fork was observed. |
+
+Outbound signing is wired into the highest-value envelopes: `name` (TOFU bootstrap on each new data channel), `lemma`, `note-declare`, and the `sync-lemmas` / `sync-currencies` envelopes (whose entries forward their original signer's dyncap).
+
+Trust ceiling: this is **TOFU plus chain-tamper / replay / fork detection**, not signature-strength identity. Receivers cannot mathematically verify a witness was correctly derived from `seed` — they treat it as opaque-unique per `(anchor, seq)`. Two valid envelopes at the same `seq` under the same anchor are a fork: the peer's identity is flagged contested and the user is warned. The deliberate trade is that the QLF algebra remains the security model; identity is extended via continuity rather than borrowing a separate asymmetric primitive.
+
+See [MultisigDemo.md](MultisigDemo.md) for a worked example combining `/dyncap` with `/rdv`.
 
 Example flow (Alice has USD 100, Bob has EUR 100):
 
@@ -562,6 +580,8 @@ wasm_capability_valid(hex: string): boolean
 | Sidebar wallet | ✓ Currencies + Notes blocks render from per-room localStorage |
 | Room state sync | ✓ on data-channel open, exchange lemma store + currency registry; bearer state stays private |
 | N-party rendezvous | ✓ `/rdv swap`/`accept`/`reject`/`abort` with ZFA conservation over joint composition; token locking + 60s timeout |
+| Dynamic capabilities | ✓ `/dyncap` — hash-only chain identity; TOFU + fork-detection on `name`, `lemma`, `note-declare`; SHA-256 from `crypto.subtle` only |
+| Multisig (2-of-2) | ✓ `/dyncap`-anchored identity + `/rdv` atomic agreement; see MultisigDemo.md |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 

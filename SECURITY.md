@@ -13,6 +13,7 @@ quantum-os is a peer-to-peer browser application. The security boundary is the *
 | SDP/ICE relay forgery | Signaling server binds each `peerId` to its WebSocket; relayed `from` fields are validated server-side |
 | Eavesdropping on peer data | WebRTC DTLS + SRTP encrypt all data channel traffic end-to-end; the signaling server never sees payloads |
 | Capability decoherence | `decoherence_impossibility` (machine-verified in Lean 4): `parallel(peer1, peer2, …)` stays ZFA-balanced by construction |
+| Envelope authorship after TOFU | `/dyncap` ties each signable envelope to its sender's `H(seed)` anchor; once TOFU-pinned, mismatches and forks are detected and surfaced. Covers `name`, `lemma`, `note-declare`, and the outer `sync-*` envelopes. |
 
 ### What the system does NOT defend against
 
@@ -28,8 +29,9 @@ quantum-os is a peer-to-peer browser application. The security boundary is the *
 | Holder double-spend across rooms | A malicious holder can copy a note's bytes before `/note pass`/`/note redeem` and try to spend it in a different room. Same-room re-spend is rejected (token is gone from `noteStore`); cross-room re-spend is undetectable. Wave 3 (dynamic caps) is the planned mitigation. |
 | Rendezvous commit divergence | Multi-party commit is best-effort. If `rdv-commit` is lost in flight to some participants, they time out and keep their gives; participants who received it apply the swap, producing transient global conservation violation. True atomicity needs consensus. |
 | Proposer-issued asymmetric commits | The proposer signs nothing — each participant validates only its own row. A malicious proposer could in principle deliver mutually inconsistent commits to different participants; downstream inconsistencies surface later but are not prevented at commit time. |
-| Sync-envelope authorship forgery | `sync-lemmas` and `sync-currencies` carry per-entry `who` / `issuer` fields. The receiver validates label and ZFA balance but cannot verify the claim. A malicious peer can forward a sync envelope with entries that claim Alice authored a lemma or declared a currency she never touched; receivers will accept these as fact. The live `lemma` and `note-declare` paths are not affected because they derive authorship from the wire-level sender's peer ID. |
-| Sync flooding | A malicious peer can stuff a `sync-lemmas` / `sync-currencies` envelope with arbitrarily many balanced entries (each is just a fresh random ZFA-balanced token bearing any claimed label). All pass validation; all land in the receiver's stores. No per-peer or per-envelope cap is enforced. |
+| Sync-envelope authorship forgery (partially mitigated) | `sync-lemmas` and `sync-currencies` forward per-entry `who` / `issuer` claims and the original signer's `dyncap`. The receiver validates label, ZFA balance, and the *outer* sync envelope's dyncap against the forwarder's TOFU-pinned anchor. *Inner-entry* dyncap verification against the original author's anchor is not yet wired (cross-peer anchor lookup table is a planned follow-up), so a malicious forwarder can still substitute entries authored by peers the receiver has not directly handshaked with. Live `lemma` and `note-declare` paths are fully covered by dyncap once the sender's anchor is TOFU-pinned. |
+| Sync flooding | A malicious peer can stuff a `sync-lemmas` / `sync-currencies` envelope with arbitrarily many balanced entries (each is just a fresh random ZFA-balanced token bearing any claimed label). All pass validation; all land in the receiver's stores. No per-peer or per-envelope cap is enforced. Dyncap does not address this — it scopes authorship, not volume. |
+| Dyncap clone race | An attacker who exfiltrates a peer's seed and broadcasts a `name` envelope *before* the legitimate peer in a fresh room wins the TOFU pin. The legitimate peer's subsequent envelopes will then be rejected as anchor-mismatched in that room. Hash-only identity cannot close this; signature-strength identity could. |
 
 ---
 
@@ -100,6 +102,18 @@ The `/note` and `/rdv` features extend the bearer-capability model from peer ide
 
 Held notes, receipts, the issuer's `redemptionsHonored` log, and in-flight rendezvous proposals are *never* gossiped — they're private bearer state.
 
+### Dynamic capabilities (`/dyncap`) — hash-only identity layer
+
+A peer's identity is a 32-byte secret `seed` (per-device, persisted to `localStorage` outside the per-room namespace) plus a derived public anchor `H(seed)`. Signable envelopes (`name`, `lemma`, `note-declare`, `sync-lemmas`, `sync-currencies`) carry a `dyncap: { anchor, seq, witness }` field, where `witness = H(seed || seq_le32 || room_id_bytes || payload_hash)`. The `room_id_bytes` binding keeps the chain from being replayed across rooms.
+
+Receivers maintain per-peer chain state keyed by peer ID. The first envelope's anchor is TOFU-pinned. Subsequent envelopes must use the same anchor, must carry a strictly higher `seq` than already seen (per `(anchor, seq)`), and must produce a `witness` distinct from any previously accepted at the same seq. Two valid envelopes at the same `seq` under the same anchor — a *fork* — flag the peer's chain `contested` and surface a `⚠` chat warning.
+
+**What dyncap closes.** Live `lemma` and `note-declare` envelopes are now bound to their sender's TOFU-anchored chain; a malicious peer cannot forge an envelope claiming to come from a different peer's anchor (mismatch is detected on receipt). The sync envelope itself is also signed by the forwarder.
+
+**What dyncap does not close.** The MVP does not actively re-verify forwarded sync entries against the *original* author's anchor — a malicious forwarder can substitute entries authored by peers the receiver hasn't directly handshaked with (see threat row above). The fork-detection guarantee holds only against equivocation that both halves of the fork eventually reach the same receiver; clones broadcasting to disjoint subsets of the room remain invisible to each other until those subsets compare notes. And the initial TOFU is racy: a clone with a stolen seed who broadcasts first in a fresh room wins the anchor.
+
+**Why hash-only.** The QLF philosophy is that the algebra is the security; importing an asymmetric primitive (Ed25519 etc.) would put a fundamentally different trust mechanism alongside ZFA balance. Hash-only dyncap stays within the same algebraic universe at the cost of TOFU semantics and the clone-race vulnerability. Use [MultisigDemo.md](MultisigDemo.md) as a guide to what dyncap + rendezvous together can attest to in practice.
+
 ### The shared root: no consensus
 
 Several of the limits above are facets of the same architectural choice. quantum-os is a peer-to-peer per-room system **with no consensus mechanism**, so it cannot provide global consistency over the room's history. Specifically:
@@ -128,6 +142,8 @@ In the meantime, the bearer-and-room-scoped trust model should be read literally
 | 3 | Peer IDs logged in full on the signaling server | Low | Fixed — logs show last 8 chars only (`…abcd1234`) |
 | 4 | Hardcoded Google STUN server leaks peer IPs to Google | Low | Fixed — STUN URL editable in sidebar; empty value disables STUN |
 | 5 | Lenient hex parsing in fallback `validateCapability()` | Low | Fixed — rejects tokens with any char outside `[0-7]` |
+| 6 | Sync inner-entry dyncap not re-verified against original author's anchor | Medium | Open — `sync-lemmas` / `sync-currencies` carry forwarded entries with the original signer's dyncap, but the receiver only verifies the outer envelope. A malicious forwarder can substitute entries authored by peers the receiver has not directly handshaked with. Fix requires a cross-peer anchor lookup table. |
+| 7 | Dyncap seed clone wins TOFU race | High (if seed leaks) | Mitigated only by seed secrecy. Fundamental for hash-only identity; full mitigation requires signature-strength identity (out of scope for the QLF philosophy). |
 
 ### Already fixed
 
