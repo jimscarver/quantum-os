@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Rendezvous Demo →](RendezvousDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
 
 ### How to create reality together
 
@@ -316,7 +316,7 @@ rdv-abort    proposer    → each participant   (releases locks)
 
 **Atomicity caveat**: best-effort, same trust model as `/note pass`. If a commit message is lost in flight, the recipient who got it diverges from the one who didn't. True multi-party atomicity needs a consensus layer, which is out of scope.
 
-See [RendezvousDemo.md](RendezvousDemo.md) for a full Alice/Bob walkthrough — proposal lifecycle, locking, failure modes. The N-of-N multisig discussion lives in its own demo: [MultisigDemo.md](MultisigDemo.md) shows 2-of-2 cosignature using `/dyncap` + `/rdv` (atomic exchange of dyncap-signed attestation tokens). K-of-N threshold multisig needs either a threshold conservation predicate or signature-strength identity beyond what hash-only dyncap provides.
+See [AtomicSwapDemo.md](AtomicSwapDemo.md) for a full Alice/Bob walkthrough — proposal lifecycle, locking, failure modes. The N-of-N multisig discussion lives in its own demo: [MultisigDemo.md](MultisigDemo.md) shows 2-of-2 cosignature using `/dyncap` + `/rdv` (atomic exchange of dyncap-signed attestation tokens). K-of-N threshold multisig needs either a threshold conservation predicate or signature-strength identity beyond what hash-only dyncap provides.
 
 ### `/dyncap [sub]`
 

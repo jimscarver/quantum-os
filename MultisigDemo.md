@@ -20,7 +20,7 @@ witness: H(seed || seq || room_id || H(envelope))  — attached to each signed e
 
 Receivers TOFU-pin the first observed `(peerId, anchor)` pair and reject subsequent envelopes whose anchor doesn't match. Two valid envelopes at the same `seq` under the same anchor are a *fork*: clone evidence.
 
-**Rendezvous** ([`packages/browser/src/rendezvous.ts`](packages/browser/src/rendezvous.ts)) gives n-party atomic agreement: a proposal commits only after every participant has explicitly accepted, with multiset conservation enforced over the joint composition. See [RendezvousDemo.md](RendezvousDemo.md) for the per-step protocol detail.
+**Rendezvous** ([`packages/browser/src/rendezvous.ts`](packages/browser/src/rendezvous.ts)) gives n-party atomic agreement: a proposal commits only after every participant has explicitly accepted, with multiset conservation enforced over the joint composition. See [AtomicSwapDemo.md](AtomicSwapDemo.md) for the per-step protocol detail.
 
 **The combination**: dyncap identifies *who* participated; rendezvous gives *atomicity*. Together they form a multisig that no party alone can forge after the fact and that fails closed if any party doesn't sign.
 
@@ -265,7 +265,7 @@ The trust ceiling is the dyncap ceiling: TOFU at first contact, race conditions 
 - [README § `/dyncap`](README.md#dyncap-sub) — command reference
 - [`packages/browser/src/dyncap.ts`](packages/browser/src/dyncap.ts) — protocol module: `signEnvelope`, `verifyEnvelope`, `newDynCapState`, anchor / witness derivation
 - [`packages/browser/src/app.ts`](packages/browser/src/app.ts) — `signedBroadcast` / `signedSend` wrappers, `verifyDyncapIfPresent` helper, `/dyncap` dispatcher case
-- [RendezvousDemo.md](RendezvousDemo.md) — atomic swap protocol walkthrough this builds on
+- [AtomicSwapDemo.md](AtomicSwapDemo.md) — atomic swap protocol walkthrough this builds on
 - [PromissoryNoteDemo.md](PromissoryNoteDemo.md) — note declaration / grant / pass / redeem primitives
 - [SECURITY.md § Dynamic capabilities](SECURITY.md#dynamic-capabilities-dyncap--hash-only-identity-layer) — what dyncap closes and where it doesn't go
 
