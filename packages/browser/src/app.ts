@@ -1,6 +1,9 @@
 import { loadZfa, generateCapability, validateCapability,
          spectralGap, achievesZfa } from "./zfa.js";
 import { QOSPeer } from "./peer.js";
+import { parseNoteLabel, denomination as noteDenomination,
+         mintCurrencyToken, mintNote, mintReceipt,
+         splitNote, mergeNotes } from "./notes.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -61,6 +64,14 @@ const sessionLog: LogEntry[] = [];
 interface LemmaEntry { twists: string; who: string; cap?: string }
 const lemmaStore = new Map<string, LemmaEntry>();
 
+interface NoteEntry { token: string; currency: string; denomination: number; receivedFrom?: string }
+interface ReceiptEntry { token: string; currency: string; denomination: number; issuer: string }
+interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
+const currencyTokens = new Map<string, string>();          // currency → cap:token-<currency>:…
+const noteStore = new Map<string, NoteEntry>();             // token → entry
+const receiptStore = new Map<string, ReceiptEntry>();       // token → entry
+const redemptionsHonored = new Map<string, RedemptionRecord>(); // redeemed-token → record
+
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
 }
@@ -89,6 +100,30 @@ function loadLemmas(): void {
     for (const [name, entry] of Object.entries(data)) lemmaStore.set(name, entry);
     renderLemmas();
   } catch { /* ignore corrupt data */ }
+}
+
+function saveNotes(): void {
+  const room = getRoomId();
+  localStorage.setItem(`qos-currencies-${room}`, JSON.stringify(Object.fromEntries(currencyTokens)));
+  localStorage.setItem(`qos-notes-${room}`,      JSON.stringify(Object.fromEntries(noteStore)));
+  localStorage.setItem(`qos-receipts-${room}`,   JSON.stringify(Object.fromEntries(receiptStore)));
+  localStorage.setItem(`qos-redemptions-${room}`,JSON.stringify(Object.fromEntries(redemptionsHonored)));
+}
+
+function loadNotes(): void {
+  const room = getRoomId();
+  const tryLoad = <T>(key: string, set: (k: string, v: T) => void) => {
+    const raw = localStorage.getItem(key);
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw) as Record<string, T>;
+      for (const [k, v] of Object.entries(data)) set(k, v);
+    } catch { /* ignore */ }
+  };
+  tryLoad<string>     (`qos-currencies-${room}`,  (k, v) => currencyTokens.set(k, v));
+  tryLoad<NoteEntry>  (`qos-notes-${room}`,       (k, v) => noteStore.set(k, v));
+  tryLoad<ReceiptEntry>(`qos-receipts-${room}`,   (k, v) => receiptStore.set(k, v));
+  tryLoad<RedemptionRecord>(`qos-redemptions-${room}`, (k, v) => redemptionsHonored.set(k, v));
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +426,7 @@ function handleCommand(raw: string): string[] {
       sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
       sys("  /request <n>     — request @n from whoever holds it");
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
+      sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -711,6 +747,252 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "note": {
+      const nParts = arg.trim().split(/\s+/);
+      const sub = (nParts[0] || "").toLowerCase();
+      const a1 = nParts[1] ?? "";
+      const a2 = nParts[2] ?? "";
+      const aRest = nParts.slice(2).join(" ").trim();
+
+      // Helper: pick a held note of `currency` with denomination ≥ N (prefer exact match).
+      const pickNote = (currency: string, N: number): NoteEntry | null => {
+        let exact: NoteEntry | null = null;
+        let larger: NoteEntry | null = null;
+        for (const n of noteStore.values()) {
+          if (n.currency !== currency) continue;
+          if (n.denomination === N) { exact = n; break; }
+          if (n.denomination > N && (!larger || n.denomination < larger.denomination)) larger = n;
+        }
+        return exact ?? larger;
+      };
+
+      // Helper: detach a denomination-N piece from a held note. Returns the
+      // outgoing token and (if split) the change note already re-registered.
+      // Always undoable by re-adding `chosen` and removing `change`.
+      const detach = (chosen: NoteEntry, N: number): { outgoing: string; change: NoteEntry | null } | null => {
+        if (chosen.denomination === N) {
+          noteStore.delete(chosen.token);
+          return { outgoing: chosen.token, change: null };
+        }
+        const split = splitNote(chosen.token, N);
+        if (!split) return null;
+        const [paid, changeTok] = split;
+        const change: NoteEntry = { token: changeTok, currency: chosen.currency, denomination: chosen.denomination - N };
+        noteStore.delete(chosen.token);
+        noteStore.set(changeTok, change);
+        return { outgoing: paid, change };
+      };
+
+      const undoDetach = (chosen: NoteEntry, change: NoteEntry | null) => {
+        if (change) noteStore.delete(change.token);
+        noteStore.set(chosen.token, chosen);
+      };
+
+      switch (sub) {
+        case "":
+        case "list": {
+          if (currencyTokens.size === 0 && noteStore.size === 0 && receiptStore.size === 0) {
+            sys("no notes, currencies, or receipts in this room");
+            sys("  /note declare <currency>            — issue a new currency");
+            sys("  /note grant <currency> <N>          — mint a denomination-N note");
+            sys("  /note pass <currency> <N> <peer>    — transfer to a peer (auto-splits)");
+            sys("  /note redeem <currency> <N> <peer>  — redeem with issuer, get receipt");
+            sys("  /note split <token> <a>             — split into (a, N-a)");
+            sys("  /note merge <token1> <token2>       — combine two notes");
+            sys("  /note balance [currency]            — sum denominations");
+            break;
+          }
+          if (currencyTokens.size > 0) {
+            sys(`currency authorities (${currencyTokens.size}):`);
+            for (const [cur, tok] of currencyTokens) sys(`  ${cur}  ${tok}`);
+          }
+          if (noteStore.size > 0) {
+            sys(`notes you hold (${noteStore.size}):`);
+            for (const n of noteStore.values()) {
+              const from = n.receivedFrom ? `  (from ${n.receivedFrom})` : "";
+              sys(`  ${n.currency} ${n.denomination}${from}`);
+              sys(`    ${n.token}`);
+            }
+          }
+          if (receiptStore.size > 0) {
+            sys(`receipts (${receiptStore.size}):`);
+            for (const r of receiptStore.values()) {
+              sys(`  ${r.currency} ${r.denomination}  honored by ${r.issuer}`);
+              sys(`    ${r.token}`);
+            }
+          }
+          if (redemptionsHonored.size > 0) {
+            sys(`redemptions you honored (${redemptionsHonored.size}):`);
+            for (const r of redemptionsHonored.values()) {
+              sys(`  ${r.currency} ${r.denomination}  for ${r.redeemer}`);
+            }
+          }
+          break;
+        }
+
+        case "balance": {
+          const want = a1;
+          const sums = new Map<string, number>();
+          for (const n of noteStore.values()) {
+            if (want && n.currency !== want) continue;
+            sums.set(n.currency, (sums.get(n.currency) ?? 0) + n.denomination);
+          }
+          if (sums.size === 0) { sys(want ? `no ${want} notes` : "no notes"); break; }
+          sys("balances:");
+          for (const [cur, sum] of sums) sys(`  ${cur}: ${sum}`);
+          break;
+        }
+
+        case "declare": {
+          const currency = a1;
+          if (!currency || !/^[A-Za-z0-9_]+$/.test(currency)) {
+            sys("usage: /note declare <currency>   (currency: letters, digits, _)");
+            break;
+          }
+          if (currencyTokens.has(currency)) {
+            sys(`you already issue ${currency}: ${currencyTokens.get(currency)}`);
+            break;
+          }
+          const token = mintCurrencyToken(currency);
+          currencyTokens.set(currency, token);
+          saveNotes();
+          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+          sys(`declared currency: ${currency}`);
+          sys(`  authority: ${token}`);
+          sys(`  you can now /note grant ${currency} <N>`);
+          if (qpeer) qpeer.broadcast({ kind: "note-declare", currency, token, who });
+          break;
+        }
+
+        case "grant": {
+          const currency = a1;
+          const N = parseInt(a2, 10);
+          if (!currency || isNaN(N) || N < 1) {
+            sys("usage: /note grant <currency> <N>");
+            break;
+          }
+          if (!currencyTokens.has(currency)) {
+            sys(`you don't hold cap:token-${currency}: declare it first with /note declare ${currency}`);
+            break;
+          }
+          const note = mintNote(currency, N);
+          noteStore.set(note, { token: note, currency, denomination: N });
+          saveNotes();
+          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+          sys(`minted: ${currency} ${N}`);
+          sys(`  ${note}`);
+          if (qpeer) qpeer.broadcast({ kind: "note-grant", currency, denomination: N, who });
+          break;
+        }
+
+        case "pass": {
+          const currency = a1;
+          const N = parseInt(a2, 10);
+          const targetName = nParts.slice(3).join(" ").trim();
+          if (!currency || isNaN(N) || N < 1 || !targetName) {
+            sys("usage: /note pass <currency> <N> <peer-name>");
+            break;
+          }
+          if (!qpeer) { sys("not connected"); break; }
+          const chosen = pickNote(currency, N);
+          if (!chosen) { sys(`no ${currency} note of denomination ≥ ${N}`); break; }
+          const targetId = findPeerByName(targetName);
+          if (!targetId) { sys(`unknown peer: '${targetName}'`); break; }
+          const detached = detach(chosen, N);
+          if (!detached) { sys("split failed"); break; }
+          const sent = qpeer.send(targetId, { kind: "note-pass", currency, denomination: N, token: detached.outgoing });
+          if (!sent) {
+            undoDetach(chosen, detached.change);
+            sys(`cannot reach ${targetName} — data channel not open`);
+            break;
+          }
+          saveNotes();
+          sys(`· ${currency} ${N} → ${targetName}`);
+          sys(`  ${detached.outgoing}`);
+          if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+          break;
+        }
+
+        case "redeem": {
+          const currency = a1;
+          const N = parseInt(a2, 10);
+          const issuerName = nParts.slice(3).join(" ").trim();
+          if (!currency || isNaN(N) || N < 1 || !issuerName) {
+            sys("usage: /note redeem <currency> <N> <issuer-peer>");
+            break;
+          }
+          if (!qpeer) { sys("not connected"); break; }
+          const chosen = pickNote(currency, N);
+          if (!chosen) { sys(`no ${currency} note of denomination ≥ ${N} to redeem`); break; }
+          const issuerId = findPeerByName(issuerName);
+          if (!issuerId) { sys(`unknown peer: '${issuerName}'`); break; }
+          const detached = detach(chosen, N);
+          if (!detached) { sys("split failed"); break; }
+          const sent = qpeer.send(issuerId, { kind: "note-redeem", currency, denomination: N, token: detached.outgoing });
+          if (!sent) {
+            undoDetach(chosen, detached.change);
+            sys(`cannot reach ${issuerName} — data channel not open`);
+            break;
+          }
+          saveNotes();
+          sys(`· redeemed ${currency} ${N} → ${issuerName}`);
+          sys(`  awaiting receipt…`);
+          if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+          break;
+        }
+
+        case "split": {
+          const tokenArg = a1;
+          const a = parseInt(a2, 10);
+          if (!tokenArg || isNaN(a)) { sys("usage: /note split <token> <a>"); break; }
+          const held = noteStore.get(tokenArg);
+          if (!held) { sys(`you don't hold that note`); break; }
+          const split = splitNote(tokenArg, a);
+          if (!split) { sys(`invalid split: a must be 1..${held.denomination - 1}`); break; }
+          const [t1, t2] = split;
+          noteStore.delete(tokenArg);
+          noteStore.set(t1, { token: t1, currency: held.currency, denomination: a });
+          noteStore.set(t2, { token: t2, currency: held.currency, denomination: held.denomination - a });
+          saveNotes();
+          sys(`split ${held.currency} ${held.denomination}:`);
+          sys(`  ${a}  ${t1}`);
+          sys(`  ${held.denomination - a}  ${t2}`);
+          break;
+        }
+
+        case "merge": {
+          const t1Arg = a1;
+          const t2Arg = aRest;
+          if (!t1Arg || !t2Arg) { sys("usage: /note merge <token1> <token2>"); break; }
+          const h1 = noteStore.get(t1Arg);
+          const h2 = noteStore.get(t2Arg);
+          if (!h1 || !h2) { sys("both tokens must be notes you hold"); break; }
+          if (h1.currency !== h2.currency) { sys(`currency mismatch: ${h1.currency} vs ${h2.currency}`); break; }
+          const merged = mergeNotes(t1Arg, t2Arg);
+          if (!merged) { sys("merge failed"); break; }
+          noteStore.delete(t1Arg);
+          noteStore.delete(t2Arg);
+          noteStore.set(merged, { token: merged, currency: h1.currency, denomination: h1.denomination + h2.denomination });
+          saveNotes();
+          sys(`merged ${h1.currency}: ${h1.denomination} + ${h2.denomination} = ${h1.denomination + h2.denomination}`);
+          sys(`  ${merged}`);
+          break;
+        }
+
+        default:
+          sys(`unknown subcommand: /note ${sub}`);
+          sys("  /note [list]                        — show held notes / currencies / receipts");
+          sys("  /note balance [currency]            — sum denominations");
+          sys("  /note declare <currency>            — issue a new currency");
+          sys("  /note grant <currency> <N>          — mint a denomination-N note");
+          sys("  /note pass <currency> <N> <peer>    — transfer (auto-splits)");
+          sys("  /note redeem <currency> <N> <peer>  — redeem with issuer, get receipt");
+          sys("  /note split <token> <a>             — split into (a, N-a)");
+          sys("  /note merge <token1> <token2>       — combine two notes");
+      }
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -821,6 +1103,93 @@ function connect(): void {
           }
           return;
         }
+        if (d.kind === "note-declare") {
+          const currency = String(d.currency ?? "");
+          const token    = String(d.token ?? "");
+          const who      = peerLabel(from);
+          addMessage(from, `/note declare ${currency}`, "peer", who);
+          addMessage("", `  · ${who} issues ${currency}  authority: ${token}`, "system");
+          return;
+        }
+        if (d.kind === "note-grant") {
+          const currency = String(d.currency ?? "");
+          const N        = Number(d.denomination ?? 0);
+          const who      = peerLabel(from);
+          addMessage(from, `/note grant ${currency} ${N}`, "peer", who);
+          addMessage("", `  · ${who} minted ${currency} ${N}`, "system");
+          return;
+        }
+        if (d.kind === "note-pass") {
+          const currency = String(d.currency ?? "");
+          const N        = Number(d.denomination ?? 0);
+          const token    = String(d.token ?? "");
+          const who      = peerLabel(from);
+          // Validate format and balance before accepting.
+          const parsed = parseNoteLabel(token);
+          const valid  = parsed?.kind === "note" && parsed.currency === currency
+                       && noteDenomination(token) === N && validateCapability(token);
+          if (!valid) {
+            addMessage(from, `passes ${currency} ${N}`, "peer", who);
+            addMessage("", `  · refused: malformed or unbalanced note token`, "system");
+            return;
+          }
+          noteStore.set(token, { token, currency, denomination: N, receivedFrom: who });
+          saveNotes();
+          addMessage(from, `passes ${currency} ${N}`, "peer", who);
+          addMessage("", `  · received ${currency} ${N} from ${who}`, "system");
+          addMessage("", `    ${token}`, "system");
+          return;
+        }
+        if (d.kind === "note-redeem") {
+          const currency = String(d.currency ?? "");
+          const N        = Number(d.denomination ?? 0);
+          const token    = String(d.token ?? "");
+          const who      = peerLabel(from);
+          addMessage(from, `redeems ${currency} ${N}`, "peer", who);
+          if (!currencyTokens.has(currency)) {
+            addMessage("", `  · refused: you don't issue ${currency}`, "system");
+            return;
+          }
+          const parsed = parseNoteLabel(token);
+          const valid  = parsed?.kind === "note" && parsed.currency === currency
+                       && noteDenomination(token) === N && validateCapability(token);
+          if (!valid) {
+            addMessage("", `  · refused: malformed or unbalanced note token`, "system");
+            return;
+          }
+          const receipt = mintReceipt(currency, N);
+          const myLabel = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+          redemptionsHonored.set(token, { token, currency, denomination: N, redeemer: who, at: Date.now() });
+          saveNotes();
+          const ok = qpeer?.send(from, { kind: "note-receipt", currency, denomination: N, token: receipt, original: token, issuer: myLabel });
+          if (!ok) {
+            addMessage("", `  · receipt minted but could not deliver — peer unreachable`, "system");
+            return;
+          }
+          addMessage("", `  · honored: ${currency} ${N} for ${who}`, "system");
+          addMessage("", `    receipt: ${receipt}`, "system");
+          return;
+        }
+        if (d.kind === "note-receipt") {
+          const currency = String(d.currency ?? "");
+          const N        = Number(d.denomination ?? 0);
+          const token    = String(d.token ?? "");
+          const issuer   = String(d.issuer ?? peerLabel(from));
+          const parsed = parseNoteLabel(token);
+          const valid  = parsed?.kind === "receipt" && parsed.currency === currency
+                       && noteDenomination(token) === N && validateCapability(token);
+          if (!valid) {
+            addMessage(from, `sends receipt`, "peer", issuer);
+            addMessage("", `  · refused: malformed receipt token`, "system");
+            return;
+          }
+          receiptStore.set(token, { token, currency, denomination: N, issuer });
+          saveNotes();
+          addMessage(from, `issues receipt for ${currency} ${N}`, "peer", issuer);
+          addMessage("", `  · ${currency} ${N} redemption honored by ${issuer}`, "system");
+          addMessage("", `    ${token}`, "system");
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -886,7 +1255,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -940,6 +1309,7 @@ async function init(): Promise<void> {
 
   await loadZfa();
   loadLemmas();
+  loadNotes();
 
   const cap = generateCapability("peer");
   myIdEl.textContent = cap;
