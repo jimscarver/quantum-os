@@ -4,6 +4,9 @@ import { QOSPeer } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
          mintCurrencyToken, mintNote, mintReceipt,
          splitNote, mergeNotes } from "./notes.js";
+import { newProposalId, conservationCheck,
+         uniqueParticipants, shortRdvId, cyclicSwap,
+         type Proposal, type Row, type CommitRow } from "./rendezvous.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -78,6 +81,24 @@ const receiptStore = new Map<string, ReceiptEntry>();       // token → entry
 const redemptionsHonored = new Map<string, RedemptionRecord>(); // redeemed-token → record
 const knownCurrencies = new Map<string, KnownCurrency>();   // token → entry  (public registry: everyone's declarations)
 
+// Rendezvous: locked notes are reserved for an in-flight proposal. They are
+// NOT in noteStore (so /note pass etc. don't see them), but they are still
+// "mine" — released back to noteStore on abort/timeout, consumed on commit.
+interface LockedNote extends NoteEntry { proposalId: string; lockedAt: number }
+type ProposalRole = "proposer" | "participant";
+type ProposalStatus = "pending" | "accepted" | "rejected";
+interface ProposalState {
+  proposal: Proposal;
+  role: ProposalRole;
+  myStatus: ProposalStatus;       // for participants — proposer is implicitly "accepted"
+  acceptedBy: Map<string, string>; // proposer view: participantId → committed gives-token
+}
+const lockedNotes      = new Map<string, LockedNote>();    // token → locked entry
+const proposals        = new Map<string, ProposalState>();  // proposal id → state
+const proposalTimers   = new Map<string, number>();         // proposal id → setTimeout handle
+
+const RDV_TIMEOUT_MS = 60_000;
+
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
 }
@@ -115,6 +136,7 @@ function saveNotes(): void {
   localStorage.setItem(`qos-receipts-${room}`,         JSON.stringify(Object.fromEntries(receiptStore)));
   localStorage.setItem(`qos-redemptions-${room}`,      JSON.stringify(Object.fromEntries(redemptionsHonored)));
   localStorage.setItem(`qos-known-currencies-${room}`, JSON.stringify(Object.fromEntries(knownCurrencies)));
+  localStorage.setItem(`qos-locked-notes-${room}`,     JSON.stringify(Object.fromEntries(lockedNotes)));
 }
 
 function loadNotes(): void {
@@ -132,6 +154,24 @@ function loadNotes(): void {
   tryLoad<ReceiptEntry>    (`qos-receipts-${room}`,         (k, v) => receiptStore.set(k, v));
   tryLoad<RedemptionRecord>(`qos-redemptions-${room}`,      (k, v) => redemptionsHonored.set(k, v));
   tryLoad<KnownCurrency>   (`qos-known-currencies-${room}`, (k, v) => knownCurrencies.set(k, v));
+  // Locked notes from a previous session are orphans: their proposal state
+  // lived in memory only and is gone after reload. Release each back to the
+  // wallet so the user doesn't lose value across a refresh.
+  const lockedRaw = localStorage.getItem(`qos-locked-notes-${room}`);
+  if (lockedRaw) {
+    try {
+      const data = JSON.parse(lockedRaw) as Record<string, LockedNote>;
+      for (const lock of Object.values(data)) {
+        noteStore.set(lock.token, {
+          token: lock.token,
+          currency: lock.currency,
+          denomination: lock.denomination,
+          receivedFrom: lock.receivedFrom,
+        });
+      }
+      localStorage.removeItem(`qos-locked-notes-${room}`);
+    } catch { /* */ }
+  }
   // Migration: seed knownCurrencies from currencies I issue if the registry is empty.
   if (knownCurrencies.size === 0 && currencyTokens.size > 0) {
     const me = myName || "you";
@@ -461,6 +501,120 @@ function expandLemmaRefs(arg: string): {
 }
 
 // ---------------------------------------------------------------------------
+// Rendezvous helpers — locking, timeouts, commit application
+// ---------------------------------------------------------------------------
+
+function pickFreeNote(currency: string, N: number): NoteEntry | null {
+  let exact: NoteEntry | null = null;
+  let larger: NoteEntry | null = null;
+  for (const n of noteStore.values()) {
+    if (n.currency !== currency) continue;
+    if (n.denomination === N) { exact = n; break; }
+    if (n.denomination > N && (!larger || n.denomination < larger.denomination)) larger = n;
+  }
+  return exact ?? larger;
+}
+
+function detachFromFree(chosen: NoteEntry, N: number): { outgoing: string; change: NoteEntry | null } | null {
+  if (chosen.denomination === N) {
+    noteStore.delete(chosen.token);
+    return { outgoing: chosen.token, change: null };
+  }
+  const split = splitNote(chosen.token, N);
+  if (!split) return null;
+  const [paid, changeTok] = split;
+  const change: NoteEntry = { token: changeTok, currency: chosen.currency, denomination: chosen.denomination - N };
+  noteStore.delete(chosen.token);
+  noteStore.set(changeTok, change);
+  return { outgoing: paid, change };
+}
+
+function lockToken(token: string, entry: NoteEntry, proposalId: string): void {
+  lockedNotes.set(token, {
+    token,
+    currency: entry.currency,
+    denomination: entry.denomination,
+    receivedFrom: entry.receivedFrom,
+    proposalId,
+    lockedAt: Date.now(),
+  });
+}
+
+function releaseLockedFor(proposalId: string): void {
+  for (const [token, lock] of lockedNotes) {
+    if (lock.proposalId !== proposalId) continue;
+    noteStore.set(token, {
+      token: lock.token,
+      currency: lock.currency,
+      denomination: lock.denomination,
+      receivedFrom: lock.receivedFrom,
+    });
+    lockedNotes.delete(token);
+  }
+}
+
+function scheduleProposalTimeout(id: string, ms: number): void {
+  const existing = proposalTimers.get(id);
+  if (existing !== undefined) clearTimeout(existing);
+  const t = setTimeout(() => proposalTimedOut(id), ms) as unknown as number;
+  proposalTimers.set(id, t);
+}
+
+function clearProposalTimeout(id: string): void {
+  const t = proposalTimers.get(id);
+  if (t !== undefined) clearTimeout(t);
+  proposalTimers.delete(id);
+}
+
+function proposalTimedOut(id: string): void {
+  const state = proposals.get(id);
+  if (!state) return;
+  releaseLockedFor(id);
+  proposals.delete(id);
+  proposalTimers.delete(id);
+  saveNotes();
+  renderNotes();
+  if (state.role === "proposer" && qpeer) {
+    const self = qpeer.peerId;
+    const targets = uniqueParticipants(state.proposal).filter(p => p !== self);
+    for (const t of targets) qpeer.send(t, { kind: "rdv-abort", id, reason: "timeout" });
+  }
+  addMessage("", `· rendezvous ${shortRdvId(id)} expired`, "system");
+}
+
+/// Apply a commit on this peer: for each row that names me, remove the locked
+/// gives token and register the assigned gets token. Returns false if any
+/// expectation is violated (in which case caller should not finalize state).
+function applyCommit(state: ProposalState, commitRows: CommitRow[]): boolean {
+  const myId = qpeer?.peerId ?? "";
+  const myRows = state.proposal.rows.filter(r => r.participant === myId);
+  const matched: CommitRow[] = [];
+  const remaining = commitRows.filter(c => c.participant === myId);
+  for (const myRow of myRows) {
+    const idx = remaining.findIndex(c =>
+      parseNoteLabel(c.getsToken)?.currency === myRow.gets.currency &&
+      noteDenomination(c.getsToken) === myRow.gets.denomination &&
+      parseNoteLabel(c.getsToken)?.kind === "note" &&
+      validateCapability(c.getsToken));
+    if (idx < 0) return false;
+    matched.push(remaining[idx]);
+    remaining.splice(idx, 1);
+  }
+  for (const cr of matched) {
+    lockedNotes.delete(cr.givesToken);
+    const parsed = parseNoteLabel(cr.getsToken);
+    if (!parsed) continue;
+    noteStore.set(cr.getsToken, {
+      token: cr.getsToken,
+      currency: parsed.currency,
+      denomination: noteDenomination(cr.getsToken),
+      receivedFrom: state.proposal.proposerName,
+    });
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Slash command handler — returns collected output lines for broadcast
 // ---------------------------------------------------------------------------
 
@@ -489,6 +643,7 @@ function handleCommand(raw: string): string[] {
       sys("  /request <n>     — request @n from whoever holds it");
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
+      sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -1062,6 +1217,204 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "rdv": {
+      const rParts = arg.trim().split(/\s+/);
+      const sub = (rParts[0] || "").toLowerCase();
+      const a = rParts.slice(1);
+
+      const findByPrefix = (prefix: string): ProposalState | null => {
+        for (const [id, s] of proposals) if (id.startsWith(prefix)) return s;
+        return null;
+      };
+
+      switch (sub) {
+        case "":
+        case "list": {
+          if (proposals.size === 0 && lockedNotes.size === 0) {
+            sys("no pending rendezvous proposals");
+            sys("  /rdv swap <giveCur> <giveN> <getCur> <getN> <peer>  propose a 2-party swap");
+            sys("  /rdv accept <id>   — accept a pending proposal");
+            sys("  /rdv reject <id>   — decline");
+            sys("  /rdv abort  <id>   — cancel a proposal you proposed");
+            break;
+          }
+          if (proposals.size > 0) {
+            sys(`proposals (${proposals.size}):`);
+            const myId = qpeer?.peerId ?? "";
+            for (const [id, s] of proposals) {
+              const role = s.role === "proposer" ? "(yours)" : `from ${s.proposal.proposerName}`;
+              const myRow = s.proposal.rows.find(r => r.participant === myId);
+              const summary = myRow
+                ? `you give ${myRow.gives.currency} ${myRow.gives.denomination}, get ${myRow.gets.currency} ${myRow.gets.denomination}`
+                : "no row for you";
+              sys(`  ${shortRdvId(id)}  ${role}  — ${summary}  [${s.myStatus}]`);
+            }
+          }
+          if (lockedNotes.size > 0) {
+            sys(`locked notes (${lockedNotes.size}):`);
+            for (const lock of lockedNotes.values()) {
+              sys(`  ${lock.currency} ${lock.denomination}  (for rdv ${shortRdvId(lock.proposalId)})`);
+            }
+          }
+          break;
+        }
+
+        case "swap": {
+          const giveCur    = a[0];
+          const giveN      = parseInt(a[1] ?? "", 10);
+          const getCur     = a[2];
+          const getN       = parseInt(a[3] ?? "", 10);
+          const targetName = a.slice(4).join(" ").trim();
+          if (!giveCur || !getCur || isNaN(giveN) || isNaN(getN) || giveN < 1 || getN < 1 || !targetName) {
+            sys("usage: /rdv swap <giveCur> <giveN> <getCur> <getN> <peer>");
+            sys("  example: /rdv swap USD 30 EUR 20 Bob");
+            break;
+          }
+          if (!qpeer) { sys("not connected"); break; }
+          const targetId = findPeerByName(targetName);
+          if (!targetId) { sys(`unknown peer: '${targetName}'`); break; }
+
+          const chosen = pickFreeNote(giveCur, giveN);
+          if (!chosen) { sys(`no ${giveCur} note of denomination ≥ ${giveN}`); break; }
+          const detached = detachFromFree(chosen, giveN);
+          if (!detached) { sys("split failed"); break; }
+
+          const id = newProposalId();
+          const myId = qpeer.peerId;
+          const myLabel = myName || shortId(myId);
+          const rows: Row[] = cyclicSwap(
+            myId,    { currency: giveCur, denomination: giveN },
+            targetId,{ currency: getCur,  denomination: getN  },
+          );
+          const proposal: Proposal = {
+            id, proposer: myId, proposerName: myLabel, rows,
+            expiresAt: Date.now() + RDV_TIMEOUT_MS,
+          };
+          const lockEntry: NoteEntry = {
+            token: detached.outgoing, currency: giveCur, denomination: giveN,
+            receivedFrom: chosen.receivedFrom,
+          };
+          lockToken(detached.outgoing, lockEntry, id);
+          proposals.set(id, {
+            proposal, role: "proposer", myStatus: "accepted",
+            acceptedBy: new Map([[myId, detached.outgoing]]),
+          });
+          scheduleProposalTimeout(id, RDV_TIMEOUT_MS);
+          saveNotes();
+          renderNotes();
+
+          const sent = qpeer.send(targetId, { kind: "rdv-propose", proposal });
+          if (!sent) {
+            releaseLockedFor(id);
+            proposals.delete(id);
+            clearProposalTimeout(id);
+            saveNotes();
+            renderNotes();
+            sys(`cannot reach ${targetName} — data channel not open`);
+            break;
+          }
+          sys(`· proposed rendezvous ${shortRdvId(id)} to ${targetName}`);
+          sys(`  you give ${giveCur} ${giveN}, get ${getCur} ${getN}`);
+          sys(`  expires in ${Math.round(RDV_TIMEOUT_MS / 1000)}s — /rdv abort ${shortRdvId(id)} to cancel`);
+          if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+          break;
+        }
+
+        case "accept": {
+          const prefix = a[0];
+          if (!prefix) { sys("usage: /rdv accept <id>"); break; }
+          if (!qpeer) { sys("not connected"); break; }
+          const state = findByPrefix(prefix);
+          if (!state) { sys(`no proposal matching '${prefix}'`); break; }
+          if (state.role !== "participant") { sys("you proposed this; nothing to accept"); break; }
+          if (state.myStatus !== "pending") { sys(`already ${state.myStatus}`); break; }
+
+          const myId = qpeer.peerId;
+          const myRows = state.proposal.rows.filter(r => r.participant === myId);
+          if (myRows.length === 0) { sys("you have no row in this rendezvous"); break; }
+          if (myRows.length > 1) { sys("multi-row participation not yet supported"); break; }
+          const row = myRows[0];
+
+          const chosen = pickFreeNote(row.gives.currency, row.gives.denomination);
+          if (!chosen) {
+            sys(`cannot accept: no free ${row.gives.currency} note of denomination ≥ ${row.gives.denomination}`);
+            break;
+          }
+          const detached = detachFromFree(chosen, row.gives.denomination);
+          if (!detached) { sys("split failed"); break; }
+          const lockEntry: NoteEntry = {
+            token: detached.outgoing, currency: row.gives.currency, denomination: row.gives.denomination,
+            receivedFrom: chosen.receivedFrom,
+          };
+          lockToken(detached.outgoing, lockEntry, state.proposal.id);
+          state.myStatus = "accepted";
+          saveNotes();
+          renderNotes();
+
+          const sent = qpeer.send(state.proposal.proposer, {
+            kind: "rdv-accept", id: state.proposal.id, token: detached.outgoing,
+          });
+          if (!sent) {
+            releaseLockedFor(state.proposal.id);
+            state.myStatus = "pending";
+            saveNotes();
+            renderNotes();
+            sys("cannot reach proposer — try again");
+            break;
+          }
+          sys(`· accepted rendezvous ${shortRdvId(state.proposal.id)}`);
+          sys(`  locked ${row.gives.currency} ${row.gives.denomination}; awaiting commit…`);
+          if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+          break;
+        }
+
+        case "reject": {
+          const prefix = a[0];
+          if (!prefix) { sys("usage: /rdv reject <id>"); break; }
+          const state = findByPrefix(prefix);
+          if (!state) { sys(`no proposal matching '${prefix}'`); break; }
+          if (state.role !== "participant") { sys("you proposed this; use /rdv abort instead"); break; }
+          if (state.myStatus !== "pending") { sys(`already ${state.myStatus}`); break; }
+          if (qpeer) qpeer.send(state.proposal.proposer, { kind: "rdv-reject", id: state.proposal.id });
+          proposals.delete(state.proposal.id);
+          clearProposalTimeout(state.proposal.id);
+          saveNotes();
+          renderNotes();
+          sys(`· rejected rendezvous ${shortRdvId(state.proposal.id)}`);
+          break;
+        }
+
+        case "abort": {
+          const prefix = a[0];
+          if (!prefix) { sys("usage: /rdv abort <id>"); break; }
+          const state = findByPrefix(prefix);
+          if (!state) { sys(`no proposal matching '${prefix}'`); break; }
+          if (state.role !== "proposer") { sys("you didn't propose this; use /rdv reject instead"); break; }
+          releaseLockedFor(state.proposal.id);
+          if (qpeer) {
+            const self = qpeer.peerId;
+            const targets = uniqueParticipants(state.proposal).filter(p => p !== self);
+            for (const t of targets) qpeer.send(t, { kind: "rdv-abort", id: state.proposal.id, reason: "proposer-cancel" });
+          }
+          proposals.delete(state.proposal.id);
+          clearProposalTimeout(state.proposal.id);
+          saveNotes();
+          renderNotes();
+          sys(`· aborted rendezvous ${shortRdvId(state.proposal.id)}`);
+          break;
+        }
+
+        default:
+          sys(`unknown subcommand: /rdv ${sub}`);
+          sys("  /rdv [list]                                        — show pending proposals");
+          sys("  /rdv swap <giveCur> <giveN> <getCur> <getN> <peer> — propose a 2-party swap");
+          sys("  /rdv accept <id>                                   — accept");
+          sys("  /rdv reject <id>                                   — decline");
+          sys("  /rdv abort  <id>                                   — cancel your proposal");
+      }
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -1323,6 +1676,128 @@ function connect(): void {
           }
           return;
         }
+        if (d.kind === "rdv-propose") {
+          const proposalRaw = d.proposal;
+          if (!proposalRaw || typeof proposalRaw !== "object") return;
+          const proposal = proposalRaw as Proposal;
+          if (!proposal.id || !Array.isArray(proposal.rows) || typeof proposal.expiresAt !== "number") return;
+          if (proposal.expiresAt < Date.now()) return;
+          if (!conservationCheck(proposal.rows)) {
+            addMessage(from, `proposes rendezvous`, "peer", peerLabel(from));
+            addMessage("", `  · refused: conservation violation`, "system");
+            return;
+          }
+          if (proposals.has(proposal.id)) return;
+          const myId = qpeer?.peerId ?? "";
+          const myRow = proposal.rows.find(r => r.participant === myId);
+          if (!myRow) return;
+          proposals.set(proposal.id, {
+            proposal, role: "participant", myStatus: "pending",
+            acceptedBy: new Map(),
+          });
+          scheduleProposalTimeout(proposal.id, proposal.expiresAt - Date.now());
+          saveNotes();
+          renderNotes();
+          addMessage(from, `proposes rendezvous ${shortRdvId(proposal.id)}`, "peer", peerLabel(from));
+          addMessage("", `  · you give ${myRow.gives.currency} ${myRow.gives.denomination}, get ${myRow.gets.currency} ${myRow.gets.denomination}`, "system");
+          addMessage("", `  · /rdv accept ${shortRdvId(proposal.id)}   or   /rdv reject ${shortRdvId(proposal.id)}`, "system");
+          return;
+        }
+        if (d.kind === "rdv-accept") {
+          const id = String(d.id ?? "");
+          const token = String(d.token ?? "");
+          const state = proposals.get(id);
+          if (!state || state.role !== "proposer") return;
+          const senderRow = state.proposal.rows.find(r => r.participant === from);
+          if (!senderRow) return;
+          const parsed = parseNoteLabel(token);
+          if (!parsed || parsed.kind !== "note"
+              || parsed.currency !== senderRow.gives.currency
+              || noteDenomination(token) !== senderRow.gives.denomination
+              || !validateCapability(token)) {
+            addMessage(from, `accepts rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: token mismatch or invalid`, "system");
+            return;
+          }
+          state.acceptedBy.set(from, token);
+          addMessage(from, `accepts rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+          const participants = uniqueParticipants(state.proposal);
+          if (!participants.every(p => state.acceptedBy.has(p))) return;
+
+          // All accepted — build commit (cyclic: row[i].gets = next row's gives)
+          const N = state.proposal.rows.length;
+          const commitRows: CommitRow[] = state.proposal.rows.map((r, i) => {
+            const nextRow = state.proposal.rows[(i + 1) % N];
+            return {
+              participant: r.participant,
+              givesToken: state.acceptedBy.get(r.participant)!,
+              getsToken:  state.acceptedBy.get(nextRow.participant)!,
+            };
+          });
+          const self = qpeer?.peerId ?? "";
+          if (qpeer) {
+            for (const p of participants) {
+              if (p === self) continue;
+              qpeer.send(p, { kind: "rdv-commit", id, rows: commitRows });
+            }
+          }
+          const ok = applyCommit(state, commitRows);
+          proposals.delete(id);
+          clearProposalTimeout(id);
+          saveNotes();
+          renderNotes();
+          addMessage("", ok ? `  · committed rdv ${shortRdvId(id)}` : `  · commit application failed locally`, "system");
+          return;
+        }
+        if (d.kind === "rdv-reject") {
+          const id = String(d.id ?? "");
+          const state = proposals.get(id);
+          if (!state || state.role !== "proposer") return;
+          addMessage(from, `rejects rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+          releaseLockedFor(id);
+          if (qpeer) {
+            const self = qpeer.peerId;
+            const targets = uniqueParticipants(state.proposal).filter(p => p !== self && p !== from);
+            for (const t of targets) qpeer.send(t, { kind: "rdv-abort", id, reason: "peer-rejected" });
+          }
+          proposals.delete(id);
+          clearProposalTimeout(id);
+          saveNotes();
+          renderNotes();
+          addMessage("", `  · rdv ${shortRdvId(id)} aborted`, "system");
+          return;
+        }
+        if (d.kind === "rdv-commit") {
+          const id = String(d.id ?? "");
+          const rowsRaw = d.rows;
+          if (!Array.isArray(rowsRaw)) return;
+          const commitRows = rowsRaw as CommitRow[];
+          const state = proposals.get(id);
+          if (!state || state.role !== "participant") return;
+          if (state.myStatus !== "accepted") return;
+          const ok = applyCommit(state, commitRows);
+          proposals.delete(id);
+          clearProposalTimeout(id);
+          saveNotes();
+          renderNotes();
+          addMessage(from, `commits rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+          addMessage("", ok ? `  · rdv ${shortRdvId(id)} settled` : `  · commit application failed`, "system");
+          return;
+        }
+        if (d.kind === "rdv-abort") {
+          const id = String(d.id ?? "");
+          const reason = String(d.reason ?? "");
+          const state = proposals.get(id);
+          if (!state) return;
+          releaseLockedFor(id);
+          proposals.delete(id);
+          clearProposalTimeout(id);
+          saveNotes();
+          renderNotes();
+          addMessage(from, `aborts rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+          addMessage("", `  · rdv ${shortRdvId(id)} cancelled${reason ? ` (${reason})` : ""}`, "system");
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -1400,7 +1875,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
