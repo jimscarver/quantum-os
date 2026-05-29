@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[See it in action: Syllogism Demo →](SyllogismDemo.md)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
 
 ### How to create reality together
 
@@ -286,6 +286,8 @@ After this sequence: Alice's wallet holds USD 70 (change) and a `redemptionsHono
 **Conservation**: every operation preserves `count_pos == count_neg` per token. Splitting/merging never changes the total denomination of a wallet. The same Lean invariant that proves `rho_process_always_zfa` covers split (partition of a balanced sequence) and merge (parallel composition of balanced sequences).
 
 **Privacy boundary**: declarations and grant *announcements* broadcast (so the room knows what currencies exist and who issues them). Held notes, receipts, and the issuer's redemption log are private — never sent without an explicit `/note pass` or `/note redeem`.
+
+**Lifecycle vocabulary borrowed from [Patrick Maguire's DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)** — DarkWow implements TokenMint → Mint → Transfer → Redeem as a privacy-preserving DeFi contract on a Halo2/Pallas zk-rollup. quantum-os implements the same algebraic shape over a per-room WebRTC data channel, with **conservation enforced by ZFA twist balance** instead of Pedersen commitments — no zk circuits, no global ledger. See [PromissoryNoteDemo.md](PromissoryNoteDemo.md) for the full walkthrough.
 
 ### `/rdv [sub]` [direct]
 
