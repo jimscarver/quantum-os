@@ -130,6 +130,8 @@ interface RoomContext {
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
   signalingUrl: string;
+  // True if there's been activity since the user last viewed this tab.
+  hasUnread: boolean;
 }
 
 function createRoom(roomId: string): RoomContext {
@@ -153,13 +155,31 @@ function createRoom(roomId: string): RoomContext {
     ignoredForSync: new Set(),
     chatLog: [],
     signalingUrl: DEFAULT_SIGNAL,
+    hasUnread: false,
   };
 }
 
 const rooms = new Map<string, RoomContext>();   // roomId → context (all joined rooms)
-// Definite-assignment assertion: setActiveRoom is called once at init() before
-// any other code reads activeRoom, and never set back to undefined.
+// `activeRoom` is the room whose state is currently aliased into the module-
+// level let bindings (lemmaStore, peers, …). It is set by setActiveRoom and
+// temporarily swapped by inbound callbacks to point at the room that owns
+// that callback's QOSPeer — so state mutations land in the right room even
+// when the user is looking at a different tab.
 let activeRoom!: RoomContext;
+// `uiActiveRoom` is the tab the user is currently *looking at*. It only
+// changes on switchToRoom. DOM-touching code checks `activeRoom ===
+// uiActiveRoom` before painting; otherwise the active room is being mutated
+// by a background callback and the user's screen should not flicker.
+let uiActiveRoom!: RoomContext;
+
+function isUiActive(): boolean { return activeRoom === uiActiveRoom; }
+
+function markUnread(ctx: RoomContext): void {
+  if (ctx === uiActiveRoom) return;
+  if (ctx.hasUnread) return;
+  ctx.hasUnread = true;
+  renderTabs();
+}
 
 // Module-level aliases for the active room's state. Existing code paths read
 // from these names; they are reassigned on `setActiveRoom` to point at the new
@@ -510,6 +530,7 @@ function loadNotes(): void {
 // ---------------------------------------------------------------------------
 
 function setStatus(state: "disconnected" | "connecting" | "connected", label: string): void {
+  if (!isUiActive()) return;
   statusDot.className = `status-dot ${state === "disconnected" ? "" : state}`;
   statusText.textContent = label;
   statusText.style.color = state === "connected" ? "#4caf50"
@@ -536,8 +557,14 @@ function renderChatLine(line: ChatLine): void {
 function addMessage(from: string, text: string, kind: "peer" | "self" | "system" = "peer", label?: string): void {
   const line: ChatLine = { from, text, kind, label };
   activeRoom.chatLog.push(line);
-  renderChatLine(line);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  trimChatLog(activeRoom);
+  if (isUiActive()) {
+    renderChatLine(line);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else {
+    // Activity in a non-viewed tab — surface it via the tab unread indicator.
+    markUnread(activeRoom);
+  }
 }
 
 // Cap the per-room chat log so long sessions don't grow unbounded.
@@ -577,11 +604,14 @@ function renderTabs(): void {
   tabListEl.innerHTML = "";
   for (const ctx of rooms.values()) {
     const tab = document.createElement("div");
-    tab.className = "tab" + (ctx.roomId === activeRoom.roomId ? " active" : "");
-    tab.title = ctx.roomId;
+    const isActive = ctx.roomId === uiActiveRoom.roomId;
+    tab.className = "tab"
+      + (isActive ? " active" : "")
+      + (ctx.hasUnread && !isActive ? " unread" : "");
+    tab.title = ctx.roomId + (ctx.hasUnread && !isActive ? " (unread)" : "");
     const label = document.createElement("span");
     label.className = "tab-label";
-    label.textContent = shortId(ctx.roomId);
+    label.textContent = (ctx.hasUnread && !isActive ? "● " : "") + shortId(ctx.roomId);
     tab.appendChild(label);
     // Only show the close button when there's more than one tab open.
     if (rooms.size > 1) {
@@ -592,7 +622,7 @@ function renderTabs(): void {
       close.addEventListener("click", (e) => { e.stopPropagation(); closeRoomTab(ctx.roomId); });
       tab.appendChild(close);
     }
-    tab.addEventListener("click", () => { if (ctx.roomId !== activeRoom.roomId) switchToRoom(ctx.roomId); });
+    tab.addEventListener("click", () => { if (ctx.roomId !== uiActiveRoom.roomId) switchToRoom(ctx.roomId); });
     tabListEl.appendChild(tab);
   }
 }
@@ -604,8 +634,10 @@ function renderTabs(): void {
 // only one is connected at a time today.)
 function switchToRoom(roomId: string): void {
   const next = rooms.get(roomId);
-  if (!next || next.roomId === activeRoom.roomId) return;
+  if (!next || next.roomId === uiActiveRoom.roomId) return;
   setActiveRoom(next);
+  uiActiveRoom = next;
+  next.hasUnread = false;        // viewing the room clears the unread flag
   applyActiveRoomToUI();
 }
 
@@ -662,10 +694,11 @@ function closeRoomTab(roomId: string): void {
   if (ctx.qpeer) { ctx.qpeer.disconnect(); ctx.qpeer = null; }
   rooms.delete(roomId);
   saveJoinedRooms();
-  // If we closed the active one, pick another to activate.
-  if (activeRoom.roomId === roomId) {
+  // If we closed the visible one, pick another to activate.
+  if (uiActiveRoom.roomId === roomId) {
     const next = rooms.values().next().value as RoomContext;
     setActiveRoom(next);
+    uiActiveRoom = next;
     applyActiveRoomToUI();
   } else {
     renderTabs();
@@ -716,6 +749,7 @@ function promptJoinRoom(): void {
 }
 
 function renderRoomProcess(): void {
+  if (!isUiActive()) return;
   const allPeers = qpeer ? [qpeer.peerId, ...[...peers]] : [...peers];
   if (allPeers.length === 0) { roomProcessEl.textContent = "—"; return; }
 
@@ -751,6 +785,7 @@ function renderRoomProcess(): void {
 }
 
 function renderPeers(): void {
+  if (!isUiActive()) return;
   peerCount.textContent = String(peers.size);
   peerList.innerHTML = "";
   if (qpeer) {
@@ -774,6 +809,7 @@ function renderPeers(): void {
 }
 
 function renderLemmas(): void {
+  if (!isUiActive()) return;
   lemmaCountEl.textContent = String(lemmaStore.size);
   lemmaListEl.innerHTML = "";
   for (const [name, entry] of lemmaStore) {
@@ -787,6 +823,7 @@ function renderLemmas(): void {
 }
 
 function renderNotes(): void {
+  if (!isUiActive()) return;
   currencyCountEl.textContent = String(knownCurrencies.size);
   currencyListEl.innerHTML = "";
   // List my own issued currencies first (with ✦), then others (with issuer label).
@@ -2012,28 +2049,25 @@ function connect(): void {
     peers.clear();
     peerNames.clear();
     renderPeers();
-    msgInput.disabled = true;
-    sendBtn.disabled = true;
-    connectBtn.textContent = "Connect";
+    if (isUiActive()) {
+      msgInput.disabled = true;
+      sendBtn.disabled = true;
+      connectBtn.textContent = "Connect";
+    }
     setStatus("disconnected", "disconnected");
     return;
   }
 
-  // MVP constraint: only one room may hold an active signaling connection
-  // at a time, otherwise inbound callbacks from other rooms' QOSPeers would
-  // race with the module-level state aliases that follow activeRoom. Before
-  // we connect this room, tear down any other room's qpeer.
-  for (const ctx of rooms.values()) {
-    if (ctx.roomId === activeRoom.roomId) continue;
-    if (ctx.qpeer) {
-      ctx.qpeer.disconnect();
-      ctx.qpeer = null;
-    }
-  }
-
-  const roomId = activeRoom.roomId;
+  // Capture the room being connected. All this QOSPeer's callbacks
+  // operate against this context regardless of which tab the user is
+  // looking at when the callback fires; setActiveRoom(ctx) at callback
+  // entry temporarily redirects the module-level state aliases so
+  // mutations land in this room, and DOM-touching code further guards
+  // with isUiActive() so the visible tab isn't disturbed.
+  const ctx = activeRoom;
+  const roomId = ctx.roomId;
   const signalingUrl = signalUrlEl.value.trim() || DEFAULT_SIGNAL;
-  activeRoom.signalingUrl = signalingUrl;
+  ctx.signalingUrl = signalingUrl;
   const stunUrl = stunUrlEl.value.trim();
 
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
@@ -2044,27 +2078,36 @@ function connect(): void {
     roomId,
     iceServers: stunUrl ? [{ urls: stunUrl }] : undefined,
     onSignalingOpen() {
-      setStatus("connected", `connected · ${signalingUrl}`);
-      msgInput.disabled = false;
-      sendBtn.disabled = false;
-      renderPeers();
-      toggleSidebar(false);   // free the chat once connected (no-op on desktop)
-      addMessage("", `joined room ${shortId(roomId)}`, "system");
-      // Open the probe window so the first SAMPLE_SIZE sync envelopes from
-      // existing peers contribute to majority-resolution. Window auto-closes
-      // after PROBE_WINDOW_MS or once we've collected from SAMPLE_SIZE peers.
-      openProbeWindow();
+      const prev = activeRoom; setActiveRoom(ctx);
+      try {
+        setStatus("connected", `connected · ${signalingUrl}`);
+        if (isUiActive()) {
+          msgInput.disabled = false;
+          sendBtn.disabled = false;
+          toggleSidebar(false);
+        }
+        renderPeers();
+        addMessage("", `joined room ${shortId(roomId)}`, "system");
+        openProbeWindow();
+      } finally { setActiveRoom(prev); }
     },
     onSignalingClose() {
-      setStatus("connecting", "reconnecting…");
-      msgInput.disabled = true;
-      sendBtn.disabled = true;
+      const prev = activeRoom; setActiveRoom(ctx);
+      try {
+        setStatus("connecting", "reconnecting…");
+        if (isUiActive()) {
+          msgInput.disabled = true;
+          sendBtn.disabled = true;
+        }
+      } finally { setActiveRoom(prev); }
     },
     async onMessage(from, data) {
+      const prev = activeRoom; setActiveRoom(ctx);
+      try {
       if (typeof data === "object" && data !== null) {
         const d = data as Record<string, unknown>;
         if (d.kind === "name") {
-          const status = await verifyDyncapIfPresent(from, d);
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           peerNames.set(from, String(d.name ?? ""));
           renderPeers();
@@ -2088,7 +2131,7 @@ function connect(): void {
           return;
         }
         if (d.kind === "lemma") {
-          const status = await verifyDyncapIfPresent(from, d);
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) {
             addMessage(from, `/lemma ${String(d.name ?? "")}`, "peer", peerLabel(from));
             addMessage("", status, "system");
@@ -2145,7 +2188,7 @@ function connect(): void {
           return;
         }
         if (d.kind === "note-declare") {
-          const status = await verifyDyncapIfPresent(from, d);
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) {
             addMessage(from, `/note declare ${String(d.currency ?? "")}`, "peer", peerLabel(from));
             addMessage("", status, "system");
@@ -2314,7 +2357,7 @@ function connect(): void {
           return;
         }
         if (d.kind === "state-discrepancy") {
-          await verifyDyncapIfPresent(from, d);
+          await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           const storeName = String(d.storeName ?? "");
           const key       = String(d.key       ?? "");
           const obsRaw    = d.observations;
@@ -2460,49 +2503,58 @@ function connect(): void {
         }
       }
       addMessage(from, JSON.stringify(data), "peer", peerLabel(from));
+      } finally { setActiveRoom(prev); }
     },
     onChannelOpen(peerId) {
-      // Always send a name envelope (carries the dyncap anchor for TOFU
-      // bootstrap even when the user hasn't set a display name yet).
-      signedSend(peerId, { kind: "name", name: myName });
-      // Catch up the new peer with public room state. Held notes / receipts
-      // / redemption logs stay private; only the room-knowledge stores ship.
-      if (lemmaStore.size > 0) {
-        const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
-          name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap,
-        }));
-        signedSend(peerId, { kind: "sync-lemmas", entries });
-      }
-      if (knownCurrencies.size > 0) {
-        const entries = Array.from(knownCurrencies.values());
-        signedSend(peerId, { kind: "sync-currencies", entries });
-      }
+      const prev = activeRoom; setActiveRoom(ctx);
+      try {
+        signedSend(peerId, { kind: "name", name: myName });
+        if (lemmaStore.size > 0) {
+          const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
+            name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap,
+          }));
+          signedSend(peerId, { kind: "sync-lemmas", entries });
+        }
+        if (knownCurrencies.size > 0) {
+          const entries = Array.from(knownCurrencies.values());
+          signedSend(peerId, { kind: "sync-currencies", entries });
+        }
+      } finally { setActiveRoom(prev); }
     },
     onPeerJoined(id) {
-      const pending = pendingLeaves.get(id);
-      if (pending !== undefined) {
-        // Signaling blip — peer reconnected before the leave timer fired; suppress both.
-        clearTimeout(pending);
-        pendingLeaves.delete(id);
+      const prev = activeRoom; setActiveRoom(ctx);
+      try {
+        const pending = pendingLeaves.get(id);
+        if (pending !== undefined) {
+          clearTimeout(pending);
+          pendingLeaves.delete(id);
+          peers.add(id);
+          renderPeers();
+          return;
+        }
+        if (peers.has(id)) return;
         peers.add(id);
         renderPeers();
-        return;
-      }
-      if (peers.has(id)) return;   // already known (e.g. duplicate signal on reconnect)
-      peers.add(id);
-      renderPeers();
-      addMessage("", `${peerLabel(id)} joined`, "system");
+        addMessage("", `${peerLabel(id)} joined`, "system");
+      } finally { setActiveRoom(prev); }
     },
     onPeerLeft(id) {
-      // Delay the visual/state update so a fast signaling reconnect suppresses the noise.
+      // The setTimeout fires later — capture ctx in the closure so the
+      // delayed work runs against the right room even if activeRoom has
+      // changed in the meantime.
       const timer = setTimeout(() => {
-        pendingLeaves.delete(id);
-        peers.delete(id);
-        renderPeers();
-        addMessage("", `${peerLabel(id)} left`, "system");
-        peerNames.delete(id);
+        const prev = activeRoom; setActiveRoom(ctx);
+        try {
+          pendingLeaves.delete(id);
+          peers.delete(id);
+          renderPeers();
+          addMessage("", `${peerLabel(id)} left`, "system");
+          peerNames.delete(id);
+        } finally { setActiveRoom(prev); }
       }, 6_000);
-      pendingLeaves.set(id, timer);
+      // The pendingLeaves mutation happens synchronously; wrap it too.
+      const prev = activeRoom; setActiveRoom(ctx);
+      try { pendingLeaves.set(id, timer); } finally { setActiveRoom(prev); }
     },
   });
   setQpeer(newPeer);
@@ -2579,6 +2631,7 @@ async function init(): Promise<void> {
   const firstRoom = createRoom(roomId);
   rooms.set(roomId, firstRoom);
   setActiveRoom(firstRoom);
+  uiActiveRoom = firstRoom;
 
   // Restore saved name
   myNameEl.value = myName;
