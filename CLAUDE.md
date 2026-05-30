@@ -151,6 +151,33 @@ Currently signed: `name`, `lemma`, `note-declare`, `sync-lemmas`, `sync-currenci
 
 Trust ceiling: TOFU at first contact + chain-tamper / replay / fork detection. Cannot mathematically verify the seed (hash-only). Race condition if a clone broadcasts before the real holder. Cross-room continuity not provided. See SECURITY.md for full threat enumeration.
 
+### Multi-room with per-room Markov blankets (`/room` — `app.ts`)
+
+A single browser session can join N rooms simultaneously, each as a tab across the top of the UI. The full reference framing is below; concrete summary for code work:
+
+State model:
+- `RoomContext` interface (defined in `app.ts`) collects all per-room state: `lemmaStore`, `noteStore`, `currencyTokens`, `knownCurrencies`, `receiptStore`, `redemptionsHonored`, `lockedNotes`, `proposals`, `proposalTimers`, `dyncapChains`, `probe`, `ignoredForSync`, `chatLog`, `peers`, `peerNames`, `pendingLeaves`, `qpeer`, `signalingUrl`, `hasUnread`, `roomId`.
+- `const rooms: Map<roomId, RoomContext>` — all joined rooms.
+- `let activeRoom: RoomContext` — the room whose state is aliased into the module-level `let` bindings (`lemmaStore`, `peers`, …). Temporarily swapped by inbound QOSPeer callbacks via `setActiveRoom(ctx)` so background activity lands in the right room.
+- `let uiActiveRoom: RoomContext` — the room the user is *looking at*. Changes only on `switchToRoom`. DOM-touching helpers (`addMessage`, `renderPeers`, `renderLemmas`, `renderNotes`, `renderRoomProcess`, `setStatus`) guard with `isUiActive()` (= `activeRoom === uiActiveRoom`) so a background callback doesn't disturb the visible tab.
+
+Cross-room state (not in `RoomContext`):
+- `myName`, `dyncapState` (with `seqByRoom: Record<roomId, number>`), `signQueue`, `sessionLog`. Per-device, shared across all rooms.
+
+Tab UI:
+- HTML: `#tab-bar` with `#tab-list` and `#tab-add` (the `+` button). CSS classes `.tab`, `.tab.active`, `.tab.unread`.
+- `renderTabs()` paints from `rooms.values()`; the unread indicator is an orange `●` prefix on tabs where `ctx.hasUnread && ctx !== uiActiveRoom`. Tab clicks call `switchToRoom`.
+- `switchToRoom(roomId)` calls `setActiveRoom(next)`, sets `uiActiveRoom = next`, clears `next.hasUnread`, and calls `applyActiveRoomToUI()` which re-renders everything from the new active room (replays `chatLog`, updates sidebar, syncs URL hash via `history.replaceState`).
+
+Persistence: `qos-joined-rooms` localStorage key holds the array of joined room IDs. On reload, every room is restored via `loadRoomState(ctx)` (which briefly swaps `activeRoom` to `ctx` while `loadLemmas` / `loadNotes` run). The URL-hash room becomes the initial active room.
+
+Callback model for simultaneous connections:
+- Each `connect()` call captures `const ctx = activeRoom` at QOSPeer construction time. Every callback wraps its body in `const prev = activeRoom; setActiveRoom(ctx); try { … } finally { setActiveRoom(prev); }`.
+- For `async onMessage`, the same wrapper applies plus a manual `setActiveRoom(ctx)` after each `await verifyDyncapIfPresent(…)` — the binding doesn't survive await suspensions, so we re-assert at each resumption point.
+- DOM-touching code (the renderer guards above + direct `msgInput.disabled` / `connectBtn.textContent` writes) checks `isUiActive()` so background-callback DOM noise is suppressed.
+
+The bridge-peer model: there's no protocol-level "cross-room" envelope. A peer in two rooms manually re-declares lemmas / re-grants notes in each room via the dispatcher (which acts on `activeRoom`, i.e. the current tab). Future work: an explicit `/share` command that copies a selected item from the active room into a named tab. Today, manual re-declaration is the bridge primitive.
+
 ### Discrepancy probe — joiner-local supermajority (`/probe` — `probe.ts` + `app.ts`)
 
 Partial-consensus layer that runs when a peer joins a room. The full reference doc is [Consensus.md](Consensus.md); the implementation summary for code work:
@@ -220,10 +247,11 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
+| `/room <sub>` | Multi-room tabs — `list`, `join <cap\|url>`, `leave`, `ref` |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, dyncap, and probe subcommands send purpose-specific envelopes (`note-declare`, `rdv-propose`, dyncap-signed `lemma` / `name` / `note-declare` / `sync-*`, `state-discrepancy`, …) so a generic qlf rebroadcast would be redundant.
+Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, dyncap, probe, and room subcommands send purpose-specific envelopes or are local-only (room/dyncap/probe).
 
 ---
 

@@ -374,12 +374,26 @@ peer ID: cap:peer:024602460246024602460246…
 ```
 Lean anchor: [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean)
 
-### `/room`
-Shows the current room's ZFA capability token.
-```
-room: cap:room:024602460246024602460246…
-  twists: 32  (16 pos, 16 neg)  gap: 0  ZFA: ✓
-```
+### `/room [sub]`
+
+Multi-room tabs. A single browser session can be joined to N rooms simultaneously, each in its own tab across the top of the UI. Each room is a separate Markov blanket — independent peers, lemma store, currency registry, notes, dyncap chain, consensus probe, and signaling connection. The room you're looking at is the *uiActive* room; background tabs continue to receive and process their own envelopes, with state mutations correctly routed via per-callback context capture (no cross-talk between rooms). Activity in a background tab surfaces as an orange `●` indicator on its tab.
+
+| Subcommand | Effect |
+|---|---|
+| `/room` or `/room list` | Show the active room's cap-token + twist stats, plus a list of joined rooms with their connection (`●`) and active (`←`) markers. |
+| `/room join <cap:room:…\|url>` | Open a new tab joined to the named room. Accepts a raw cap-token or a share URL. The new tab is created but does not auto-connect — click Connect to bring up signaling. |
+| `/room leave` | Close the active tab. The room's state stays in `localStorage` so re-joining picks up where you left off; the connection is dropped. Can't close the last remaining tab. |
+| `/room ref [cap:room:…]` | Print a shareable URL for the active room (or the given cap). |
+
+Joined rooms persist across reloads (`qos-joined-rooms` in `localStorage`); on next launch the same tabs are restored, with the URL-hash room re-activated. The `+` button on the tab bar prompts for a room cap or URL.
+
+**Markov-blanket constraints** (deliberate):
+- No cross-room signaling backchannel — each room has its own `QOSPeer` and signaling WebSocket.
+- No cross-room state sync — a lemma declared in one room doesn't auto-propagate to others.
+- No cross-room consensus — the probe runs per-room.
+- Cross-room information flow is mediated by a peer who's in both rooms (a "bridge peer"); they consciously re-broadcast in each room. There's no automatic `/share` command yet — manual re-declaration is the bridge primitive today.
+
+A peer in N rooms has the same dyncap *anchor* across rooms (it's `H(seed)` where seed is per-device), but each room maintains an independent chain trajectory via per-room `seq` in `DynCapState.seqByRoom`. The witness binding `H(seed ‖ seq ‖ room_id ‖ payload_hash)` produces algebraically independent witnesses across rooms.
 
 ### `/zfa [token]`
 Validates any `cap:label:hex` token — checks ZFA balance and reports the spectral gap.
@@ -598,6 +612,9 @@ wasm_capability_valid(hex: string): boolean
 | Multisig (2-of-2) | ✓ `/dyncap`-anchored identity + `/rdv` atomic agreement; see MultisigDemo.md |
 | Joiner-local consensus probe | ✓ `/probe` — chain-weighted supermajority resolution on join; losing peers ignored for sync; see Consensus.md |
 | Lemma immutability | ✓ once `@name` is declared, re-declaration with different twists is refused locally and on inbound broadcast |
+| Multi-room tabs | ✓ `/room join/leave/list/ref` — one browser session, N joined rooms; per-room state and signaling; unread indicator on background tabs |
+| Per-room dyncap chain | ✓ same anchor across rooms (`H(seed)`), independent `seq` per room; `H(seed ‖ seq ‖ room_id ‖ payload_hash)` witnesses algebraically independent |
+| Markov-blanket isolation | ✓ rooms are independent ZFA processes; no cross-room signaling, sync, or consensus; bridge peers are application-level only |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 
