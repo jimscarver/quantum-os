@@ -63,68 +63,140 @@ const noteCountEl     = document.getElementById("note-count")!;
 // State
 // ---------------------------------------------------------------------------
 
-const peers = new Set<string>();
-const peerNames = new Map<string, string>();   // peerId → display name
-// Debounce signaling-only disconnects: peerId → timer. If a peer rejoins before
-// the timer fires (signaling blip), suppress the left/joined pair entirely.
-const pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
+// Cross-room (per-device) state — same across every joined room.
 let myName: string = localStorage.getItem("qos-name") ?? "";
-let qpeer: QOSPeer | null = null;
-
 type LogEntry = { who: string; cmd: string; arg: string; summary: string };
 const sessionLog: LogEntry[] = [];
+let dyncapState: DynCapState | null = null;            // seed + anchor + per-room seqs
+let signQueue: Promise<void> = Promise.resolve();      // serializes outbound signing
 
+// Per-room types.
 interface LemmaEntry { twists: string; who: string; cap?: string; dyncap?: DyncapField }
-const lemmaStore = new Map<string, LemmaEntry>();
-
 interface NoteEntry { token: string; currency: string; denomination: number; receivedFrom?: string }
 interface ReceiptEntry { token: string; currency: string; denomination: number; issuer: string }
 interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
 interface KnownCurrency { currency: string; token: string; issuer: string; dyncap?: DyncapField }
-const currencyTokens = new Map<string, string>();          // currency → cap:token-<currency>:…  (mine, with bearer authority)
-const noteStore = new Map<string, NoteEntry>();             // token → entry
-const receiptStore = new Map<string, ReceiptEntry>();       // token → entry
-const redemptionsHonored = new Map<string, RedemptionRecord>(); // redeemed-token → record
-const knownCurrencies = new Map<string, KnownCurrency>();   // token → entry  (public registry: everyone's declarations)
-
-// Rendezvous: locked notes are reserved for an in-flight proposal. They are
-// NOT in noteStore (so /note pass etc. don't see them), but they are still
-// "mine" — released back to noteStore on abort/timeout, consumed on commit.
 interface LockedNote extends NoteEntry { proposalId: string; lockedAt: number }
 type ProposalRole = "proposer" | "participant";
 type ProposalStatus = "pending" | "accepted" | "rejected";
 interface ProposalState {
   proposal: Proposal;
   role: ProposalRole;
-  myStatus: ProposalStatus;       // for participants — proposer is implicitly "accepted"
-  acceptedBy: Map<string, string>; // proposer view: participantId → committed gives-token
+  myStatus: ProposalStatus;
+  acceptedBy: Map<string, string>;
 }
-const lockedNotes      = new Map<string, LockedNote>();    // token → locked entry
-const proposals        = new Map<string, ProposalState>();  // proposal id → state
-const proposalTimers   = new Map<string, number>();         // proposal id → setTimeout handle
-
-const RDV_TIMEOUT_MS = 60_000;
-
-// Dyncap: hash-only dynamic capabilities. The seed is per-device (cross-room);
-// chain state (per-peer TOFU anchor + seq + witness ring) is per-room.
-let dyncapState: DynCapState | null = null;            // mine — initialized in init()
-const dyncapChains = new Map<string, ChainEntry>();    // peerId → chain state on receivers
-// Promise queue to serialize outbound signed envelopes (preserves seq ordering).
-let signQueue: Promise<void> = Promise.resolve();
-
-// Discrepancy-detection probe window. Opens on signaling connect; collects
-// inbound sync envelopes; closes after PROBE_WINDOW_MS or after observations
-// from SAMPLE_SIZE distinct peers. On close: tally majority per key, apply
-// winners, broadcast state-discrepancy for contested keys, and add losing
-// peers to ignoredForSync so their future sync contributions are dropped.
 interface ProbeWindow {
   open: boolean;
   observations: Observation[];
-  contributors: Set<string>;     // peerIds whose snapshot we've recorded
+  contributors: Set<string>;
   timer: number | null;
 }
+
+const RDV_TIMEOUT_MS = 60_000;
+
+// Each room is its own Markov blanket — independent state, independent
+// dyncap chain trajectory (seqs tracked in dyncapState.seqByRoom), independent
+// signaling/data-channel connection. RoomContext holds everything per-room.
+interface RoomContext {
+  roomId: string;
+  qpeer: QOSPeer | null;
+  // Peers + transport
+  peers: Set<string>;
+  peerNames: Map<string, string>;
+  pendingLeaves: Map<string, ReturnType<typeof setTimeout>>;
+  // Lemma + note stores (the public room knowledge)
+  lemmaStore: Map<string, LemmaEntry>;
+  currencyTokens: Map<string, string>;
+  noteStore: Map<string, NoteEntry>;
+  receiptStore: Map<string, ReceiptEntry>;
+  redemptionsHonored: Map<string, RedemptionRecord>;
+  knownCurrencies: Map<string, KnownCurrency>;
+  // Rendezvous
+  lockedNotes: Map<string, LockedNote>;
+  proposals: Map<string, ProposalState>;
+  proposalTimers: Map<string, number>;
+  // Dyncap chain state (receiver-side TOFU)
+  dyncapChains: Map<string, ChainEntry>;
+  // Discrepancy probe + losing-peers ignore set
+  probe: ProbeWindow;
+  ignoredForSync: Set<string>;
+}
+
+function createRoom(roomId: string): RoomContext {
+  return {
+    roomId,
+    qpeer: null,
+    peers: new Set(),
+    peerNames: new Map(),
+    pendingLeaves: new Map(),
+    lemmaStore: new Map(),
+    currencyTokens: new Map(),
+    noteStore: new Map(),
+    receiptStore: new Map(),
+    redemptionsHonored: new Map(),
+    knownCurrencies: new Map(),
+    lockedNotes: new Map(),
+    proposals: new Map(),
+    proposalTimers: new Map(),
+    dyncapChains: new Map(),
+    probe: { open: false, observations: [], contributors: new Set(), timer: null },
+    ignoredForSync: new Set(),
+  };
+}
+
+const rooms = new Map<string, RoomContext>();   // roomId → context (all joined rooms)
+// Definite-assignment assertion: setActiveRoom is called once at init() before
+// any other code reads activeRoom, and never set back to undefined.
+let activeRoom!: RoomContext;
+
+// Module-level aliases for the active room's state. Existing code paths read
+// from these names; they are reassigned on `setActiveRoom` to point at the new
+// active room. JavaScript looks up `let` bindings at call time, so all
+// references see the active room's data automatically.
+let qpeer: QOSPeer | null = null;
+let peers: Set<string> = new Set();
+let peerNames: Map<string, string> = new Map();
+let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
+let lemmaStore: Map<string, LemmaEntry> = new Map();
+let currencyTokens: Map<string, string> = new Map();
+let noteStore: Map<string, NoteEntry> = new Map();
+let receiptStore: Map<string, ReceiptEntry> = new Map();
+let redemptionsHonored: Map<string, RedemptionRecord> = new Map();
+let knownCurrencies: Map<string, KnownCurrency> = new Map();
+let lockedNotes: Map<string, LockedNote> = new Map();
+let proposals: Map<string, ProposalState> = new Map();
+let proposalTimers: Map<string, number> = new Map();
+let dyncapChains: Map<string, ChainEntry> = new Map();
 let probe: ProbeWindow = { open: false, observations: [], contributors: new Set(), timer: null };
-const ignoredForSync = new Set<string>();    // peerIds whose sync contributions we drop
+let ignoredForSync: Set<string> = new Set();
+
+function setActiveRoom(ctx: RoomContext): void {
+  activeRoom = ctx;
+  if (!rooms.has(ctx.roomId)) rooms.set(ctx.roomId, ctx);
+  qpeer              = ctx.qpeer;
+  peers              = ctx.peers;
+  peerNames          = ctx.peerNames;
+  pendingLeaves      = ctx.pendingLeaves;
+  lemmaStore         = ctx.lemmaStore;
+  currencyTokens     = ctx.currencyTokens;
+  noteStore          = ctx.noteStore;
+  receiptStore       = ctx.receiptStore;
+  redemptionsHonored = ctx.redemptionsHonored;
+  knownCurrencies    = ctx.knownCurrencies;
+  lockedNotes        = ctx.lockedNotes;
+  proposals          = ctx.proposals;
+  proposalTimers     = ctx.proposalTimers;
+  dyncapChains       = ctx.dyncapChains;
+  probe              = ctx.probe;
+  ignoredForSync     = ctx.ignoredForSync;
+}
+
+// Mutate both the active-room's qpeer and the module-level alias in lockstep.
+// Used by connect() / disconnect to keep activeRoom.qpeer consistent.
+function setQpeer(p: QOSPeer | null): void {
+  qpeer = p;
+  activeRoom.qpeer = p;
+}
 
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
@@ -1731,7 +1803,7 @@ function handleCommand(raw: string): string[] {
 function connect(): void {
   if (qpeer) {
     qpeer.disconnect();
-    qpeer = null;
+    setQpeer(null);
     peers.clear();
     peerNames.clear();
     renderPeers();
@@ -1749,7 +1821,7 @@ function connect(): void {
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
   connectBtn.textContent = "Disconnect";
 
-  qpeer = new QOSPeer({
+  setQpeer(new QOSPeer({
     signalingUrl,
     roomId,
     iceServers: stunUrl ? [{ urls: stunUrl }] : undefined,
@@ -2214,9 +2286,9 @@ function connect(): void {
       }, 6_000);
       pendingLeaves.set(id, timer);
     },
-  });
+  }));
 
-  qpeer.connect();
+  qpeer?.connect();
 }
 
 // ---------------------------------------------------------------------------
@@ -2284,6 +2356,9 @@ async function init(): Promise<void> {
   const roomId = getRoomId();
   roomIdEl.textContent = roomId;
   updateShareLink();
+
+  // The URL-hash room is the first joined room and becomes the active one.
+  setActiveRoom(createRoom(roomId));
 
   // Restore saved name
   myNameEl.value = myName;
