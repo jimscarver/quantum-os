@@ -10,6 +10,9 @@ import { newProposalId, conservationCheck,
 import { newDynCapState, signEnvelope, verifyEnvelope,
          serializeState, deserializeState, serializeChain, deserializeChain,
          type DynCapState, type ChainEntry, type DyncapField, type VerifyResult } from "./dyncap.js";
+import { findDiscrepancies, losingPeersIn, normalizeValue,
+         SAMPLE_SIZE, PROBE_WINDOW_MS,
+         type Observation } from "./probe.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -109,6 +112,20 @@ const dyncapChains = new Map<string, ChainEntry>();    // peerId → chain state
 // Promise queue to serialize outbound signed envelopes (preserves seq ordering).
 let signQueue: Promise<void> = Promise.resolve();
 
+// Discrepancy-detection probe window. Opens on signaling connect; collects
+// inbound sync envelopes; closes after PROBE_WINDOW_MS or after observations
+// from SAMPLE_SIZE distinct peers. On close: tally majority per key, apply
+// winners, broadcast state-discrepancy for contested keys, and add losing
+// peers to ignoredForSync so their future sync contributions are dropped.
+interface ProbeWindow {
+  open: boolean;
+  observations: Observation[];
+  contributors: Set<string>;     // peerIds whose snapshot we've recorded
+  timer: number | null;
+}
+let probe: ProbeWindow = { open: false, observations: [], contributors: new Set(), timer: null };
+const ignoredForSync = new Set<string>();    // peerIds whose sync contributions we drop
+
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
   return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
 }
@@ -147,6 +164,7 @@ function saveNotes(): void {
   localStorage.setItem(`qos-redemptions-${room}`,      JSON.stringify(Object.fromEntries(redemptionsHonored)));
   localStorage.setItem(`qos-known-currencies-${room}`, JSON.stringify(Object.fromEntries(knownCurrencies)));
   localStorage.setItem(`qos-locked-notes-${room}`,     JSON.stringify(Object.fromEntries(lockedNotes)));
+  localStorage.setItem(`qos-ignored-sync-${room}`,     JSON.stringify(Array.from(ignoredForSync)));
 }
 
 function saveDyncap(): void {
@@ -223,6 +241,108 @@ async function verifyDyncapIfPresent(from: string, d: Record<string, unknown>): 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Probe window — joiner-local majority resolution of state discrepancies
+// ---------------------------------------------------------------------------
+
+function openProbeWindow(): void {
+  if (probe.open) return;
+  probe = { open: true, observations: [], contributors: new Set(), timer: null };
+  probe.timer = setTimeout(closeProbeWindow, PROBE_WINDOW_MS) as unknown as number;
+}
+
+function recordSyncObservations(from: string, lemmas: Array<{ name?: string; twists?: string; cap?: string; who?: string }>,
+                                currencies: Array<{ currency?: string; token?: string; issuer?: string }>): void {
+  if (!probe.open) return;
+  if (probe.contributors.size >= SAMPLE_SIZE && !probe.contributors.has(from)) return;
+  probe.contributors.add(from);
+  for (const e of lemmas) {
+    if (!e.name || !e.twists) continue;
+    probe.observations.push({
+      storeName: "lemmas",
+      key: e.name,
+      value: normalizeValue({ twists: e.twists, cap: e.cap ?? null }, []),
+      peer: from,
+    });
+  }
+  for (const e of currencies) {
+    if (!e.currency || !e.token) continue;
+    probe.observations.push({
+      storeName: "currencies",
+      key: e.token,
+      value: normalizeValue({ currency: e.currency, issuer: e.issuer ?? null }, []),
+      peer: from,
+    });
+  }
+  if (probe.contributors.size >= SAMPLE_SIZE) closeProbeWindow();
+}
+
+function closeProbeWindow(): void {
+  if (!probe.open) return;
+  probe.open = false;
+  if (probe.timer !== null) { clearTimeout(probe.timer); probe.timer = null; }
+
+  const discrepancies = findDiscrepancies(probe.observations);
+  if (discrepancies.length === 0) return;
+
+  let applied = 0;
+  for (const d of discrepancies) {
+    const winner = JSON.parse(d.winner) as Record<string, unknown>;
+    if (d.storeName === "lemmas") {
+      const existing = lemmaStore.get(d.key);
+      const expectedValue = existing ? normalizeValue({ twists: existing.twists, cap: existing.cap ?? null }, []) : null;
+      if (expectedValue !== d.winner) {
+        lemmaStore.set(d.key, {
+          twists: String(winner.twists ?? ""),
+          who: existing?.who ?? "(majority)",
+          cap: winner.cap === null ? undefined : winner.cap as string | undefined,
+          dyncap: existing?.dyncap,
+        });
+        applied++;
+      }
+    } else {
+      const existing = knownCurrencies.get(d.key);
+      const expectedValue = existing ? normalizeValue({ currency: existing.currency, issuer: existing.issuer ?? null }, []) : null;
+      if (expectedValue !== d.winner) {
+        knownCurrencies.set(d.key, {
+          currency: String(winner.currency ?? ""),
+          token: d.key,
+          issuer: String(winner.issuer ?? "(majority)"),
+          dyncap: existing?.dyncap,
+        });
+        applied++;
+      }
+    }
+    // Broadcast the discrepancy so the room sees the disagreement.
+    signedBroadcast({
+      kind: "state-discrepancy",
+      storeName: d.storeName,
+      key: d.key,
+      observations: d.observations,
+      winner: winner,
+    });
+    addMessage("", `⚠ state discrepancy on ${d.storeName}/${d.key} — applied majority view (${d.observations[0].count} vs ${d.observations.slice(1).map(o => o.count).join(", ")})`, "system");
+  }
+
+  // Losing nodes are ignored: their future sync envelopes are dropped.
+  const losers = losingPeersIn(discrepancies);
+  if (losers.size > 0) {
+    for (const peer of losers) {
+      ignoredForSync.add(peer);
+      addMessage("", `  · ignoring future sync from ${peerLabel(peer)} (losing observer)`, "system");
+    }
+  }
+
+  if (applied > 0) {
+    saveLemmas();
+    saveNotes();
+    renderLemmas();
+    renderNotes();
+  } else {
+    saveNotes();   // persist ignoredForSync even if no winners changed local state
+  }
+}
+
 function loadNotes(): void {
   const room = getRoomId();
   const tryLoad = <T>(key: string, set: (k: string, v: T) => void) => {
@@ -242,6 +362,14 @@ function loadNotes(): void {
   const dynChainRaw = localStorage.getItem(`qos-dyncap-chains-${room}`);
   if (dynChainRaw) {
     for (const [k, v] of deserializeChain(dynChainRaw)) dyncapChains.set(k, v);
+  }
+  // Ignored-for-sync peers (per-room): peers whose snapshots lost a vote.
+  const ignoredRaw = localStorage.getItem(`qos-ignored-sync-${room}`);
+  if (ignoredRaw) {
+    try {
+      const list = JSON.parse(ignoredRaw) as string[];
+      if (Array.isArray(list)) for (const p of list) ignoredForSync.add(p);
+    } catch { /* ignore */ }
   }
   // Locked notes from a previous session are orphans: their proposal state
   // lived in memory only and is gone after reload. Release each back to the
@@ -734,6 +862,7 @@ function handleCommand(raw: string): string[] {
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
+      sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -1505,6 +1634,29 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "probe": {
+      const sub = (arg.trim().split(/\s+/)[0] || "status").toLowerCase();
+      if (sub === "status") {
+        sys(`probe window: ${probe.open ? "open" : "closed"}`);
+        if (probe.open) {
+          sys(`  contributors so far: ${probe.contributors.size}/${SAMPLE_SIZE}`);
+          sys(`  observations: ${probe.observations.length}`);
+        }
+        sys(`ignored-for-sync peers (${ignoredForSync.size}):`);
+        for (const p of ignoredForSync) sys(`  ${peerLabel(p)}  (${p.slice(0, 16)}…)`);
+      } else if (sub === "clear") {
+        const n = ignoredForSync.size;
+        ignoredForSync.clear();
+        saveNotes();
+        sys(`cleared ${n} ignored-for-sync entries`);
+      } else {
+        sys(`unknown subcommand: /probe ${sub}`);
+        sys("  /probe [status]  — show probe window state and ignored peers");
+        sys("  /probe clear     — clear the ignored-for-sync list");
+      }
+      break;
+    }
+
     case "dyncap": {
       const sub = (arg.trim().split(/\s+/)[0] || "status").toLowerCase();
       if (sub === "whoami" || sub === "status") {
@@ -1570,6 +1722,10 @@ function connect(): void {
       renderPeers();
       toggleSidebar(false);   // free the chat once connected (no-op on desktop)
       addMessage("", `joined room ${shortId(roomId)}`, "system");
+      // Open the probe window so the first SAMPLE_SIZE sync envelopes from
+      // existing peers contribute to majority-resolution. Window auto-closes
+      // after PROBE_WINDOW_MS or once we've collected from SAMPLE_SIZE peers.
+      openProbeWindow();
     },
     onSignalingClose() {
       setStatus("connecting", "reconnecting…");
@@ -1759,8 +1915,15 @@ function connect(): void {
         if (d.kind === "sync-lemmas") {
           const raw = d.entries;
           if (!Array.isArray(raw)) return;
+          if (ignoredForSync.has(from)) {
+            addMessage("", `  · dropped sync-lemmas from ${peerLabel(from)} (ignored: losing observer)`, "system");
+            return;
+          }
           const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField }>;
           const who = peerLabel(from);
+          // Record observations for the probe window even when we also apply.
+          // Pair with sync-currencies if it arrives in the same handshake.
+          if (probe.open) recordSyncObservations(from, entries, []);
           let added = 0;
           for (const e of entries) {
             const name   = String(e.name   ?? "").trim();
@@ -1783,8 +1946,13 @@ function connect(): void {
         if (d.kind === "sync-currencies") {
           const raw = d.entries;
           if (!Array.isArray(raw)) return;
+          if (ignoredForSync.has(from)) {
+            addMessage("", `  · dropped sync-currencies from ${peerLabel(from)} (ignored: losing observer)`, "system");
+            return;
+          }
           const entries = raw as Array<{ currency?: string; token?: string; issuer?: string; dyncap?: DyncapField }>;
           const who = peerLabel(from);
+          if (probe.open) recordSyncObservations(from, [], entries);
           let added = 0;
           for (const e of entries) {
             const currency = String(e.currency ?? "").trim();
@@ -1803,6 +1971,18 @@ function connect(): void {
             addMessage(from, `sync`, "peer", who);
             addMessage("", `  · synced ${added} currenc${added === 1 ? "y" : "ies"} from ${who}`, "system");
           }
+          return;
+        }
+        if (d.kind === "state-discrepancy") {
+          await verifyDyncapIfPresent(from, d);
+          const storeName = String(d.storeName ?? "");
+          const key       = String(d.key       ?? "");
+          const obsRaw    = d.observations;
+          const observations = Array.isArray(obsRaw) ? obsRaw as Array<{ peers: string[]; count: number }> : [];
+          const winnerCount = observations[0]?.count ?? 0;
+          const minorityCounts = observations.slice(1).map(o => o.count).join(", ");
+          addMessage(from, `⚠ discrepancy on ${storeName}/${key}`, "peer", peerLabel(from));
+          addMessage("", `  · majority view (${winnerCount} vs ${minorityCounts}) declared winner by ${peerLabel(from)}`, "system");
           return;
         }
         if (d.kind === "rdv-propose") {
@@ -2006,7 +2186,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
