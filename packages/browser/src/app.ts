@@ -175,7 +175,8 @@ function saveDyncap(): void {
 async function loadDyncap(): Promise<void> {
   const raw = localStorage.getItem("qos-dyncap-state");
   if (raw) {
-    const loaded = await deserializeState(raw);
+    // Pass the current room id so legacy single-seq state migrates cleanly.
+    const loaded = await deserializeState(raw, getRoomId());
     if (loaded) dyncapState = loaded;
   }
   if (!dyncapState) {
@@ -1694,9 +1695,13 @@ function handleCommand(raw: string): string[] {
       const sub = (arg.trim().split(/\s+/)[0] || "status").toLowerCase();
       if (sub === "whoami" || sub === "status") {
         if (!dyncapState) { sys("dyncap not initialized"); break; }
+        const currentRoom = getRoomId();
+        const seqHere = dyncapState.seqByRoom[currentRoom] ?? 0;
         sys(`dyncap anchor: cap:peer/dyn:${dyncapState.anchor}`);
-        sys(`  seq so far:   ${dyncapState.seq}`);
-        sys(`  chain peers:  ${dyncapChains.size}`);
+        sys(`  seq in this room: ${seqHere}`);
+        const roomCount = Object.keys(dyncapState.seqByRoom).length;
+        if (roomCount > 1) sys(`  rooms with chain history: ${roomCount}`);
+        sys(`  chain peers:      ${dyncapChains.size}`);
       } else if (sub === "peers") {
         if (dyncapChains.size === 0) { sys("no dyncap peers tracked yet"); break; }
         sys(`tracked peers (${dyncapChains.size}):`);

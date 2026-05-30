@@ -21,9 +21,9 @@
 /// borrowing a separate asymmetric primitive.
 
 export interface DynCapState {
-  seed: Uint8Array;   // private, never broadcast
-  anchor: string;     // hex of H(seed)
-  seq: number;        // last-used sequence (next broadcast uses seq + 1)
+  seed: Uint8Array;                       // private, never broadcast
+  anchor: string;                         // hex of H(seed) (same across rooms)
+  seqByRoom: Record<string, number>;      // roomId → last-used sequence (next broadcast uses +1)
 }
 
 export interface DyncapField {
@@ -143,22 +143,29 @@ export async function deriveAnchor(seed: Uint8Array): Promise<string> {
 
 export async function newDynCapState(seed?: Uint8Array): Promise<DynCapState> {
   const s = seed ?? generateSeed();
-  return { seed: s, anchor: await deriveAnchor(s), seq: 0 };
+  return { seed: s, anchor: await deriveAnchor(s), seqByRoom: {} };
+}
+
+export function nextSeqFor(state: DynCapState, roomId: string): number {
+  const current = state.seqByRoom[roomId] ?? 0;
+  return current + 1;
 }
 
 // ---------------------------------------------------------------------------
 // Signing & verification
 // ---------------------------------------------------------------------------
 
-/// Produce a dyncap field for an envelope. Mutates `state.seq` (increment).
-/// Caller attaches the returned field as `envelope.dyncap`.
+/// Produce a dyncap field for an envelope. Mutates `state.seqByRoom[roomId]`
+/// (increment). Each room maintains an independent seq counter — a peer's
+/// chain trajectory in one room is algebraically independent of any other
+/// room's. Caller attaches the returned field as `envelope.dyncap`.
 export async function signEnvelope(
   state: DynCapState,
   roomId: string,
   envelope: Record<string, unknown>,
 ): Promise<DyncapField> {
-  state.seq += 1;
-  const seq = state.seq;
+  const seq = nextSeqFor(state, roomId);
+  state.seqByRoom[roomId] = seq;
   const pH = await payloadHash(envelope);
   const witness = await sha256(concatBytes(
     state.seed,
@@ -242,21 +249,40 @@ export async function verifyEnvelope(
 // ---------------------------------------------------------------------------
 
 export function serializeState(state: DynCapState): string {
-  return JSON.stringify({ seed: toHex(state.seed), anchor: state.anchor, seq: state.seq });
+  return JSON.stringify({
+    seed: toHex(state.seed),
+    anchor: state.anchor,
+    seqByRoom: state.seqByRoom,
+  });
 }
 
-export async function deserializeState(raw: string): Promise<DynCapState | null> {
+/// Accepts the new shape (`{ seed, anchor, seqByRoom }`) and the legacy shape
+/// (`{ seed, anchor, seq }`). On legacy data, `seq` is migrated into
+/// `seqByRoom` under the caller-provided `currentRoomId` so the in-flight
+/// chain isn't lost.
+export async function deserializeState(raw: string, currentRoomId?: string): Promise<DynCapState | null> {
   try {
-    const data = JSON.parse(raw) as { seed?: string; anchor?: string; seq?: number };
+    const data = JSON.parse(raw) as {
+      seed?: string;
+      anchor?: string;
+      seq?: number;
+      seqByRoom?: Record<string, number>;
+    };
     if (typeof data.seed !== "string" || data.seed.length !== 64) return null;
     const seed = fromHex(data.seed);
     const anchor = typeof data.anchor === "string" && data.anchor.length === 64
       ? data.anchor
       : await deriveAnchor(seed);
-    const seq = typeof data.seq === "number" && Number.isFinite(data.seq) && data.seq >= 0
-      ? data.seq
-      : 0;
-    return { seed, anchor, seq };
+    let seqByRoom: Record<string, number> = {};
+    if (data.seqByRoom && typeof data.seqByRoom === "object") {
+      for (const [k, v] of Object.entries(data.seqByRoom)) {
+        if (typeof v === "number" && Number.isFinite(v) && v >= 0) seqByRoom[k] = v;
+      }
+    } else if (typeof data.seq === "number" && Number.isFinite(data.seq) && data.seq >= 0 && currentRoomId) {
+      // Legacy migration: a single seq counter becomes the active room's seq.
+      seqByRoom[currentRoomId] = data.seq;
+    }
+    return { seed, anchor, seqByRoom };
   } catch {
     return null;
   }
