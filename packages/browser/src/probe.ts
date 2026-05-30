@@ -17,6 +17,15 @@
 export const SAMPLE_SIZE = 5;       // collect up to this many distinct snapshots
 export const PROBE_WINDOW_MS = 5000; // close the window after this many ms
 
+// Supermajority threshold for resolution: winner must have *strictly more*
+// than NUM/DEN of the total tallied weight. Default 2/3 is the classical
+// Byzantine-fault-tolerance ratio (n = 3f+1 tolerates f). Without
+// classical BFT's signed-identity and global-ordering guarantees, this
+// just raises the attacker cost rather than proving tolerance, but the
+// arithmetic is the same.
+export const SUPERMAJORITY_NUM = 2;
+export const SUPERMAJORITY_DEN = 3;
+
 export type StoreName = "lemmas" | "currencies";
 
 export interface Observation {
@@ -24,27 +33,31 @@ export interface Observation {
   key: string;        // lemma name, or currency token
   value: string;      // JSON-encoded normalized value for set membership
   peer: string;       // sender's peer ID
+  weight: number;     // vote weight (dyncap chain depth; floor 1)
 }
 
 export interface DiscrepancyObservation {
   value: string;      // JSON-encoded (same as Observation.value)
   peers: string[];    // peer IDs that reported this value
-  count: number;
+  count: number;      // number of peers (== peers.length)
+  weight: number;     // sum of weights across these peers
 }
 
 export interface Discrepancy {
   storeName: StoreName;
   key: string;
-  observations: DiscrepancyObservation[]; // sorted by count desc
-  winner: string;     // JSON-encoded winning value
+  observations: DiscrepancyObservation[]; // sorted by weight desc
+  winner: string | null;  // JSON-encoded winning value, or null if no supermajority
+  totalWeight: number;
 }
 
 /// Group observations by (storeName, key); for keys where more than one
-/// distinct value was reported, return a Discrepancy. The first element of
-/// each `observations` array is the winner (most-voted; ties broken by
-/// first-seen order in the input).
+/// distinct value was reported, return a Discrepancy. Weights are summed
+/// across peers reporting the same value; the leading observation wins
+/// only if its weight strictly exceeds the supermajority threshold. Ties
+/// or sub-threshold leaders yield `winner: null` (contested, unresolved).
 export function findDiscrepancies(observations: Observation[]): Discrepancy[] {
-  const byKey = new Map<string, Map<string, Set<string>>>();
+  const byKey = new Map<string, Map<string, { peers: Set<string>; weight: number }>>();
   // Insertion-order preservation: track first-seen value per key.
   const firstSeen = new Map<string, string>();
 
@@ -52,33 +65,41 @@ export function findDiscrepancies(observations: Observation[]): Discrepancy[] {
     const groupKey = `${obs.storeName}::${obs.key}`;
     let valueMap = byKey.get(groupKey);
     if (!valueMap) { valueMap = new Map(); byKey.set(groupKey, valueMap); }
-    let peerSet = valueMap.get(obs.value);
-    if (!peerSet) {
-      peerSet = new Set();
-      valueMap.set(obs.value, peerSet);
+    let bucket = valueMap.get(obs.value);
+    if (!bucket) {
+      bucket = { peers: new Set(), weight: 0 };
+      valueMap.set(obs.value, bucket);
       if (!firstSeen.has(groupKey)) firstSeen.set(groupKey, obs.value);
     }
-    peerSet.add(obs.peer);
+    if (!bucket.peers.has(obs.peer)) {
+      bucket.peers.add(obs.peer);
+      bucket.weight += Math.max(1, obs.weight);
+    }
   }
 
   const out: Discrepancy[] = [];
   for (const [groupKey, valueMap] of byKey) {
     if (valueMap.size < 2) continue;
     const [storeName, key] = groupKey.split("::") as [StoreName, string];
-    const observations: DiscrepancyObservation[] = Array.from(valueMap.entries())
-      .map(([value, peers]) => ({ value, peers: Array.from(peers), count: peers.size }))
+    const dObs: DiscrepancyObservation[] = Array.from(valueMap.entries())
+      .map(([value, bucket]) => ({
+        value, peers: Array.from(bucket.peers),
+        count: bucket.peers.size, weight: bucket.weight,
+      }))
       .sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        // Tie-break by first-seen order — earlier wins
+        if (b.weight !== a.weight) return b.weight - a.weight;
+        if (b.count  !== a.count ) return b.count  - a.count;
+        // Final tie-break by first-seen order — earlier wins
         if (a.value === firstSeen.get(groupKey)) return -1;
         if (b.value === firstSeen.get(groupKey)) return  1;
         return 0;
       });
-    out.push({
-      storeName, key,
-      observations,
-      winner: observations[0].value,
-    });
+    const totalWeight = dObs.reduce((s, o) => s + o.weight, 0);
+    // Strict supermajority: leader.weight * DEN > totalWeight * NUM
+    const winner = dObs[0].weight * SUPERMAJORITY_DEN > totalWeight * SUPERMAJORITY_NUM
+      ? dObs[0].value
+      : null;
+    out.push({ storeName, key, observations: dObs, winner, totalWeight });
   }
   return out;
 }
@@ -86,10 +107,12 @@ export function findDiscrepancies(observations: Observation[]): Discrepancy[] {
 /// Collect peer IDs whose snapshot landed in a non-winning bucket of any
 /// discrepancy. These peers contributed values that lost the vote; per the
 /// "losing nodes are ignored" rule, their subsequent sync contributions are
-/// dropped going forward.
+/// dropped going forward. Discrepancies without a winner (no supermajority)
+/// produce no losers — the room has genuine disagreement and nobody loses.
 export function losingPeersIn(discrepancies: Discrepancy[]): Set<string> {
   const losers = new Set<string>();
   for (const d of discrepancies) {
+    if (d.winner === null) continue;
     // Index 0 is the winner; everything from index 1 onward lost.
     for (let i = 1; i < d.observations.length; i++) {
       for (const peer of d.observations[i].peers) losers.add(peer);

@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)**
+**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[Consensus →](Consensus.md)** · **[Security →](SECURITY.md)**
 
 ### How to create reality together
 
@@ -50,6 +50,7 @@ QLF slash commands:
   /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)
   /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)
   /dyncap [sub]    — hash-only dynamic capabilities (status|peers)
+  /probe [sub]     — joiner-local consensus probe (status|clear)
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -335,6 +336,19 @@ Trust ceiling: this is **TOFU plus chain-tamper / replay / fork detection**, not
 
 See [MultisigDemo.md](MultisigDemo.md) for a worked example combining `/dyncap` with `/rdv`.
 
+### `/probe [sub]`
+
+Joiner-local consensus probe — partial Byzantine-leaning resolution layered on top of the existing room-state sync. On `onSignalingOpen`, opens a probe window for `PROBE_WINDOW_MS` (5 s) that collects inbound `sync-lemmas` / `sync-currencies` envelopes from up to `SAMPLE_SIZE` (5) distinct peers. On close, for each contested key, the probe tallies a chain-weighted vote: each peer's vote weight is their dyncap `lastSeq` (floor 1), and the winning value must clear a strict `SUPERMAJORITY_NUM / SUPERMAJORITY_DEN` (2/3) of the total weight. Below threshold, `winner === null` and the key remains contested but is broadcast for the room's benefit; the joiner keeps their own local value. Above threshold, the joiner adopts the winner and adds the peers behind every losing bucket to `ignoredForSync` — their subsequent sync envelopes are silently dropped.
+
+| Subcommand | Effect |
+|---|---|
+| `/probe status` (or just `/probe`) | Show the probe window state and the per-room ignored-for-sync peer list. |
+| `/probe clear` | Clear the ignored-for-sync set (e.g., after manual reconciliation). |
+
+This is **not** classical BFT — there's no global agreement, no finality, no resolution that binds non-joining peers. Each new joiner reaches their own decision independently. The probe raises the attacker cost (sync forgery now needs supermajority weight, not first-arrival) but doesn't prove tolerance against coordinated, aged-identity Sybils. See [Consensus.md](Consensus.md) for the full protocol specification, threat analysis, and comparison with classical BFT.
+
+Lemmas are now content-addressed by name: `/lemma X ^v` refuses to re-declare `@X` with different twists, both locally and on inbound broadcast. The probe relies on this so that disagreement reflects genuine partition (or forgery) rather than accidental overwrite.
+
 Example flow (Alice has USD 100, Bob has EUR 100):
 
 ```
@@ -582,6 +596,8 @@ wasm_capability_valid(hex: string): boolean
 | N-party rendezvous | ✓ `/rdv swap`/`accept`/`reject`/`abort` with ZFA conservation over joint composition; token locking + 60s timeout |
 | Dynamic capabilities | ✓ `/dyncap` — hash-only chain identity; TOFU + fork-detection on `name`, `lemma`, `note-declare`; SHA-256 from `crypto.subtle` only |
 | Multisig (2-of-2) | ✓ `/dyncap`-anchored identity + `/rdv` atomic agreement; see MultisigDemo.md |
+| Joiner-local consensus probe | ✓ `/probe` — chain-weighted supermajority resolution on join; losing peers ignored for sync; see Consensus.md |
+| Lemma immutability | ✓ once `@name` is declared, re-declaration with different twists is refused locally and on inbound broadcast |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 

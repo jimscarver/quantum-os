@@ -256,6 +256,8 @@ function recordSyncObservations(from: string, lemmas: Array<{ name?: string; twi
   if (!probe.open) return;
   if (probe.contributors.size >= SAMPLE_SIZE && !probe.contributors.has(from)) return;
   probe.contributors.add(from);
+  // Weight by sender's dyncap chain depth; fresh peers get the minimum.
+  const weight = Math.max(1, dyncapChains.get(from)?.lastSeq ?? 1);
   for (const e of lemmas) {
     if (!e.name || !e.twists) continue;
     probe.observations.push({
@@ -263,6 +265,7 @@ function recordSyncObservations(from: string, lemmas: Array<{ name?: string; twi
       key: e.name,
       value: normalizeValue({ twists: e.twists, cap: e.cap ?? null }, []),
       peer: from,
+      weight,
     });
   }
   for (const e of currencies) {
@@ -272,6 +275,7 @@ function recordSyncObservations(from: string, lemmas: Array<{ name?: string; twi
       key: e.token,
       value: normalizeValue({ currency: e.currency, issuer: e.issuer ?? null }, []),
       peer: from,
+      weight,
     });
   }
   if (probe.contributors.size >= SAMPLE_SIZE) closeProbeWindow();
@@ -287,6 +291,22 @@ function closeProbeWindow(): void {
 
   let applied = 0;
   for (const d of discrepancies) {
+    const leader = d.observations[0];
+    const tally = `weight ${leader.weight} vs ${d.observations.slice(1).map(o => o.weight).join(", ")} · ${leader.count} vs ${d.observations.slice(1).map(o => o.count).join(", ")} peers`;
+    if (d.winner === null) {
+      // No supermajority. Surface the disagreement; do not modify local state.
+      signedBroadcast({
+        kind: "state-discrepancy",
+        storeName: d.storeName,
+        key: d.key,
+        observations: d.observations,
+        winner: null,
+        totalWeight: d.totalWeight,
+      });
+      addMessage("", `⚠ state discrepancy on ${d.storeName}/${d.key} — contested (no supermajority by weight); keeping local value`, "system");
+      addMessage("", `  · ${tally}`, "system");
+      continue;
+    }
     const winner = JSON.parse(d.winner) as Record<string, unknown>;
     if (d.storeName === "lemmas") {
       const existing = lemmaStore.get(d.key);
@@ -313,15 +333,15 @@ function closeProbeWindow(): void {
         applied++;
       }
     }
-    // Broadcast the discrepancy so the room sees the disagreement.
     signedBroadcast({
       kind: "state-discrepancy",
       storeName: d.storeName,
       key: d.key,
       observations: d.observations,
       winner: winner,
+      totalWeight: d.totalWeight,
     });
-    addMessage("", `⚠ state discrepancy on ${d.storeName}/${d.key} — applied majority view (${d.observations[0].count} vs ${d.observations.slice(1).map(o => o.count).join(", ")})`, "system");
+    addMessage("", `⚠ state discrepancy on ${d.storeName}/${d.key} — applied majority view (${tally})`, "system");
   }
 
   // Losing nodes are ignored: their future sync envelopes are dropped.
@@ -964,6 +984,19 @@ function handleCommand(raw: string): string[] {
       if (!checkTw || checkTw.length === 0) {
         sys(`cannot parse twists: '${resolvedTwistsStr}'`);
         sys("  valid: symbolic (^v<>/\\\\+-), hex digits 0-7, or cap:label:hex");
+        break;
+      }
+      // Lemmas are content-addressed by name. Once @name is declared, it
+      // binds to that value for the room's lifetime. Re-declaration with
+      // different content would silently corrupt the shared vocabulary.
+      const existing = lemmaStore.get(lemmaName);
+      if (existing && existing.twists !== resolvedTwistsStr) {
+        sys(`@${lemmaName} already declared with different twists (${existing.twists})`);
+        sys("  · refusing re-declaration; choose a new name");
+        break;
+      }
+      if (existing && existing.twists === resolvedTwistsStr) {
+        sys(`@${lemmaName} already declared (no change)`);
         break;
       }
       const { pos: lPos, neg: lNeg, balanced: lBal } = twistStats(checkTw);
@@ -1771,6 +1804,18 @@ function connect(): void {
           const cap = d.cap ? String(d.cap) : undefined;
           const who = peerLabel(from);
           const dyncap = (d.dyncap as DyncapField | undefined);
+          // Lemmas are content-addressed by name. First-write-wins: if we
+          // already have @name with different twists, refuse the new claim
+          // and surface the disagreement; the consensus probe will catch up.
+          const existing = lemmaStore.get(name);
+          if (existing && existing.twists !== twists) {
+            addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
+            addMessage("", `  ⚠ refused: @${name} already declared with different twists (${existing.twists})`, "system");
+            return;
+          }
+          if (existing && existing.twists === twists) {
+            return;   // idempotent re-broadcast, silent
+          }
           if (name && twists) {
             lemmaStore.set(name, { twists, who, cap, dyncap });
             addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
@@ -1978,11 +2023,17 @@ function connect(): void {
           const storeName = String(d.storeName ?? "");
           const key       = String(d.key       ?? "");
           const obsRaw    = d.observations;
-          const observations = Array.isArray(obsRaw) ? obsRaw as Array<{ peers: string[]; count: number }> : [];
-          const winnerCount = observations[0]?.count ?? 0;
-          const minorityCounts = observations.slice(1).map(o => o.count).join(", ");
+          const observations = Array.isArray(obsRaw) ? obsRaw as Array<{ peers: string[]; count: number; weight: number }> : [];
+          const winnerLeader = observations[0];
+          const tally = winnerLeader
+            ? `weight ${winnerLeader.weight} vs ${observations.slice(1).map(o => o.weight).join(", ")} · ${winnerLeader.count} vs ${observations.slice(1).map(o => o.count).join(", ")} peers`
+            : "no observations";
           addMessage(from, `⚠ discrepancy on ${storeName}/${key}`, "peer", peerLabel(from));
-          addMessage("", `  · majority view (${winnerCount} vs ${minorityCounts}) declared winner by ${peerLabel(from)}`, "system");
+          if (d.winner === null || d.winner === undefined) {
+            addMessage("", `  · contested by ${peerLabel(from)} (no supermajority); ${tally}`, "system");
+          } else {
+            addMessage("", `  · supermajority winner declared by ${peerLabel(from)}; ${tally}`, "system");
+          }
           return;
         }
         if (d.kind === "rdv-propose") {

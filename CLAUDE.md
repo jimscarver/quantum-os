@@ -37,6 +37,7 @@ quantum-os/
 │   │       ├── notes.ts    Promissory note primitives (mint, split, merge, parseNoteLabel, denomination)
 │   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
 │   │       ├── dyncap.ts   Hash-only dynamic capabilities (sign/verify envelopes; SHA-256 only)
+│   │       ├── probe.ts    Discrepancy probe — chain-weighted supermajority tally on join
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
 │   │   └── src/
@@ -150,6 +151,28 @@ Currently signed: `name`, `lemma`, `note-declare`, `sync-lemmas`, `sync-currenci
 
 Trust ceiling: TOFU at first contact + chain-tamper / replay / fork detection. Cannot mathematically verify the seed (hash-only). Race condition if a clone broadcasts before the real holder. Cross-room continuity not provided. See SECURITY.md for full threat enumeration.
 
+### Discrepancy probe — joiner-local supermajority (`/probe` — `probe.ts` + `app.ts`)
+
+Partial-consensus layer that runs when a peer joins a room. The full reference doc is [Consensus.md](Consensus.md); the implementation summary for code work:
+
+State (per room, joiner only):
+- `probe: ProbeWindow` — `{ open, observations: Observation[], contributors: Set<peerId>, timer }`. Opened in `onSignalingOpen`, closes on `PROBE_WINDOW_MS` (5000) timeout or after `SAMPLE_SIZE` (5) distinct senders.
+- `ignoredForSync: Set<peerId>` — peers whose sync envelopes are silently dropped (persisted under `qos-ignored-sync-{room}`).
+
+Constants in `probe.ts`: `SAMPLE_SIZE`, `PROBE_WINDOW_MS`, `SUPERMAJORITY_NUM = 2`, `SUPERMAJORITY_DEN = 3`.
+
+Observation shape: `{ storeName: "lemmas"|"currencies", key, value (JSON-normalized), peer, weight }`. Weight is `dyncapChains.get(peer)?.lastSeq ?? 1` (floor 1), captured by `recordSyncObservations` when each `sync-lemmas` / `sync-currencies` arrives during the window.
+
+`findDiscrepancies` groups by `(storeName, key)`; for each group it buckets by value, sums weights, sorts buckets by weight desc (count desc, first-seen as tiebreak). The leading bucket's value becomes the `winner` only if `leader.weight × DEN > totalWeight × NUM` (strict supermajority). Otherwise `winner: null` (contested, unresolved). `losingPeersIn` returns peers in non-winner buckets only for *resolved* discrepancies — contested discrepancies produce no losers.
+
+On close, `closeProbeWindow`:
+- For each resolved discrepancy: apply the winner to `lemmaStore` / `knownCurrencies` locally, broadcast `state-discrepancy { ..., winner: <object> }`, add losers to `ignoredForSync`.
+- For each contested discrepancy: broadcast `state-discrepancy { ..., winner: null }`, no local change, no losers added.
+
+The `state-discrepancy` inbound handler logs the broadcast on receipt; non-joining peers do *not* auto-update on receipt (joiner-local resolution).
+
+**Critical preflight: lemma immutability.** Once `@name` is in `lemmaStore`, both the `case "lemma"` dispatcher and the inbound `lemma` handler refuse a re-declaration with different `twists` (idempotent re-declare is silently a no-op). Without this, the probe's notion of "discrepancy" would be meaningless — peers could just overwrite each other's lemma state. The fix is in `app.ts` around the existing dispatcher block and the inbound handler.
+
 ### Room state sync on data channel open
 
 When a new data channel opens (`onChannelOpen(peerId)` in `connect()`), the peer sends the new arrival:
@@ -196,10 +219,11 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
+| `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, and dyncap subcommands send purpose-specific envelopes (`note-declare`, `rdv-propose`, dyncap-signed `lemma` / `name` / `note-declare` / `sync-*`, …) so a generic qlf rebroadcast would be redundant.
+Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, dyncap, and probe subcommands send purpose-specific envelopes (`note-declare`, `rdv-propose`, dyncap-signed `lemma` / `name` / `note-declare` / `sync-*`, `state-discrepancy`, …) so a generic qlf rebroadcast would be redundant.
 
 ---
 
@@ -268,6 +292,8 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/notes.ts` | Note primitives (mintNote, splitNote, mergeNotes, parseNoteLabel, denomination) |
 | `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
 | `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
+| `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
+| `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
 | `packages/browser/index.html` | Layout, CSS, sidebar structure |
