@@ -1821,7 +1821,7 @@ function connect(): void {
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
   connectBtn.textContent = "Disconnect";
 
-  setQpeer(new QOSPeer({
+  const newPeer = new QOSPeer({
     signalingUrl,
     roomId,
     iceServers: stunUrl ? [{ urls: stunUrl }] : undefined,
@@ -2286,9 +2286,9 @@ function connect(): void {
       }, 6_000);
       pendingLeaves.set(id, timer);
     },
-  }));
-
-  qpeer?.connect();
+  });
+  setQpeer(newPeer);
+  newPeer.connect();
 }
 
 // ---------------------------------------------------------------------------
