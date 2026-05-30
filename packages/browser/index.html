@@ -40,6 +40,59 @@
       cursor: pointer;
     }
 
+    .tab-bar {
+      display: flex;
+      align-items: stretch;
+      background: #0a0a0a;
+      border-bottom: 1px solid #222;
+      min-height: 2rem;
+    }
+    .tab-list {
+      display: flex;
+      flex: 1;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.7rem;
+      color: #888;
+      border-right: 1px solid #1a1a1a;
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
+      max-width: 16rem;
+    }
+    .tab:hover { color: #ccc; background: #111; }
+    .tab.active { color: #7fdbca; background: #111; border-bottom: 2px solid #7fdbca; padding-bottom: calc(0.35rem - 2px); }
+    .tab .tab-label { overflow: hidden; text-overflow: ellipsis; }
+    .tab .tab-close {
+      background: none;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 0.9rem;
+      line-height: 1;
+      padding: 0 0.2rem;
+      opacity: 0.5;
+    }
+    .tab .tab-close:hover { opacity: 1; color: #ff9d4a; }
+    .tab-add {
+      background: none;
+      border: none;
+      border-left: 1px solid #1a1a1a;
+      color: #7fdbca;
+      cursor: pointer;
+      padding: 0 0.8rem;
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    .tab-add:hover { background: #111; color: #aae0d5; }
+
     .layout {
       display: flex;
       flex: 1;
@@ -242,6 +295,11 @@
   </header>
 
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <div id="tab-bar" class="tab-bar">
+    <div id="tab-list" class="tab-list"></div>
+    <button id="tab-add" class="tab-add" title="Join another room…">+</button>
+  </div>
 
   <div class="layout">
     <div class="sidebar" id="sidebar">

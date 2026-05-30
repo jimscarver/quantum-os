@@ -58,6 +58,8 @@ const currencyListEl  = document.getElementById("currency-list")!;
 const currencyCountEl = document.getElementById("currency-count")!;
 const noteListEl      = document.getElementById("note-list")!;
 const noteCountEl     = document.getElementById("note-count")!;
+const tabListEl       = document.getElementById("tab-list")!;
+const tabAddBtn       = document.getElementById("tab-add") as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -92,6 +94,10 @@ interface ProbeWindow {
   timer: number | null;
 }
 
+// Per-room chat history so tab switching can replay the messages area.
+type ChatKind = "peer" | "self" | "system";
+interface ChatLine { from: string; text: string; kind: ChatKind; label?: string }
+
 const RDV_TIMEOUT_MS = 60_000;
 
 // Each room is its own Markov blanket — independent state, independent
@@ -120,6 +126,10 @@ interface RoomContext {
   // Discrepancy probe + losing-peers ignore set
   probe: ProbeWindow;
   ignoredForSync: Set<string>;
+  // Chat history for this room (replayed on tab switch)
+  chatLog: ChatLine[];
+  // Persisted user-set name for this room's signaling connection (UI only)
+  signalingUrl: string;
 }
 
 function createRoom(roomId: string): RoomContext {
@@ -141,6 +151,8 @@ function createRoom(roomId: string): RoomContext {
     dyncapChains: new Map(),
     probe: { open: false, observations: [], contributors: new Set(), timer: null },
     ignoredForSync: new Set(),
+    chatLog: [],
+    signalingUrl: DEFAULT_SIGNAL,
   };
 }
 
@@ -215,11 +227,11 @@ function allocateTwists(name: string): Uint8Array {
 
 function saveLemmas(): void {
   const data = Object.fromEntries([...lemmaStore.entries()].map(([k, v]) => [k, v]));
-  localStorage.setItem(`qos-lemmas-${getRoomId()}`, JSON.stringify(data));
+  localStorage.setItem(`qos-lemmas-${activeRoom.roomId}`, JSON.stringify(data));
 }
 
 function loadLemmas(): void {
-  const raw = localStorage.getItem(`qos-lemmas-${getRoomId()}`);
+  const raw = localStorage.getItem(`qos-lemmas-${activeRoom.roomId}`);
   if (!raw) return;
   try {
     const data = JSON.parse(raw) as Record<string, LemmaEntry>;
@@ -229,7 +241,7 @@ function loadLemmas(): void {
 }
 
 function saveNotes(): void {
-  const room = getRoomId();
+  const room = activeRoom.roomId;
   localStorage.setItem(`qos-currencies-${room}`,       JSON.stringify(Object.fromEntries(currencyTokens)));
   localStorage.setItem(`qos-notes-${room}`,            JSON.stringify(Object.fromEntries(noteStore)));
   localStorage.setItem(`qos-receipts-${room}`,         JSON.stringify(Object.fromEntries(receiptStore)));
@@ -241,14 +253,14 @@ function saveNotes(): void {
 
 function saveDyncap(): void {
   if (dyncapState) localStorage.setItem("qos-dyncap-state", serializeState(dyncapState));
-  localStorage.setItem(`qos-dyncap-chains-${getRoomId()}`, serializeChain(dyncapChains));
+  localStorage.setItem(`qos-dyncap-chains-${activeRoom.roomId}`, serializeChain(dyncapChains));
 }
 
 async function loadDyncap(): Promise<void> {
   const raw = localStorage.getItem("qos-dyncap-state");
   if (raw) {
-    // Pass the current room id so legacy single-seq state migrates cleanly.
-    const loaded = await deserializeState(raw, getRoomId());
+    // Pass the active room id so legacy single-seq state migrates cleanly.
+    const loaded = await deserializeState(raw, activeRoom.roomId);
     if (loaded) dyncapState = loaded;
   }
   if (!dyncapState) {
@@ -264,7 +276,7 @@ function signedBroadcast(envelope: Record<string, unknown>): void {
   signQueue = signQueue.then(async () => {
     if (!qpeer) return;
     if (!dyncapState) { qpeer.broadcast(envelope); return; }
-    const dyncap = await signEnvelope(dyncapState, getRoomId(), envelope);
+    const dyncap = await signEnvelope(dyncapState, activeRoom.roomId, envelope);
     saveDyncap();
     qpeer.broadcast({ ...envelope, dyncap });
   }).catch(() => { /* swallow signing errors so the queue keeps moving */ });
@@ -276,7 +288,7 @@ function signedSend(peerId: string, envelope: Record<string, unknown>): boolean 
   if (!qpeer) return false;
   signQueue = signQueue.then(async () => {
     if (!qpeer || !dyncapState) return;
-    const dyncap = await signEnvelope(dyncapState, getRoomId(), envelope);
+    const dyncap = await signEnvelope(dyncapState, activeRoom.roomId, envelope);
     saveDyncap();
     qpeer.send(peerId, { ...envelope, dyncap });
   }).catch(() => { /* swallow */ });
@@ -291,7 +303,7 @@ async function verifyDyncapIfPresent(from: string, d: Record<string, unknown>): 
   if (!raw || typeof raw !== "object") return "";
   const dyncap = raw as DyncapField;
   const prior = dyncapChains.get(from);
-  const result: VerifyResult = await verifyEnvelope(prior, getRoomId(), d, dyncap);
+  const result: VerifyResult = await verifyEnvelope(prior, activeRoom.roomId, d, dyncap);
   switch (result.kind) {
     case "ok":
     case "tofu":
@@ -437,7 +449,7 @@ function closeProbeWindow(): void {
 }
 
 function loadNotes(): void {
-  const room = getRoomId();
+  const room = activeRoom.roomId;
   const tryLoad = <T>(key: string, set: (k: string, v: T) => void) => {
     const raw = localStorage.getItem(key);
     if (!raw) return;
@@ -505,21 +517,35 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
                          : "#555";
 }
 
-function addMessage(from: string, text: string, kind: "peer" | "self" | "system" = "peer", label?: string): void {
+function renderChatLine(line: ChatLine): void {
   const div = document.createElement("div");
-  div.className = `msg${kind === "system" ? " system-line" : ""}`;
+  div.className = `msg${line.kind === "system" ? " system-line" : ""}`;
   const fromEl = document.createElement("span");
-  fromEl.className = `from ${kind}`;
-  fromEl.textContent = kind === "system" ? "·"
-                     : kind === "self"   ? (myName || "you")
-                     : (label ?? shortId(from));
+  fromEl.className = `from ${line.kind}`;
+  fromEl.textContent = line.kind === "system" ? "·"
+                     : line.kind === "self"   ? (myName || "you")
+                     : (line.label ?? shortId(line.from));
   const textEl = document.createElement("span");
   textEl.className = "text";
-  textEl.textContent = text;
+  textEl.textContent = line.text;
   div.appendChild(fromEl);
   div.appendChild(textEl);
   messagesEl.appendChild(div);
+}
+
+function addMessage(from: string, text: string, kind: "peer" | "self" | "system" = "peer", label?: string): void {
+  const line: ChatLine = { from, text, kind, label };
+  activeRoom.chatLog.push(line);
+  renderChatLine(line);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Cap the per-room chat log so long sessions don't grow unbounded.
+const CHAT_LOG_MAX = 500;
+function trimChatLog(room: RoomContext): void {
+  if (room.chatLog.length > CHAT_LOG_MAX) {
+    room.chatLog.splice(0, room.chatLog.length - CHAT_LOG_MAX);
+  }
 }
 
 function shortId(id: string): string {
@@ -541,6 +567,152 @@ function findPeerByName(name: string): string | null {
     if (peerName.toLowerCase().startsWith(lower)) return id;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Tabs — multi-room substrate
+// ---------------------------------------------------------------------------
+
+function renderTabs(): void {
+  tabListEl.innerHTML = "";
+  for (const ctx of rooms.values()) {
+    const tab = document.createElement("div");
+    tab.className = "tab" + (ctx.roomId === activeRoom.roomId ? " active" : "");
+    tab.title = ctx.roomId;
+    const label = document.createElement("span");
+    label.className = "tab-label";
+    label.textContent = shortId(ctx.roomId);
+    tab.appendChild(label);
+    // Only show the close button when there's more than one tab open.
+    if (rooms.size > 1) {
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.textContent = "×";
+      close.title = "Close this room";
+      close.addEventListener("click", (e) => { e.stopPropagation(); closeRoomTab(ctx.roomId); });
+      tab.appendChild(close);
+    }
+    tab.addEventListener("click", () => { if (ctx.roomId !== activeRoom.roomId) switchToRoom(ctx.roomId); });
+    tabListEl.appendChild(tab);
+  }
+}
+
+// Switch the active room. Re-renders the whole UI to reflect the new room's
+// state. Does NOT disconnect existing connections — each tab keeps its
+// per-room qpeer; only the *active* tab's qpeer drives the visible UI.
+// (MVP constraint: even though qpeer is per-room in RoomContext, in practice
+// only one is connected at a time today.)
+function switchToRoom(roomId: string): void {
+  const next = rooms.get(roomId);
+  if (!next || next.roomId === activeRoom.roomId) return;
+  setActiveRoom(next);
+  applyActiveRoomToUI();
+}
+
+function applyActiveRoomToUI(): void {
+  // Sidebar identity / room display
+  roomIdEl.textContent = activeRoom.roomId;
+  // Signaling URL field reflects this room's last-used URL.
+  signalUrlEl.value = activeRoom.signalingUrl;
+  // Connect button reflects this room's qpeer state.
+  if (qpeer) {
+    connectBtn.textContent = "Disconnect";
+    setStatus("connected", `connected · ${activeRoom.signalingUrl}`);
+    msgInput.disabled = false;
+    sendBtn.disabled  = false;
+  } else {
+    connectBtn.textContent = "Connect";
+    setStatus("disconnected", "disconnected");
+    msgInput.disabled = true;
+    sendBtn.disabled  = true;
+  }
+  // Chat history replay
+  messagesEl.innerHTML = "";
+  for (const line of activeRoom.chatLog) renderChatLine(line);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  // Sidebar lists
+  renderPeers();
+  renderLemmas();
+  renderNotes();
+  // Share link + tab highlight
+  updateShareLink();
+  renderTabs();
+  // Update URL hash to the new active room
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  params.set("room", activeRoom.roomId);
+  history.replaceState(null, "", `#${params.toString()}`);
+}
+
+function openRoomTab(roomId: string): void {
+  // Idempotent: if already joined, just switch.
+  if (rooms.has(roomId)) { switchToRoom(roomId); return; }
+  const ctx = createRoom(roomId);
+  rooms.set(roomId, ctx);
+  // Load per-room persisted state from localStorage into the new context.
+  loadRoomState(ctx);
+  saveJoinedRooms();
+  switchToRoom(roomId);
+}
+
+function closeRoomTab(roomId: string): void {
+  if (!rooms.has(roomId)) return;
+  if (rooms.size <= 1) return;   // never close the last tab
+  const ctx = rooms.get(roomId)!;
+  // Tear down the connection if any.
+  if (ctx.qpeer) { ctx.qpeer.disconnect(); ctx.qpeer = null; }
+  rooms.delete(roomId);
+  saveJoinedRooms();
+  // If we closed the active one, pick another to activate.
+  if (activeRoom.roomId === roomId) {
+    const next = rooms.values().next().value as RoomContext;
+    setActiveRoom(next);
+    applyActiveRoomToUI();
+  } else {
+    renderTabs();
+  }
+}
+
+function saveJoinedRooms(): void {
+  const ids = Array.from(rooms.keys());
+  localStorage.setItem("qos-joined-rooms", JSON.stringify(ids));
+}
+
+function loadJoinedRooms(): string[] {
+  const raw = localStorage.getItem("qos-joined-rooms");
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+  } catch { return []; }
+}
+
+// Populate a RoomContext's stores from per-room localStorage. Re-uses the
+// existing load functions, which read via the module-level aliases — so we
+// briefly point them at `ctx` for the duration of the load.
+function loadRoomState(ctx: RoomContext): void {
+  const previousActive = activeRoom;
+  setActiveRoom(ctx);
+  loadLemmas();
+  loadNotes();
+  if (previousActive) setActiveRoom(previousActive);
+}
+
+/// Try to pull a cap:room:… token out of a user-pasted string. Accepts a
+/// raw token or a share URL whose hash carries room=cap:room:…
+function extractRoomCap(input: string): string | null {
+  const s = input.trim();
+  if (s.startsWith("cap:room:")) return s;
+  const m = s.match(/room=(cap:room:[0-7]+)/);
+  return m ? m[1] : null;
+}
+
+function promptJoinRoom(): void {
+  const input = prompt("Join room — paste a cap:room:… token or a share URL");
+  if (!input) return;
+  const roomId = extractRoomCap(input);
+  if (!roomId) { alert("Couldn't find a cap:room:… token in that input"); return; }
+  if (!validateCapability(roomId)) { alert("Invalid room cap (not ZFA-balanced)"); return; }
+  openRoomTab(roomId);
 }
 
 function renderRoomProcess(): void {
@@ -940,7 +1112,6 @@ function handleCommand(raw: string): string[] {
       sys("QLF slash commands:");
       sys("  /help            — show this help");
       sys("  /id              — your peer ID and ZFA proof");
-      sys("  /room            — room capability token");
       sys("  /cap [label]     — generate a new ZFA capability");
       sys("  /grant [label]   — generate and share a ZFA capability token");
       sys("  /zfa [token]     — validate a capability token");
@@ -956,6 +1127,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
+      sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -972,17 +1144,6 @@ function handleCommand(raw: string): string[] {
         sys(`  rho_process_always_zfa: ✓ (Lean-verified)`);
       } else {
         sys(`peer ID: ${id}`);
-      }
-      break;
-    }
-
-    case "room": {
-      const room = getRoomId();
-      const tw = tokenTwists(room);
-      sys(`room: ${room}`);
-      if (tw) {
-        const { pos, neg, gap, balanced } = twistStats(tw);
-        sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  gap: ${gap}  ZFA: ${balanced ? "✓" : "✗"}`);
       }
       break;
     }
@@ -1767,7 +1928,7 @@ function handleCommand(raw: string): string[] {
       const sub = (arg.trim().split(/\s+/)[0] || "status").toLowerCase();
       if (sub === "whoami" || sub === "status") {
         if (!dyncapState) { sys("dyncap not initialized"); break; }
-        const currentRoom = getRoomId();
+        const currentRoom = activeRoom.roomId;
         const seqHere = dyncapState.seqByRoom[currentRoom] ?? 0;
         sys(`dyncap anchor: cap:peer/dyn:${dyncapState.anchor}`);
         sys(`  seq in this room: ${seqHere}`);
@@ -1785,6 +1946,50 @@ function handleCommand(raw: string): string[] {
         sys(`unknown subcommand: /dyncap ${sub}`);
         sys("  /dyncap [status]  — show your anchor, current seq, tracked peer count");
         sys("  /dyncap peers     — list tracked peers with their pinned anchors");
+      }
+      break;
+    }
+
+    case "room": {
+      const rParts = arg.trim().split(/\s+/);
+      const sub = (rParts[0] || "list").toLowerCase();
+      if (sub === "list" || sub === "") {
+        const room = activeRoom.roomId;
+        const tw = tokenTwists(room);
+        sys(`active room: ${room}`);
+        if (tw) {
+          const { pos, neg, gap, balanced } = twistStats(tw);
+          sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  gap: ${gap}  ZFA: ${balanced ? "✓" : "✗"}`);
+        }
+        sys(`joined rooms (${rooms.size}):`);
+        for (const ctx of rooms.values()) {
+          const active = ctx.roomId === activeRoom.roomId ? " ←" : "";
+          const connected = ctx.qpeer ? "  ●" : "";
+          sys(`  ${shortId(ctx.roomId)}  ${ctx.roomId}${connected}${active}`);
+        }
+      } else if (sub === "join") {
+        const target = rParts.slice(1).join(" ").trim();
+        const roomId = extractRoomCap(target);
+        if (!roomId) { sys("usage: /room join <cap:room:…> | <share-url>"); break; }
+        if (!validateCapability(roomId)) { sys(`invalid room cap (not ZFA-balanced): ${roomId}`); break; }
+        openRoomTab(roomId);
+        sys(`joined room ${shortId(roomId)} (switched to new tab)`);
+      } else if (sub === "leave") {
+        if (rooms.size <= 1) { sys("cannot leave the last room"); break; }
+        const leavingId = activeRoom.roomId;
+        closeRoomTab(leavingId);
+        sys(`left room ${shortId(leavingId)}`);
+      } else if (sub === "ref") {
+        const target = rParts.slice(1).join(" ").trim();
+        const roomId = extractRoomCap(target) || activeRoom.roomId;
+        sys(`room: ${roomId}`);
+        sys(`  share URL: ${window.location.origin}${window.location.pathname}#room=${roomId}`);
+      } else {
+        sys(`unknown subcommand: /room ${sub}`);
+        sys("  /room list                       — list joined rooms");
+        sys("  /room join <cap:room:…|url>      — open a new tab for the named room");
+        sys("  /room leave                      — close the active tab");
+        sys("  /room ref [cap:room:…]           — print a shareable URL for a room");
       }
       break;
     }
@@ -1814,8 +2019,21 @@ function connect(): void {
     return;
   }
 
-  const roomId = getRoomId();
-  const signalingUrl = signalUrlEl.value.trim();
+  // MVP constraint: only one room may hold an active signaling connection
+  // at a time, otherwise inbound callbacks from other rooms' QOSPeers would
+  // race with the module-level state aliases that follow activeRoom. Before
+  // we connect this room, tear down any other room's qpeer.
+  for (const ctx of rooms.values()) {
+    if (ctx.roomId === activeRoom.roomId) continue;
+    if (ctx.qpeer) {
+      ctx.qpeer.disconnect();
+      ctx.qpeer = null;
+    }
+  }
+
+  const roomId = activeRoom.roomId;
+  const signalingUrl = signalUrlEl.value.trim() || DEFAULT_SIGNAL;
+  activeRoom.signalingUrl = signalingUrl;
   const stunUrl = stunUrlEl.value.trim();
 
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
@@ -2314,7 +2532,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -2358,7 +2576,9 @@ async function init(): Promise<void> {
   updateShareLink();
 
   // The URL-hash room is the first joined room and becomes the active one.
-  setActiveRoom(createRoom(roomId));
+  const firstRoom = createRoom(roomId);
+  rooms.set(roomId, firstRoom);
+  setActiveRoom(firstRoom);
 
   // Restore saved name
   myNameEl.value = myName;
@@ -2374,6 +2594,28 @@ async function init(): Promise<void> {
   loadLemmas();
   loadNotes();
 
+  // Restore any rooms the user had joined in previous sessions (besides the
+  // URL-hash one we already initialised). State for each is loaded from
+  // per-room localStorage. The hash-room remains active.
+  for (const otherRoomId of loadJoinedRooms()) {
+    if (otherRoomId === roomId) continue;
+    if (!validateCapability(otherRoomId)) continue;     // skip malformed
+    const ctx = createRoom(otherRoomId);
+    rooms.set(otherRoomId, ctx);
+    loadRoomState(ctx);
+  }
+  saveJoinedRooms();
+  // loadRoomState briefly switched aliases per room during restore; force the
+  // UI back to the hash-room's view so the sidebar reflects the active room.
+  setActiveRoom(firstRoom);
+  renderTabs();
+  renderPeers();
+  renderLemmas();
+  renderNotes();
+
+  // The tab-add button prompts for a cap:room:… URL or token.
+  tabAddBtn.addEventListener("click", () => promptJoinRoom());
+
   const cap = generateCapability("peer");
   myIdEl.textContent = cap;
 
@@ -2383,8 +2625,15 @@ async function init(): Promise<void> {
 
   const qp = new URLSearchParams(window.location.search);
   const sig = qp.get("signal");
-  if (sig) signalUrlEl.value = sig;
-  else signalUrlEl.value = DEFAULT_SIGNAL;
+  if (sig) {
+    signalUrlEl.value = sig;
+    activeRoom.signalingUrl = sig;
+  } else {
+    signalUrlEl.value = activeRoom.signalingUrl;
+  }
+  signalUrlEl.addEventListener("change", () => {
+    activeRoom.signalingUrl = signalUrlEl.value.trim() || DEFAULT_SIGNAL;
+  });
 
   // Keep the sidebar visible on narrow screens until the user connects, so
   // the Connect button is reachable without finding the hamburger toggle.
