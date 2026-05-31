@@ -29,7 +29,7 @@ type TokenKind =
   | "process" | "new" | "in" | "parallel" | "if" | "else" | "and" | "or" | "not" | "on"
   | "ident" | "number" | "string" | "command"
   | "lbrace" | "rbrace" | "lparen" | "rparen"
-  | "semi" | "comma" | "eof"
+  | "semi" | "comma" | "eof" | "pipe"
   | "eq" | "ne" | "lt" | "le" | "gt" | "ge";
 
 interface Token { kind: TokenKind; value: string; line: number; col: number }
@@ -67,17 +67,18 @@ function tokenize(src: string): Token[] {
     }
 
     // Raw command starting with `/` and not `//` — read until terminating `;`
-    // (or end-of-input). The whole text (without the trailing `;`) is captured
-    // verbatim and dispatched as a /command, with $arg substitution applied
-    // at interpret time.
+    // or `|` (whichever first). The whole text (without the terminator) is
+    // captured verbatim and dispatched as a /command, with $arg substitution
+    // applied at interpret time. `|` is RhoQu's parallel-composition operator
+    // (rho-calculus convention), so commands can't contain a literal `|`;
+    // use /script as an escape hatch if you need one.
     if (ch === "/") {
       const startL = line, startC = col;
       let buf = "";
-      while (i < src.length && src[i] !== ";") {
+      while (i < src.length && src[i] !== ";" && src[i] !== "|") {
         buf += src[i]; advance(1);
       }
       push("command", buf.trim(), startL, startC);
-      // Don't consume the ; here; let the parser see it.
       continue;
     }
 
@@ -132,6 +133,7 @@ function tokenize(src: string): Token[] {
     if (ch === ")") { push("rparen", ")", line, col); advance(1); continue; }
     if (ch === ";") { push("semi", ";", line, col); advance(1); continue; }
     if (ch === ",") { push("comma", ",", line, col); advance(1); continue; }
+    if (ch === "|") { push("pipe", "|", line, col); advance(1); continue; }
 
     throw new RhoQuError(`unexpected character '${ch}'`, line, col);
   }
@@ -216,17 +218,25 @@ class Parser {
   parseProgram(): Program {
     const defs = new Map<string, ProcessDef>();
     const top: Stmt[] = [];
+    let group: Stmt[] = [];
+    const flush = () => {
+      if (group.length === 1) top.push(group[0]);
+      else if (group.length > 1) top.push({ kind: "parallel", body: group });
+      group = [];
+    };
     while (this.peek().kind !== "eof") {
       if (this.peek().kind === "process") {
+        flush();
         const def = this.parseProcessDef();
         defs.set(def.name, def);
-      } else {
-        const s = this.parseStmt();
-        if (s) top.push(s);
-        // Statements are terminated by `;`; tolerate trailing/extra `;`.
-        while (this.maybe("semi")) { /* consume extras */ }
+        continue;
       }
+      if (this.peek().kind === "semi") { this.eat(); flush(); continue; }
+      if (this.peek().kind === "pipe") { this.eat(); continue; }
+      const s = this.parseStmt();
+      if (s) group.push(s);
     }
+    flush();
     return { defs, top };
   }
 
@@ -248,11 +258,20 @@ class Parser {
 
   private parseStmtsUntil(closer: TokenKind): Stmt[] {
     const out: Stmt[] = [];
+    let group: Stmt[] = [];
+    const flush = () => {
+      if (group.length === 1) out.push(group[0]);
+      else if (group.length > 1) out.push({ kind: "parallel", body: group });
+      group = [];
+    };
     while (this.peek().kind !== closer && this.peek().kind !== "eof") {
+      if (this.peek().kind === "semi") { this.eat(); flush(); continue; }
+      // `|` is parallel composition — accumulate into the current group.
+      if (this.peek().kind === "pipe") { this.eat(); continue; }
       const s = this.parseStmt();
-      if (s) out.push(s);
-      while (this.maybe("semi")) { /* consume extras */ }
+      if (s) group.push(s);
     }
+    flush();
     return out;
   }
 
@@ -277,7 +296,6 @@ class Parser {
     this.expect("lbrace");
     const body = this.parseStmtsUntil("rbrace");
     this.expect("rbrace");
-    this.maybe("semi");
     return { kind: "on", channel, binding, body };
   }
 
@@ -289,7 +307,6 @@ class Parser {
     this.expect("rbrace");
     let elseBody: Stmt[] = [];
     if (this.maybe("else")) {
-      // Allow `else if` chaining by treating it as a single nested if.
       if (this.peek().kind === "if") {
         elseBody = [this.parseIf()];
       } else {
@@ -298,7 +315,6 @@ class Parser {
         this.expect("rbrace");
       }
     }
-    this.maybe("semi");
     return { kind: "if", cond, then: thenBody, else: elseBody };
   }
 
@@ -377,10 +393,7 @@ class Parser {
       const t = this.peek();
       throw new RhoQuError("`new` requires at least one identifier", t.line, t.col);
     }
-    // Optional `in` keyword for readability (parser doesn't actually use it
-    // since `new x y z;` already binds in the enclosing scope).
     this.maybe("in");
-    this.expect("semi");
     return { kind: "new", names };
   }
 
@@ -389,13 +402,11 @@ class Parser {
     this.expect("lbrace");
     const body = this.parseStmtsUntil("rbrace");
     this.expect("rbrace");
-    this.maybe("semi");
     return { kind: "parallel", body };
   }
 
   private parseCmd(): Stmt {
     const t = this.expect("command");
-    this.expect("semi");
     return { kind: "cmd", text: t.value };
   }
 
@@ -408,7 +419,6 @@ class Parser {
       while (this.maybe("comma")) args.push(this.eatValue());
     }
     this.expect("rparen");
-    this.expect("semi");
     return { kind: "call", name, args };
   }
 
