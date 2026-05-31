@@ -126,6 +126,9 @@ interface RoomContext {
   // Discrepancy probe + losing-peers ignore set
   probe: ProbeWindow;
   ignoredForSync: Set<string>;
+  // Channels this peer is subscribed to in this room — inbound channel-msg
+  // envelopes on a subscribed name surface in chat; others are silently dropped.
+  channelSubscriptions: Set<string>;
   // Chat history for this room (replayed on tab switch)
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
@@ -153,6 +156,7 @@ function createRoom(roomId: string): RoomContext {
     dyncapChains: new Map(),
     probe: { open: false, observations: [], contributors: new Set(), timer: null },
     ignoredForSync: new Set(),
+    channelSubscriptions: new Set(),
     chatLog: [],
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
@@ -201,6 +205,7 @@ let proposalTimers: Map<string, number> = new Map();
 let dyncapChains: Map<string, ChainEntry> = new Map();
 let probe: ProbeWindow = { open: false, observations: [], contributors: new Set(), timer: null };
 let ignoredForSync: Set<string> = new Set();
+let channelSubscriptions: Set<string> = new Set();
 
 function setActiveRoom(ctx: RoomContext): void {
   activeRoom = ctx;
@@ -221,6 +226,7 @@ function setActiveRoom(ctx: RoomContext): void {
   dyncapChains       = ctx.dyncapChains;
   probe              = ctx.probe;
   ignoredForSync     = ctx.ignoredForSync;
+  channelSubscriptions = ctx.channelSubscriptions;
 }
 
 // Mutate both the active-room's qpeer and the module-level alias in lockstep.
@@ -269,6 +275,7 @@ function saveNotes(): void {
   localStorage.setItem(`qos-known-currencies-${room}`, JSON.stringify(Object.fromEntries(knownCurrencies)));
   localStorage.setItem(`qos-locked-notes-${room}`,     JSON.stringify(Object.fromEntries(lockedNotes)));
   localStorage.setItem(`qos-ignored-sync-${room}`,     JSON.stringify(Array.from(ignoredForSync)));
+  localStorage.setItem(`qos-channel-subs-${room}`,     JSON.stringify(Array.from(channelSubscriptions)));
 }
 
 function saveDyncap(): void {
@@ -494,6 +501,14 @@ function loadNotes(): void {
     try {
       const list = JSON.parse(ignoredRaw) as string[];
       if (Array.isArray(list)) for (const p of list) ignoredForSync.add(p);
+    } catch { /* ignore */ }
+  }
+  // Channel subscriptions (per-room).
+  const chanRaw = localStorage.getItem(`qos-channel-subs-${room}`);
+  if (chanRaw) {
+    try {
+      const list = JSON.parse(chanRaw) as string[];
+      if (Array.isArray(list)) for (const n of list) channelSubscriptions.add(n);
     } catch { /* ignore */ }
   }
   // Locked notes from a previous session are orphans: their proposal state
@@ -1166,6 +1181,8 @@ function handleCommand(raw: string): string[] {
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
       sys("  /share <sel> to <room>  — bridge a lemma/chat/note into another tab");
+      sys("  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)");
+      sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -2113,6 +2130,83 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "channel": {
+      // /channel listen <name>        — subscribe in this room
+      // /channel unlisten <name>      — unsubscribe
+      // /channel send <name> <text>   — broadcast a tagged message
+      // /channel list                 — show subscriptions
+      const cParts = arg.trim().split(/\s+/);
+      const sub = (cParts[0] || "list").toLowerCase();
+      const name = cParts[1] ?? "";
+      if (sub === "list" || sub === "") {
+        if (channelSubscriptions.size === 0) {
+          sys("no channel subscriptions in this room");
+          sys("  /channel listen <name>      — subscribe");
+          sys("  /channel send <name> <text> — broadcast");
+        } else {
+          sys(`channel subscriptions (${channelSubscriptions.size}):`);
+          for (const n of channelSubscriptions) sys(`  ${n}`);
+        }
+      } else if (sub === "listen") {
+        if (!name) { sys("usage: /channel listen <name>"); break; }
+        if (channelSubscriptions.has(name)) { sys(`already listening on '${name}'`); break; }
+        channelSubscriptions.add(name);
+        saveNotes();
+        sys(`· listening on channel '${name}'`);
+      } else if (sub === "unlisten") {
+        if (!name) { sys("usage: /channel unlisten <name>"); break; }
+        if (!channelSubscriptions.has(name)) { sys(`not listening on '${name}'`); break; }
+        channelSubscriptions.delete(name);
+        saveNotes();
+        sys(`· unlistened from channel '${name}'`);
+      } else if (sub === "send") {
+        const text = cParts.slice(2).join(" ");
+        if (!name || !text) { sys("usage: /channel send <name> <text>"); break; }
+        if (!qpeer) { sys("not connected"); break; }
+        // Tagged broadcast. Receivers without a matching subscription drop it.
+        qpeer.broadcast({ kind: "channel-msg", channel: name, payload: text });
+        sys(`· sent on channel '${name}': ${text}`);
+      } else {
+        sys(`unknown subcommand: /channel ${sub}`);
+        sys("  /channel [list]              — show subscriptions");
+        sys("  /channel listen <name>       — subscribe");
+        sys("  /channel unlisten <name>     — unsubscribe");
+        sys("  /channel send <name> <text>  — broadcast a tagged message");
+      }
+      break;
+    }
+
+    case "script": {
+      // /script cmd1; cmd2; cmd3
+      //
+      // Sequential command chain — each `;`-separated segment is run
+      // through handleCommand exactly as if typed individually. Comments
+      // (// prefix on a segment after trimming) are skipped. Errors in
+      // one segment don't stop subsequent ones; each segment's output
+      // appears in chat in order.
+      const segments = arg.split(";").map(s => s.trim()).filter(s => s.length > 0);
+      if (segments.length === 0) {
+        sys("usage: /script <cmd1>; <cmd2>; <cmd3>");
+        sys("  example: /script /grant fork-a; /lemma alice-thinking; /qucalc @alice-thinking");
+        sys("  comments: //  (a segment beginning with // is skipped)");
+        break;
+      }
+      let executed = 0;
+      let skipped  = 0;
+      for (const seg of segments) {
+        if (seg.startsWith("//")) { skipped++; continue; }
+        const cmdStr = seg.startsWith("/") ? seg : "/" + seg;
+        try {
+          handleCommand(cmdStr);
+          executed++;
+        } catch (e) {
+          sys(`· script error on '${seg}': ${String(e)}`);
+        }
+      }
+      sys(`· script: ${executed} executed${skipped > 0 ? `, ${skipped} skipped (comments)` : ""}`);
+      break;
+    }
+
     case "share": {
       // /share <selector> to <room-prefix>
       // Selectors:
@@ -2772,6 +2866,16 @@ function connect(): void {
           addMessage("", `  · /rdv accept ${shortRdvId(id)}  |  /rdv reject ${shortRdvId(id)}  |  /rdv counter ${shortRdvId(id)} <giveCur> <giveN> <getCur> <getN>`, "system");
           return;
         }
+        if (d.kind === "channel-msg") {
+          // Subscribed channels surface in chat; unsubscribed channels are
+          // silently dropped — the tagged broadcast is a public envelope but
+          // the filter is per-receiver.
+          const ch = String(d.channel ?? "");
+          if (!channelSubscriptions.has(ch)) return;
+          const payload = String(d.payload ?? "");
+          addMessage(from, `[#${ch}] ${payload}`, "peer", peerLabel(from));
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -2860,7 +2964,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
