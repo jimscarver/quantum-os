@@ -26,7 +26,7 @@
 // ---------------------------------------------------------------------------
 
 type TokenKind =
-  | "process" | "new" | "in" | "parallel" | "if" | "else" | "and" | "or" | "not"
+  | "process" | "new" | "in" | "parallel" | "if" | "else" | "and" | "or" | "not" | "on"
   | "ident" | "number" | "string" | "command"
   | "lbrace" | "rbrace" | "lparen" | "rparen"
   | "semi" | "comma" | "eof"
@@ -40,7 +40,7 @@ class RhoQuError extends Error {
   }
 }
 
-const KEYWORDS = new Set(["process", "new", "in", "parallel", "if", "else", "and", "or", "not"]);
+const KEYWORDS = new Set(["process", "new", "in", "parallel", "if", "else", "and", "or", "not", "on"]);
 
 function tokenize(src: string): Token[] {
   const tokens: Token[] = [];
@@ -149,7 +149,8 @@ type Stmt =
   | { kind: "parallel"; body: Stmt[] }
   | { kind: "call"; name: string; args: string[] }
   | { kind: "cmd"; text: string }
-  | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] };
+  | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
+  | { kind: "on"; channel: string; binding: string; body: Stmt[] };
 
 // Expression AST. Evaluated against a RhoQuContext at transpile time;
 // the chosen branch's commands are emitted.
@@ -169,9 +170,20 @@ interface ProcessDef { name: string; params: string[]; body: Stmt[] }
 
 interface Program { defs: Map<string, ProcessDef>; top: Stmt[] }
 
-/// Runtime hooks the transpiler calls when evaluating `if` conditions.
-/// Built-in functions: has(@x), bal(currency), declared(currency),
-/// peers(), connected(), seq(). Implementations live in app.ts.
+/// An `on` handler captured at transpile time. The trigger function runs
+/// the body with the channel-msg payload bound to the handler's variable
+/// and returns the resulting /command strings; the caller (app.ts) is
+/// responsible for executing them via the dispatcher.
+export interface OnHandler {
+  channel: string;
+  binding: string;
+  trigger(payload: string): string[];
+}
+
+/// Runtime hooks the transpiler calls when evaluating `if` conditions or
+/// processing `on` declarations. Built-in functions: has(@x), bal(currency),
+/// declared(currency), peers(), connected(), seq(). Implementations live
+/// in app.ts.
 export interface RhoQuContext {
   hasLemma(name: string): boolean;
   balance(currency: string): number;
@@ -179,6 +191,7 @@ export interface RhoQuContext {
   peerCount(): number;
   isConnected(): boolean;
   myCurrentSeq(): number;
+  registerOnHandler?(handler: OnHandler): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,10 +261,24 @@ class Parser {
     if (t.kind === "new") return this.parseNew();
     if (t.kind === "parallel") return this.parseParallel();
     if (t.kind === "if") return this.parseIf();
+    if (t.kind === "on") return this.parseOn();
     if (t.kind === "command") return this.parseCmd();
     if (t.kind === "ident") return this.parseCall();
     if (t.kind === "semi") { this.eat(); return null; }
     throw new RhoQuError(`unexpected token '${t.value}' (kind: ${t.kind})`, t.line, t.col);
+  }
+
+  private parseOn(): Stmt {
+    this.expect("on");
+    const channel = this.expect("ident").value;
+    this.expect("lparen");
+    const binding = this.expect("ident").value;
+    this.expect("rparen");
+    this.expect("lbrace");
+    const body = this.parseStmtsUntil("rbrace");
+    this.expect("rbrace");
+    this.maybe("semi");
+    return { kind: "on", channel, binding, body };
   }
 
   private parseIf(): Stmt {
@@ -460,6 +487,32 @@ function emitStmt(s: Stmt, program: Program, env: Map<string, string>, out: stri
     const v = evalExpr(s.cond, env, ctx);
     const branch = truthy(v) ? s.then : s.else;
     emitStmts(branch, program, env, out, ctx);
+    return;
+  }
+  if (s.kind === "on") {
+    // Register an inbound channel-msg handler. The handler captures the
+    // body, program (for process lookups inside the body), and a snapshot
+    // of the env at registration time. When triggered with a payload, it
+    // re-emits the body with the binding bound to the payload string.
+    if (!ctx?.registerOnHandler) {
+      // No context: silently drop. The handler couldn't run without a
+      // runtime, and skipping a registration is safer than failing the
+      // whole transpile.
+      return;
+    }
+    const capturedEnv = new Map(env);
+    const handler: OnHandler = {
+      channel: s.channel,
+      binding: s.binding,
+      trigger(payload: string): string[] {
+        const childEnv = new Map(capturedEnv);
+        childEnv.set(s.binding, payload);
+        const cmds: string[] = [];
+        emitStmts(s.body, program, childEnv, cmds, ctx);
+        return cmds;
+      },
+    };
+    ctx.registerOnHandler(handler);
     return;
   }
   if (s.kind === "call") {

@@ -13,7 +13,7 @@ import { newDynCapState, signEnvelope, verifyEnvelope,
 import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
-import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext } from "./rhoqu.js";
+import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHandler as RhoQuOnHandler } from "./rhoqu.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -150,6 +150,9 @@ interface RoomContext {
   // from another peer asking us to also hold their state for cross-session
   // redundancy.
   pendingPersistRequests: Map<string, PersistRequest>;
+  // RhoQu `on channel(x) { … }` handlers — fired when channel-msg envelopes
+  // arrive on a matching channel name. Persisted in-memory only.
+  rhoquHandlers: RhoQuOnHandler[];
   // Chat history for this room (replayed on tab switch)
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
@@ -179,6 +182,7 @@ function createRoom(roomId: string): RoomContext {
     ignoredForSync: new Set(),
     channelSubscriptions: new Set(),
     pendingPersistRequests: new Map(),
+    rhoquHandlers: [],
     chatLog: [],
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
@@ -229,6 +233,7 @@ let probe: ProbeWindow = { open: false, observations: [], contributors: new Set(
 let ignoredForSync: Set<string> = new Set();
 let channelSubscriptions: Set<string> = new Set();
 let pendingPersistRequests: Map<string, PersistRequest> = new Map();
+let rhoquHandlers: RhoQuOnHandler[] = [];
 
 function setActiveRoom(ctx: RoomContext): void {
   activeRoom = ctx;
@@ -251,6 +256,7 @@ function setActiveRoom(ctx: RoomContext): void {
   ignoredForSync     = ctx.ignoredForSync;
   channelSubscriptions = ctx.channelSubscriptions;
   pendingPersistRequests = ctx.pendingPersistRequests;
+  rhoquHandlers = ctx.rhoquHandlers;
 }
 
 // Mutate both the active-room's qpeer and the module-level alias in lockstep.
@@ -2332,27 +2338,33 @@ function handleCommand(raw: string): string[] {
     }
 
     case "rhoqu": {
-      // /rhoqu <source>
-      //
-      // Parse and transpile a RhoQu macro program to a flat list of
-      // /command strings, then run each via handleCommand exactly like
-      // /script does. Supports `process Name(args) { body }` definitions,
-      // `new x y z;`, `parallel { … }`, `Name(args);` calls with $arg
-      // substitution, raw /command passthrough, and // comments.
-      //
-      // Multi-line sources can be pasted into the chat input directly if
-      // the field allows it; otherwise put statements on one line
-      // separated by `;`. Each top-level statement must end with `;`.
       const src = arg.trim();
-      if (!src) {
-        sys("usage: /rhoqu <source>");
-        sys("  process P(a, b) { /grant $a; /lemma $b; } P(fork-a, alice);");
-        sys("  new x y z; parallel { /lemma x; /lemma y; /lemma z; }");
+      // Subcommands for managing registered on-handlers.
+      if (src === "list") {
+        if (rhoquHandlers.length === 0) {
+          sys("no rhoqu on-handlers registered in this room");
+        } else {
+          sys(`rhoqu on-handlers (${rhoquHandlers.length}):`);
+          for (const h of rhoquHandlers) sys(`  on ${h.channel}(${h.binding}) { … }`);
+        }
         break;
       }
-      // Build a runtime context for if-conditions (has(@name), bal(currency),
-      // declared(name), peers(), connected(), seq()) that reads from the
-      // active room's stores at transpile time.
+      if (src === "clear") {
+        const n = rhoquHandlers.length;
+        rhoquHandlers.length = 0;
+        activeRoom.rhoquHandlers = rhoquHandlers;   // keep RoomContext field in sync
+        sys(`cleared ${n} rhoqu on-handler${n === 1 ? "" : "s"}`);
+        break;
+      }
+      if (!src) {
+        sys("usage: /rhoqu <source>");
+        sys("  /rhoqu list                          — show registered on-handlers");
+        sys("  /rhoqu clear                         — drop all on-handlers in this room");
+        sys("  process P(a, b) { /grant $a; /lemma $b; } P(fork-a, alice);");
+        sys("  if has(@met-bob) { /qucalc @met-bob; } else { /lemma met-bob ^v; }");
+        sys("  on forks(msg) { /qucalc @msg; }      — register a channel-msg handler");
+        break;
+      }
       const rhoCtx: RhoQuContext = {
         hasLemma:  (name) => lemmaStore.has(name),
         balance:   (currency) => {
@@ -2367,6 +2379,7 @@ function handleCommand(raw: string): string[] {
         peerCount:    () => peers.size,
         isConnected:  () => qpeer !== null,
         myCurrentSeq: () => dyncapState?.seqByRoom[activeRoom.roomId] ?? 0,
+        registerOnHandler: (h) => { rhoquHandlers.push(h); },
       };
       let cmds: string[];
       try {
@@ -2376,13 +2389,14 @@ function handleCommand(raw: string): string[] {
         else sys(`· rhoqu parse error: ${String(e)}`);
         break;
       }
+      const handlersAfter = rhoquHandlers.length;
       sys(`· rhoqu transpiled to ${cmds.length} command${cmds.length === 1 ? "" : "s"}`);
       let executed = 0;
       for (const c of cmds) {
         try { handleCommand(c); executed++; }
         catch (err) { sys(`· rhoqu error on '${c}': ${String(err)}`); }
       }
-      sys(`· rhoqu: ${executed} executed`);
+      sys(`· rhoqu: ${executed} executed${handlersAfter > 0 ? `, ${handlersAfter} on-handler${handlersAfter === 1 ? "" : "s"} active` : ""}`);
       break;
     }
 
@@ -3103,13 +3117,31 @@ function connect(): void {
           return;
         }
         if (d.kind === "channel-msg") {
+          const ch = String(d.channel ?? "");
+          const payload = String(d.payload ?? "");
           // Subscribed channels surface in chat; unsubscribed channels are
           // silently dropped — the tagged broadcast is a public envelope but
           // the filter is per-receiver.
-          const ch = String(d.channel ?? "");
-          if (!channelSubscriptions.has(ch)) return;
-          const payload = String(d.payload ?? "");
-          addMessage(from, `[#${ch}] ${payload}`, "peer", peerLabel(from));
+          if (channelSubscriptions.has(ch)) {
+            addMessage(from, `[#${ch}] ${payload}`, "peer", peerLabel(from));
+          }
+          // RhoQu `on channel(x) { … }` handlers fire on every matching
+          // channel-msg regardless of subscription. Each fires once per
+          // delivery; the body runs with `x` bound to the payload.
+          for (const h of rhoquHandlers) {
+            if (h.channel !== ch) continue;
+            try {
+              const cmds = h.trigger(payload);
+              if (cmds.length === 0) continue;
+              addMessage("", `  · rhoqu on ${ch}(${h.binding}=${payload}) → ${cmds.length} cmd${cmds.length === 1 ? "" : "s"}`, "system");
+              for (const c of cmds) {
+                try { handleCommand(c); }
+                catch (err) { addMessage("", `  · rhoqu trigger error: ${String(err)}`, "system"); }
+              }
+            } catch (err) {
+              addMessage("", `  · rhoqu on-handler error for ${ch}: ${String(err)}`, "system");
+            }
+          }
           return;
         }
         if (d.kind === "chat" || "text" in d) {
