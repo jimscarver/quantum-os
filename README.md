@@ -48,9 +48,14 @@ QLF slash commands:
   /request <n>     — request @n from whoever holds it
   /pass <n> <peer> — transfer @n directly to a named peer
   /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)
-  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)
+  /rdv [sub]       — n-party atomic rendezvous (swap|counter|accept|reject|abort|list)
   /dyncap [sub]    — hash-only dynamic capabilities (status|peers)
   /probe [sub]     — joiner-local consensus probe (status|clear)
+  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)
+  /share <sel> to <room>  — bridge a lemma/chat/note into another tab
+  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)
+  /script <c1>;…   — sequential command chain (// to skip a segment)
+  /persist [sub]   — agreed-replication of public state (@lemma|currency …)
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -295,12 +300,13 @@ After this sequence: Alice's wallet holds USD 70 (change) and a `redemptionsHono
 
 N-party atomic rendezvous: a single composite move across N participants, with ZFA conservation enforced over the joint composition. Each participant contributes a `gives` token and receives a `gets` token; the protocol requires `multiset(gives) == multiset(gets)` — value flows in a closed cycle. The MVP exposes the 2-party bilateral swap (`/rdv swap`); the underlying protocol generalizes to N parties (cyclic).
 
-Protocol (5 direct-send wire kinds, never broadcast):
+Protocol (6 direct-send wire kinds, never broadcast):
 
 ```
 rdv-propose  proposer    → each participant   (carries the proposal)
 rdv-accept   participant → proposer           (carries the committed gives token)
 rdv-reject   participant → proposer
+rdv-counter  either      → either             (round-trip negotiation; new terms + new token)
 rdv-commit   proposer    → each participant   (carries final assignments)
 rdv-abort    proposer    → each participant   (releases locks)
 ```
@@ -308,7 +314,8 @@ rdv-abort    proposer    → each participant   (releases locks)
 | Subcommand | Effect |
 |---|---|
 | `/rdv swap <giveCur> <giveN> <getCur> <getN> <peer>` | Locks your gives token, sends a proposal to the peer, sets a 60s timeout. |
-| `/rdv accept <id>` | Locks your gives token, sends accept to the proposer. The proposer commits once all participants have accepted. |
+| `/rdv counter <id> <giveCur> <giveN> <getCur> <getN>` | Propose new terms in an in-flight rdv. Releases the round's locks; replaces the rows; locks your new gives; counterer is implicitly accepted, other party reset to pending. Either party can counter again; rounds repeat until accept/reject/abort/timeout. |
+| `/rdv accept <id>` | Locks your gives token. As a participant, sends accept to the proposer. As proposer-after-counter, locally records acceptance — if all parties now accept, commit fires. |
 | `/rdv reject <id>` | Declines; the proposer aborts the proposal and releases all participant locks. |
 | `/rdv abort <id>` | Proposer cancels; sends `rdv-abort` to participants. |
 | `/rdv list` | Shows pending proposals and currently locked notes. |
@@ -394,6 +401,58 @@ Joined rooms persist across reloads (`qos-joined-rooms` in `localStorage`); on n
 - Cross-room information flow is mediated by a peer who's in both rooms (a "bridge peer"); they consciously re-broadcast in each room. There's no automatic `/share` command yet — manual re-declaration is the bridge primitive today.
 
 A peer in N rooms has the same dyncap *anchor* across rooms (it's `H(seed)` where seed is per-device), but each room maintains an independent chain trajectory via per-room `seq` in `DynCapState.seqByRoom`. The witness binding `H(seed ‖ seq ‖ room_id ‖ payload_hash)` produces algebraically independent witnesses across rooms.
+
+### `/share <selector> to <room-prefix>`
+
+Bridge selected state from the active tab into another joined tab. The bridge is application-level: `/share` briefly swaps the active room context to the target room and runs the existing dispatcher commands there. The target room sees the action as if the user typed it locally — including the bridge peer's dyncap signature in *that* room's chain. No new wire kinds; no infrastructure relay.
+
+| Selector | Effect in target |
+|---|---|
+| `@<lemma-name>` | re-declare the lemma. Lemma immutability applies (same twists → silent no-op; different twists → refused) |
+| `msg <text>` | post a chat message |
+| `note <currency> <N>` | `/note grant <currency> <N>` (target room must hold the currency authority) |
+
+Target resolution: `<room-prefix>` prefix-matches against joined room IDs. Ambiguous matches are listed; no match errors out.
+
+### `/channel [sub]`
+
+Name-tagged broadcast messaging with per-receiver filtering. The envelope (`kind: "channel-msg", {channel, payload}`) goes to everyone in the room; subscribed peers surface it in chat, unsubscribed peers silently drop it. Subscriptions are per-room and persist across reloads (`qos-channel-subs-{room}` in localStorage).
+
+| Subcommand | Effect |
+|---|---|
+| `/channel list` (or `/channel`) | Show your subscriptions in the active room |
+| `/channel listen <name>` | Subscribe |
+| `/channel unlisten <name>` | Unsubscribe |
+| `/channel send <name> <text>` | Broadcast a tagged message |
+
+Useful for topic-based coordination on top of broadcast — e.g., one channel per long-running discussion, or as the substrate for higher-level macro languages (rho-calculus channels).
+
+### `/script <cmd1>; <cmd2>; …`
+
+Sequential command chain. Each `;`-separated segment is trimmed and run through the dispatcher exactly as if typed individually. Segments starting with `//` are skipped (comments). Errors in one segment don't stop subsequent ones; each segment's output appears in chat in order.
+
+```
+/script /grant fork-a; /lemma alice-thinking; /qucalc @alice-thinking
+/script /note declare USD; /note grant USD 100; // /note pass USD 30 Bob
+```
+
+The MVP is single-line. Multi-line scripts and variable binding are deferred.
+
+### `/persist [sub]`
+
+Agreed cross-peer replication of public room state. A peer asks another to also store a lemma or currency declaration; the receiver explicitly accepts or rejects. Both peers then hold redundant copies across sessions. The existing consensus probe + chain-weighted supermajority resolution reconciles any drift on the next join.
+
+| Subcommand | Effect |
+|---|---|
+| `/persist @<lemma> to <peer>` | Ask peer to also store the lemma |
+| `/persist currency <name> to <peer>` | Ask peer to also store the currency declaration |
+| `/persist accept <id>` | Accept a pending inbound request |
+| `/persist reject <id>` | Discard a pending inbound request |
+| `/persist [list]` | Show pending inbound requests |
+
+Bearer state (held notes, receipts, redemption logs) is excluded by design — replicating a bearer token means giving away ownership, which is what `/note pass` already does. `/persist` applies only to public room knowledge.
+
+The "persistence" is "as long as one of the replicating peers is online" — there's no server, no eternal storage. Multiple agreeing copies are the agreement-based mechanism.
 
 ### `/zfa [token]`
 Validates any `cap:label:hex` token — checks ZFA balance and reports the spectral gap.
@@ -615,6 +674,12 @@ wasm_capability_valid(hex: string): boolean
 | Multi-room tabs | ✓ `/room join/leave/list/ref` — one browser session, N joined rooms; per-room state and signaling; unread indicator on background tabs |
 | Per-room dyncap chain | ✓ same anchor across rooms (`H(seed)`), independent `seq` per room; `H(seed ‖ seq ‖ room_id ‖ payload_hash)` witnesses algebraically independent |
 | Markov-blanket isolation | ✓ rooms are independent ZFA processes; no cross-room signaling, sync, or consensus; bridge peers are application-level only |
+| Bridge primitive | ✓ `/share <selector> to <room>` — explicit bridge of lemma/chat/note into another joined tab |
+| Counter-offer rounds | ✓ `/rdv counter <id> <giveCur> <giveN> <getCur> <getN>` — round-trip negotiation in an in-flight rendezvous |
+| Tagged messaging | ✓ `/channel listen/send` — name-tagged broadcast with per-receiver subscription filter |
+| Sequential command chain | ✓ `/script cmd1; cmd2; …` — batch dispatch on one line |
+| Cross-peer persistence | ✓ `/persist @lemma to <peer>` — agreed replication of public state with explicit accept/reject |
+| Mobile viewport | ✓ `100dvh` + `interactive-widget=resizes-content` — input stays above the Android keyboard; not clipped on mobile Firefox |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
 

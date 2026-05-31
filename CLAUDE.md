@@ -248,10 +248,15 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
 | `/room <sub>` | Multi-room tabs — `list`, `join <cap\|url>`, `leave`, `ref` |
+| `/share <selector> to <room>` | Bridge a lemma / chat / note from the active tab into another joined tab (application-level; no cross-room wire kind) |
+| `/rdv counter <id> …` | Round-trip negotiation in an in-flight rendezvous — replaces rows, swaps locks, counterer implicitly accepts |
+| `/channel <sub>` | Tagged broadcast messaging — `list`, `listen <name>`, `unlisten <name>`, `send <name> <text>`; per-room subscriptions |
+| `/script <c1>;…` | Sequential command chain on one line; `//` skips a segment |
+| `/persist <sub>` | Agreed cross-peer replication of public state — request, accept, reject pending requests |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: all commands except `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/request`, `/pass`, and `/dump` broadcast their output to peers as `{kind: "qlf", cmd, arg, lines}`. Note, rendezvous, dyncap, probe, and room subcommands send purpose-specific envelopes or are local-only (room/dyncap/probe).
+Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/script`, `/persist`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (or are local-only) so a generic qlf rebroadcast would be redundant or noisy.
 
 ---
 
