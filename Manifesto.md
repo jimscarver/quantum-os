@@ -102,8 +102,8 @@ The full architecture, command vocabulary, and quick-start are in the **[README.
 
 ## 6. Try It
 
-- **Public room** — open [https://jimscarver.github.io/quantum-os/](https://jimscarver.github.io/quantum-os/) and click **Connect**. The URL's `#room=cap:room:…` is your room's ZFA capability token. Share the link to invite others; possessing it *is* the right to join.
-- **A new room of your own** — open the same URL in a new browser tab. Each fresh connection generates a new isolated Markov blanket. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
+- **Jim's public room** — [https://jimscarver.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721](https://jimscarver.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721) — click **Connect** to join. The `#room=cap:room:…` fragment is the room's ZFA capability token; possessing it *is* the right to join.
+- **A new room of your own** — open [https://jimscarver.github.io/quantum-os/](https://jimscarver.github.io/quantum-os/) in a fresh tab. Each fresh connection generates a new isolated Markov blanket identified by `#room=cap:room:…`. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
 - **A second room beside the first** — click the `+` tab. One session can be a peer in many rooms simultaneously; per-room state never crosses without an explicit `/share`.
 
 All rooms are **consent-defined** and fully sovereign, exactly as the [QLF Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md) describes.
