@@ -38,6 +38,7 @@ quantum-os/
 │   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
 │   │       ├── dyncap.ts   Hash-only dynamic capabilities (sign/verify envelopes; SHA-256 only)
 │   │       ├── probe.ts    Discrepancy probe — chain-weighted supermajority tally on join
+│   │       ├── rhoqu.ts    RhoQu macro parser + transpiler (process / new / | / if / on / for → /command strings)
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
 │   │   └── src/
@@ -253,10 +254,11 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/channel <sub>` | Tagged broadcast messaging — `list`, `listen <name>`, `unlisten <name>`, `send <name> <text>`; per-room subscriptions |
 | `/script <c1>;…` | Sequential command chain on one line; `//` skips a segment |
 | `/persist <sub>` | Agreed cross-peer replication of public state — request, accept, reject pending requests |
+| `/rhoqu <text>` | RhoQu macro language: parse `process` / `new` / `\|` parallel / `if` / `on channel` / `for`, transpile to `/command` strings, dispatch in order. `/rhoqu list` and `/rhoqu clear` manage registered `on` handlers (per-room). |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/script`, `/persist`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (or are local-only) so a generic qlf rebroadcast would be redundant or noisy.
+Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/script`, `/persist`, `/rhoqu`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (or are local-only) so a generic qlf rebroadcast would be redundant or noisy. `/rhoqu` itself doesn't broadcast — only the commands it transpiles to do, per their own rules.
 
 ---
 
@@ -326,7 +328,9 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
 | `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
 | `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
+| `packages/browser/src/rhoqu.ts` | RhoQu tokenizer, parser (`process`/`new`/`if`/`on`/`for`/`\|`), AST, and `transpile(source, ctx?)` that emits a `string[]` of `/commands`. `RhoQuContext` interface + `OnHandler` for `on channel(x) { … }` dispatcher registration. |
 | `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
+| `RhoQuDemo.md` | End-user walkthrough of `/rhoqu` — atomic swap with conditional accept, dining philosophers, multisig with persistence |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
 | `packages/browser/index.html` | Layout, CSS, sidebar structure |

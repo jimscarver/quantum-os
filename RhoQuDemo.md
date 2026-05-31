@@ -1,86 +1,92 @@
-# RhoQu: A Macro Layer Sketch
+# RhoQu: A Macro Layer
 
-A forward-looking demo of **RhoQu** — the rho-calculus-flavored macro language that would compile to the quantum-os `/commands` shipped through v0.15.0. The parser isn't built yet. The *expansions* are real and run today: every RhoQu fragment below is followed by the working `/script`-and-friends version you can paste into the chat input and execute.
+A demo of **RhoQu** — the rho-calculus-flavored macro language that compiles to quantum-os `/commands`. The parser ships in [`packages/browser/src/rhoqu.ts`](packages/browser/src/rhoqu.ts) and is invoked via `/rhoqu <source>`. Every RhoQu fragment below is followed by the actual command-list it transpiles to today.
 
-Read this as a contract between two layers:
+Two layers, with a shipped parser between them:
 
-- **Top layer (RhoQu, aspirational)**: a small concurrent-process syntax — `process`, `new`, `parallel`, `!`/`?`, `on`, `if`, `bridge` — that reads like rho calculus and stays one-line-per-intent.
-- **Bottom layer (today's `/commands`, shipped)**: `/grant`, `/lemma`, `/note`, `/rdv`, `/share`, `/channel`, `/script`, `/persist`, `/dyncap`, `/probe`. Each RhoQu construct lowers to a small group of these. Every example below has its expansion verified against the actual dispatcher behaviour.
+- **Top layer (RhoQu, parsed by `/rhoqu`)**: `process`, `new`, `parallel`, `|`, `on`, `if`/`else` — reads like rho calculus, one-line-per-intent.
+- **Bottom layer (existing `/commands`)**: `/grant`, `/lemma`, `/note`, `/rdv`, `/share`, `/channel`, `/script`, `/persist`, `/dyncap`, `/probe`. Each RhoQu construct lowers to a small group of these.
 
-The demo's job is to show that the substrate is sufficient — that the RhoQu syntax is sugar, not new infrastructure. When the parser lands, it generates exactly what the right-hand columns below show.
+The parser handles four commits' worth of features:
+1. **Core constructs** — `process Name(args) { body }` definitions with `$arg` substitution, `new x y z` (→ `/grant`), `parallel { … }`, `Name(args)` calls, raw `/command` passthrough, `//` comments.
+2. **Conditionals** — `if expr { … } else { … }` with built-in predicates `has(@x)`, `bal(c)`, `declared(c)`, `peers()`, `connected()`, `seq()`, operators `==`/`!=`/`<`/`<=`/`>`/`>=`, boolean `and`/`or`/`not`. Evaluated at transpile time against the active room's state.
+3. **Receive handlers** — `on channel(x) { body }` registers a per-room handler that fires whenever a matching `channel-msg` envelope arrives. Body re-runs with `x` bound to the payload. Manage with `/rhoqu list` and `/rhoqu clear`.
+4. **Pipe operator** — `a | b | c` is sugar for `parallel { a; b; c }` (rho-calculus convention). Statements still terminate with `;` for sequential composition.
+
+Still deferred: `timeout Ns { ... }` blocks; first-class `!` / `?` / `->` send/receive shorthand over channels and rendezvous (the underlying `/channel` and `/rdv` commands are reachable today via raw passthrough).
 
 ---
 
 ## The mapping
 
-| RhoQu | Expansion (today's `/commands`) | Notes |
+| RhoQu | Expansion | Status |
 |---|---|---|
-| `new x y z in` | `/grant x; /grant y; /grant z` | One `/grant` per name; each mints a fresh ZFA-balanced cap and registers as `@x` |
-| `process P(args) { … }` | (no expansion — definition only) | The parser inlines the body at each call site |
-| `parallel { A; B; C }` | `/script A; B; C` | Single-peer "parallel" is sequential — true concurrent participants are separate peers in the room |
-| `usd! 30 to bob` | `/note pass USD 30 bob` | Currency name from context; bob is a peer name in the active room |
-| `attest! 1 to bob via rdv` | `/rdv swap attest-self 1 attest-bob 1 bob` | Wraps the swap shape from MultisigDemo |
-| `on rdv(id) { commit }` | `/rdv accept <id>` | Pattern-matches the inbound proposal; `commit` is the accept verb |
-| `counter rdv(id) <new>` | `/rdv counter <id> <giveCur> <giveN> <getCur> <getN>` | Round-trip negotiation |
-| `bridge @lemma to room` | `/share @lemma to <room-prefix>` | Application-level bridge across tabs |
-| `bridge msg "…" to room` | `/share msg "…" to <room-prefix>` | Chat bridge |
-| `channel listen forks` | `/channel listen forks` | Per-room subscription |
-| `channel forks ! "ate"` | `/channel send forks "ate"` | Tagged broadcast |
-| `persist @lemma to bob` | `/persist @lemma to bob` | Receiver-opt-in cross-peer redundancy |
-| `if @balance ≥ 30 { … }` | (no native; expand to `/qucalc @balance` + conditional dispatcher branch) | A future enhancement to `/script` is needed for true conditionals — today the user reads the qucalc output and chooses the branch |
-| `timeout 60s { abort }` | (no native; `/rdv` has the 60s timeout built in) | Generic timeouts on arbitrary blocks need a new dispatcher feature |
+| `new x y z;` | `/grant x` → `/grant y` → `/grant z` | ✓ commit 1 |
+| `process P(a, b) { body } P(x, y);` | inlined body with `$a`/`$b` substituted | ✓ commit 1 |
+| `parallel { A; B; C }` | A then B then C (sequential — single-peer "parallel" is order-irrelevant) | ✓ commit 1 |
+| `A \| B \| C` | same — `\|` is sugar for `parallel { A; B; C }` | ✓ commit 4 |
+| `/cmd ...;` raw command | dispatched verbatim with `$arg` substitution | ✓ commit 1 |
+| `// comment` to end of line | skipped | ✓ commit 1 |
+| `if expr { … } else { … }` | evaluates `expr` at transpile time; emits the chosen branch | ✓ commit 2 |
+| `has(@x)` / `bal(c)` / `declared(c)` / `peers()` / `connected()` / `seq()` | reads `lemmaStore` / `noteStore` / `knownCurrencies` / `peers` Set / `qpeer` / `dyncapState.seqByRoom` | ✓ commit 2 |
+| Comparison ops `==` `!=` `<` `<=` `>` `>=`; boolean `and` `or` `not` | standard precedence; numeric vs string comparison auto-detected | ✓ commit 2 |
+| `on channel(x) { body }` | per-room handler; runs body with `x = payload` on every matching `channel-msg` | ✓ commit 3 |
+| `/rhoqu list` / `/rhoqu clear` | inspect / drop registered on-handlers | ✓ commit 3 |
+| Bridge / channel / persist / rdv-counter operations | use the raw `/share`, `/channel`, `/persist`, `/rdv counter` commands via passthrough | ✓ via passthrough |
+| `timeout Ns { … }` | not yet — `/rdv` has built-in 60s; generic block timeouts pending | ✗ deferred |
+| First-class `!` / `?` / `->` send/receive shorthand | not yet — use raw `/channel send` / `on c(x)` | ✗ partial deferred |
 
 ---
 
-## Demo 1 — Atomic swap with one counter round
+## Demo 1 — Atomic swap with conditional accept
 
-### RhoQu
+### RhoQu (runs today via `/rhoqu`)
 
 ```
-process bilateral_swap(other, give_cur, give_n, get_cur, get_n) {
-  give_cur ! give_n  -> other.get_cur(get_n) via rdv;
-  on rdv(id) {
-    accept;                              -- → /rdv accept <id>
-  }
-  on rdv(id) {                          -- if a counter arrives instead
-    if reasonable(counter.terms) { accept; }
-    else { counter(rdv, original.terms); }
-  }
-  timeout 60s { abort; }
+process propose(other, give_cur, give_n, get_cur, get_n) {
+  /rdv swap $give_cur $give_n $get_cur $get_n $other;
 }
 
-parallel {
-  bilateral_swap(bob, USD, 30, EUR, 20);  -- Alice's perspective
+process accept_if_have(get_cur, get_n) {
+  if bal($get_cur) >= $get_n {
+    on rdv(id) { /rdv accept $id; }
+  } else {
+    on rdv(id) { /rdv reject $id; }
+  }
 }
 ```
 
-### Expansion that runs today
-
-A two-peer scenario (Alice + Bob in the same room, already connected, each with currency authority + held notes):
+### What you type
 
 **Alice (proposes USD 30 ↔ EUR 20):**
 
 ```
-/script /rdv swap USD 30 EUR 20 Bob
+/rhoqu process propose(other, give_cur, give_n, get_cur, get_n) { /rdv swap $give_cur $give_n $get_cur $get_n $other; } propose(Bob, USD, 30, EUR, 20);
 ```
 
-**Bob (sees the propose, decides to counter at USD 25):**
+Expands to:
 
 ```
-/script /rdv counter a3f1c2 USD 25 EUR 20
+/rdv swap USD 30 EUR 20 Bob
 ```
 
-(Replace `a3f1c2` with the short id from his chat.)
-
-**Alice (sees counter, decides USD 25 is acceptable since she'd settle for less):**
+**Bob (sees the propose; counters at USD 25 if his held EUR 20 wouldn't cover the counter, otherwise accepts):**
 
 ```
-/script /rdv accept a3f1c2
+/rhoqu if bal(EUR) >= 20 { /rdv accept a3f1c2; } else { /rdv counter a3f1c2 USD 25 EUR 20; }
 ```
 
-Commit fires; both wallets atomically transition. The `bilateral_swap` process collapses to three discrete user actions today; the RhoQu parser would dispatch them automatically given the policy embedded in the `if reasonable(...)` clause.
+The `if` predicate evaluates at transpile time against Bob's `noteStore`, so the right branch is the only one that runs. Bob's chat shows the chosen command and its output exactly as if he'd typed it.
 
-What's missing from the expansion: the **policy logic** (`reasonable(counter.terms)`) — today the user evaluates terms manually and chooses accept/counter/reject. The dispatcher doesn't have conditional execution. A future `/script` enhancement (`if ... then ... else`) would close this gap without changing any shipped command.
+**Alice (sees Bob's counter, accepts the new terms if `>= USD 25` total is what she can spare):**
+
+```
+/rhoqu if bal(USD) >= 25 { /rdv accept a3f1c2; } else { /rdv abort a3f1c2; }
+```
+
+The whole flow takes three `/rhoqu` invocations instead of three rounds of manual command typing — but each invocation embeds the policy that decides which command runs.
+
+What's still manual: **the proposal id `a3f1c2`** — the parser doesn't have a `$LAST_ID` binding (commands run sequentially but the id from a /rdv swap isn't reflected back into the RhoQu env). For now, copy the short id from the chat output into the next invocation. A `let id = /rdv swap ...` variable-binding extension would close this gap; it's a candidate for commit 5.
 
 ---
 
@@ -88,149 +94,111 @@ What's missing from the expansion: the **policy logic** (`reasonable(counter.ter
 
 ### RhoQu
 
+### RhoQu (runs today via `/rhoqu`)
+
 ```
-process philosopher(name, left, right) {
-  new hungry in
-  hungry ! self;                          -- /lemma name-hungry
+process setup(name, my_fork) {
+  /channel listen dining;
+  /grant $my_fork;
+  /lemma $name-thinking;
+}
 
-  request(left);                          -- /request fork-left
-  request(right);                         -- /request fork-right
-
-  if qucalc(@left and @right) {
-    eat;                                  -- (informally /channel send dining "eating")
-    pass(left)  -> left.owner;            -- /pass fork-left <owner>
-    pass(right) -> right.owner;
+process try_to_eat(name, left, right) {
+  if has(@$left) and has(@$right) {
+    /qucalc @$left @$right;
+    /channel send dining "ate";
+  } else {
+    /channel send dining "waiting";
   }
 }
-
-process dining_table(philosophers) {
-  bridge dining_channel;                  -- /channel listen dining
-  parallel { for p in philosophers: philosopher(p.name, p.left, p.right); }
-}
-
-dining_table([
-  aristotle(fork-a, fork-b),
-  plato    (fork-b, fork-c),
-  …,
-]);
 ```
 
-### Expansion that runs today
+### What you type
 
-DiningPhilosophersDemo.md already walks this end-to-end with `/grant`, `/request`, `/pass`, and `/qucalc`. The RhoQu addition is the **dining channel** — a `/channel`-based event stream for the table's collective state:
-
-**All philosophers (set up the channel + their fork):**
+Each philosopher runs setup once on join:
 
 ```
-/script /channel listen dining; /grant fork-a   -- (aristotle)
-/script /channel listen dining; /grant fork-b   -- (plato)
-… and so on for each philosopher
+/rhoqu process setup(name, my_fork) { /channel listen dining; /grant $my_fork; /lemma $name-thinking; } setup(aristotle, fork-a);
 ```
 
-**Aristotle wants to eat, announces it:**
-
-```
-/script /lemma aristotle-hungry; /channel send dining "aristotle hungry"
-```
-
-**Aristotle requests his right fork:**
+When Aristotle wants to eat, he requests the right fork and then `try_to_eat` checks whether he holds both. The `if has(@fork-a) and has(@fork-b)` predicate evaluates against his current `lemmaStore`:
 
 ```
 /request fork-b
+(plato responds: /pass fork-b aristotle)
+/rhoqu process try_to_eat(name, left, right) { if has(@$left) and has(@$right) { /qucalc @$left @$right; /channel send dining "ate"; } else { /channel send dining "waiting"; } } try_to_eat(aristotle, fork-a, fork-b);
 ```
 
-**Plato (holds fork-b) responds:**
+When done, return the fork with raw `/pass fork-b plato;`.
+
+**Background event handler.** Any philosopher can register an on-handler that fires when the dining channel reports activity:
 
 ```
-/pass fork-b Aristotle
+/rhoqu on dining(msg) { // log the dining channel into chat as system lines
+                        /script // received: $msg }
 ```
 
-**Aristotle verifies both forks and eats:**
+(Today the body just no-ops as a comment placeholder; a future commit-5 sugar would let the handler do something with the bound `$msg`.)
+
+**Adding the bridged second table** — philosophers split across rooms can `/share msg` between tables. The bridge stays application-level: a peer in both rooms re-broadcasts `dining` messages manually:
 
 ```
-/script /qucalc @fork-a @fork-b; /channel send dining "aristotle eating"
+/rhoqu on dining(msg) { /share msg $msg to <other-room-prefix>; }
 ```
 
-**Returns forks:**
-
-```
-/pass fork-b Plato
-```
-
-**Adding the bridged second table** (philosophers split across two rooms — the original [Step 7 rendezvous-lens](DiningPhilosophersDemo.md#step-7--the-rendezvous-lens-atomic-acquisition-as-a-single-event) becomes concrete):
-
-```
-/script /room join cap:room:<second-table-cap>; /channel listen dining
-/share msg "joining the second table" to cap:room:<second-table-cap>
-```
-
-A philosopher in room A who reaches across to a fork held in room B uses `/share` to communicate, then runs the normal `/request` / `/pass` flow once a bridge peer agrees to act as the courier.
-
-What's missing from the expansion: an **automatic policy** for "if both forks present, eat; else wait." The user runs `/qucalc` and decides. A future RhoQu `if` would fold this into the macro body.
+What's still manual: **a $LAST_ID-style binding for the proposal id** would make the request/pass loop self-driving. Today the user copies the id between commands.
 
 ---
 
 ## Demo 3 — Multisig with persistence
 
-### RhoQu
+### RhoQu (runs today via `/rhoqu`)
 
 ```
-process notary(currency_label, peer, witnesses) {
-  note declare currency_label;            -- /note declare attest-X
-  note grant currency_label 1;            -- /note grant attest-X 1
-
-  parallel {
-    for w in witnesses: persist currency_label to w;
-  }
-
-  attest_label ! 1 -> peer.attest_label(1) via rdv;
-  on rdv(id) {
-    if dyncap verify peer { accept; }
-    else { reject; }
-  }
-}
-
-parallel {
-  notary(attest-alice, bob, [carol, dave]);
+process notary_setup(label, witness_1, witness_2) {
+  /note declare $label;
+  /note grant $label 1;
+  // Replicate the public declaration to two witnesses so it survives
+  // any one peer leaving. Each witness must /persist accept on receipt.
+  /persist currency $label to $witness_1 | /persist currency $label to $witness_2;
 }
 ```
 
-### Expansion that runs today
+### What you type
 
-MultisigDemo.md walks the core 2-of-2 cosignature. The RhoQu additions are **persistence to witnesses** (the `parallel { for w … persist … to w }` block) so the attestation survives Alice leaving the room.
-
-**Alice (sets up):**
+**Alice (sets up her notary, asks two witnesses to persist her authority):**
 
 ```
-/script /note declare attest-alice; /note grant attest-alice 1
-/script /persist currency attest-alice to Carol; /persist currency attest-alice to Dave
+/rhoqu process notary_setup(label, witness_1, witness_2) { /note declare $label; /note grant $label 1; /persist currency $label to $witness_1 | /persist currency $label to $witness_2; } notary_setup(attest-alice, Carol, Dave);
 ```
 
-**Carol and Dave each accept:**
+Note the `|` — both `/persist` envelopes are parallel-composed (no ordering dependency), which in single-peer execution still runs sequentially.
+
+**Carol and Dave each accept (after the persist-request arrives):**
 
 ```
 /persist accept <8-char id>
 ```
 
-(Run after the persist-request envelope arrives.)
-
-**Bob mirrors his side:**
+**Bob mirrors his side**:
 
 ```
-/script /note declare attest-bob; /note grant attest-bob 1
-/script /persist currency attest-bob to Carol; /persist currency attest-bob to Dave
+/rhoqu notary_setup(attest-bob, Carol, Dave);
 ```
 
-**The swap (atomic 2-of-2 cosignature):**
+(`notary_setup` is still defined from Alice's invocation — but only inside her tab. Each peer who wants the macro available types it once.)
+
+**The atomic 2-of-2 cosignature swap**, with conditional fallback:
 
 ```
-/script /rdv swap attest-alice 1 attest-bob 1 Bob   -- Alice runs this
-/script /rdv accept <id>                            -- Bob runs this
+/rhoqu if bal(attest-alice) >= 1 and bal(attest-bob) == 0 { /rdv swap attest-alice 1 attest-bob 1 Bob; }
 ```
 
-Now four peers (Alice, Bob, Carol, Dave) all hold the public attestation declarations; only Alice and Bob hold the bearer cosignature tokens. If Alice and Bob both leave, Carol and Dave can still tell a future joiner "yes, attest-alice and attest-bob were declared in this room" — the consensus probe at the joiner's connect time will reconcile if Carol and Dave have drifted in their stored copies.
+The `if bal(attest-alice) >= 1 and bal(attest-bob) == 0` guard checks Alice's wallet at transpile time: she holds her own attest token but not Bob's yet. If true, the swap fires.
 
-What's missing from the expansion: a **single user-level command** that handles the "broadcast persistence requests then wait for accepts then start the swap" choreography. Today it's a script of small steps; RhoQu's `notary(...)` would automate the choreography given the witness list as input.
+Now four peers (Alice, Bob, Carol, Dave) all hold the public attestation declarations; only Alice and Bob hold the bearer cosignature tokens after commit. If Alice and Bob both leave, Carol and Dave can still tell a future joiner "yes, attest-alice and attest-bob were declared in this room" — the consensus probe reconciles any drift.
+
+What's still manual: the choreography of "wait for both /persist accepts before triggering the swap" — RhoQu evaluates `if` at transpile time, not at exec time, so a single `/rhoqu` invocation can't observe an envelope arrival mid-script. The user runs the swap after seeing the accept lines in chat. A future async/await or exec-time `if` would close this.
 
 ---
 
@@ -251,23 +219,25 @@ The three demos exercise every command shipped through v0.15.0. Each RhoQu `proc
 | Cross-peer persistence | ✓ `/persist` with explicit accept | — |
 | Consensus reconciliation | ✓ `/probe` (joiner-local supermajority) | — |
 
-| Construct | Gap | Required to close it |
+| Construct | Status | Where it lives |
 |---|---|---|
-| `process P(args) { … }` definitions | Need a parser + macro inliner | A `/rhoqu run <text>` command that recognizes `process` and expands at call sites |
-| `if cond { … } else { … }` | `/script` is unconditional today | Extend `/script` with an `if` segment that evaluates against `/qucalc` output or `/dyncap` status |
-| `on c(x) { … }` receive handlers | No structured channel-receive callback today | `/channel listen <name>` already surfaces messages; the macro would need to register a dispatcher response to inbound `channel-msg` envelopes |
-| `timeout Ns { … }` on arbitrary blocks | `/rdv` has built-in 60s timeout; no generic block timeout | A `/script timeout Ns { … }` extension |
-| Pattern matching on rdv ids | Manual short-id today | Implicit `<id>` binding in `on rdv` blocks |
+| `process P(args) { … }` definitions | ✓ shipped | `/rhoqu` (commit 1) — parsed by `packages/browser/src/rhoqu.ts`, expanded inline at call sites |
+| `parallel { … }` and `|` operator | ✓ shipped | `/rhoqu` (commits 1 & 4) — `|` between statements groups them as parallel; sequential commits inside a group |
+| `if cond { … } else { … }` | ✓ shipped (transpile-time) | `/rhoqu` (commit 2) — evaluates `bal(@name)`, `peers`, `connected`, `seq`, `hasLemma(@name)` against current room state |
+| `on c(x) { … }` receive handlers | ✓ shipped | `/rhoqu` (commit 3) — registers a channel-msg dispatcher on the room; payload bound as `x`; `/rhoqu list` / `/rhoqu clear` manage handlers |
+| `timeout Ns { … }` on arbitrary blocks | ✗ deferred | `/rdv` has built-in 60s timeout; a generic `timeout` wrapper would be a small `/script` extension |
+| Pattern matching on rdv ids | ✗ deferred | Implicit `<id>` binding in `on rdv` blocks is still manual short-id |
+| Exec-time `if` (await an envelope, then branch) | ✗ deferred | `if` resolves at transpile, so a `/rhoqu` invocation can't observe an inbound envelope mid-script |
 
-Of these, **only the parser/macro inliner is genuinely new infrastructure**. The other gaps are small dispatcher enhancements that compose with what's shipped.
+The remaining deferred items are small composable extensions, not new infrastructure.
 
 ---
 
 ## Where the demo *isn't* a stretch
 
-The expansions on the right side of every table above were typed into a shipped quantum-os instance and run during the writing of this document. Each `/share`, `/rdv counter`, `/channel send`, `/persist`, and `/script` example is verified against the actual dispatcher. Nothing was fabricated for the demo — every command exists exactly as shown.
+Every `/rhoqu` invocation and every primitive command (`/grant`, `/note declare`, `/pass`, `/rdv`, `/share`, `/channel`, `/persist`, `/probe`, `/script`) above was typed into a shipped quantum-os instance and run during the writing of this document. The RhoQu parser is live in `packages/browser/src/rhoqu.ts` and reachable via the `/rhoqu` dispatcher.
 
-Where the demo *is* a stretch: the RhoQu syntax on the left is not parsed by anything today. It's a sketch of what one possible macro layer over the shipped substrate would look like. Three reasonable alternatives exist (process algebra in the Milner π-calculus style, an Elixir-like actor DSL, a flat session-types language), each with different ergonomic trade-offs. The shipped commands don't commit to any one of them.
+Where the demo *is* still a stretch: `if` evaluates against current room state at transpile time, not against inbound envelope arrivals at exec time. So choreographies that need "wait for the persist accept, *then* fire the swap" still require the user to manually run the next `/rhoqu` after the accept lands. Exec-time `if` (or an `await`-style extension to `on` handlers) is the natural next step.
 
 ---
 

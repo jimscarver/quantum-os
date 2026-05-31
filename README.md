@@ -56,6 +56,7 @@ QLF slash commands:
   /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)
   /script <c1>;…   — sequential command chain (// to skip a segment)
   /persist [sub]   — agreed-replication of public state (@lemma|currency …)
+  /rhoqu <text>    — RhoQu macro: process / new / | / if / on / for over /commands
   @name in args    — expand named lemma (e.g. /qucalc @major @minor)
   //message        — send a message starting with /
 ```
@@ -454,6 +455,46 @@ Bearer state (held notes, receipts, redemption logs) is excluded by design — r
 
 The "persistence" is "as long as one of the replicating peers is online" — there's no server, no eternal storage. Multiple agreeing copies are the agreement-based mechanism.
 
+### `/rhoqu <text>`
+
+RhoQu macro language — a thin syntactic surface that compiles to the shipped slash commands. The body is parsed by `packages/browser/src/rhoqu.ts` into an AST and transpiled to a `string[]` of `/commands`, each dispatched in order through the regular handler.
+
+| Construct | Meaning |
+|---|---|
+| `process name(args…) { body }` | Define a parameterized macro. Calls inline at call site with substituted `$arg`s. |
+| `name(…); name(…);` | Sequential calls (or any sequence of `/commands` separated by `;`). |
+| `s1 \| s2 \| s3` | Parallel composition — each statement is grouped as a parallel block; on a single peer the group still executes sequentially, but the `\|` records "no ordering dependency." |
+| `if cond { … } else { … }` | Transpile-time branch. Conditions evaluate against current room state: `bal(@name)`, `peers`, `connected`, `seq`, `hasLemma(@name)`, plus `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`. |
+| `on channel(payload) { body }` | Register a `/channel` dispatcher: when an inbound `channel-msg` on `channel` arrives, bind `payload` to its text and execute `body`. Survives across messages until `/rhoqu clear`. |
+| `new name in { body }` | Mint a fresh `cap` named `name`, bind for the lexical body, broadcast as a lemma. |
+| `for x in [a, b, c]: stmt;` | Unroll a list at transpile time. |
+| `$var` | Substitute a process-parameter or `for`-bound value. |
+
+Sub-commands:
+
+| Subcommand | Effect |
+|---|---|
+| `/rhoqu <text>` | Parse, transpile, and dispatch the body. |
+| `/rhoqu list` | List registered `on` handlers in the active room. |
+| `/rhoqu clear` | Drop all registered handlers. |
+
+Example (parallel grant + immediate dispatch):
+```
+/rhoqu process setup(label, p1, p2) { /grant $label; /pass $label $p1 | /pass $label $p2; } setup(fork-a, Alice, Bob);
+```
+
+Example (transpile-time guard):
+```
+/rhoqu if bal(@attest-alice) >= 1 and bal(@attest-bob) == 0 { /rdv swap attest-alice 1 attest-bob 1 Bob; }
+```
+
+Example (on handler):
+```
+/rhoqu /channel listen orders; on orders(text) { /qucalc $text; }
+```
+
+See [RhoQuDemo.md](RhoQuDemo.md) for worked end-to-end demos (atomic swap with conditional accept, Dining Philosophers, multisig with persistence).
+
 ### `/zfa [token]`
 Validates any `cap:label:hex` token — checks ZFA balance and reports the spectral gap.
 ```
@@ -679,6 +720,7 @@ wasm_capability_valid(hex: string): boolean
 | Tagged messaging | ✓ `/channel listen/send` — name-tagged broadcast with per-receiver subscription filter |
 | Sequential command chain | ✓ `/script cmd1; cmd2; …` — batch dispatch on one line |
 | Cross-peer persistence | ✓ `/persist @lemma to <peer>` — agreed replication of public state with explicit accept/reject |
+| RhoQu macro language | ✓ `/rhoqu` — `process` / `new` / `\|` parallel / `if` / `on channel` / `for` transpile to dispatcher commands; handlers persist per-room |
 | Mobile viewport | ✓ `100dvh` + `interactive-widget=resizes-content` — input stays above the Android keyboard; not clipped on mobile Firefox |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
 | Native Rust peer | Planned |
