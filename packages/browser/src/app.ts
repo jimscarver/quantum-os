@@ -13,6 +13,7 @@ import { newDynCapState, signEnvelope, verifyEnvelope,
 import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
+import { transpile as rhoquTranspile, RhoQuError } from "./rhoqu.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1207,6 +1208,7 @@ function handleCommand(raw: string): string[] {
       sys("  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)");
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
+      sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -2329,6 +2331,43 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "rhoqu": {
+      // /rhoqu <source>
+      //
+      // Parse and transpile a RhoQu macro program to a flat list of
+      // /command strings, then run each via handleCommand exactly like
+      // /script does. Supports `process Name(args) { body }` definitions,
+      // `new x y z;`, `parallel { … }`, `Name(args);` calls with $arg
+      // substitution, raw /command passthrough, and // comments.
+      //
+      // Multi-line sources can be pasted into the chat input directly if
+      // the field allows it; otherwise put statements on one line
+      // separated by `;`. Each top-level statement must end with `;`.
+      const src = arg.trim();
+      if (!src) {
+        sys("usage: /rhoqu <source>");
+        sys("  process P(a, b) { /grant $a; /lemma $b; } P(fork-a, alice);");
+        sys("  new x y z; parallel { /lemma x; /lemma y; /lemma z; }");
+        break;
+      }
+      let cmds: string[];
+      try {
+        cmds = rhoquTranspile(src);
+      } catch (e) {
+        if (e instanceof RhoQuError) sys(`· ${e.message}`);
+        else sys(`· rhoqu parse error: ${String(e)}`);
+        break;
+      }
+      sys(`· rhoqu transpiled to ${cmds.length} command${cmds.length === 1 ? "" : "s"}`);
+      let executed = 0;
+      for (const c of cmds) {
+        try { handleCommand(c); executed++; }
+        catch (err) { sys(`· rhoqu error on '${c}': ${String(err)}`); }
+      }
+      sys(`· rhoqu: ${executed} executed`);
+      break;
+    }
+
     case "script": {
       // /script cmd1; cmd2; cmd3
       //
@@ -3143,7 +3182,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
