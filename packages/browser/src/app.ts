@@ -1165,6 +1165,7 @@ function handleCommand(raw: string): string[] {
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
+      sys("  /share <sel> to <room>  — bridge a lemma/chat/note into another tab");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -1987,6 +1988,90 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "share": {
+      // /share <selector> to <room-prefix>
+      // Selectors:
+      //   @<lemma-name>            re-declare the lemma in the target room
+      //   msg <text>               post a chat-text message into the target room
+      //   note <currency> <N>      re-mint a note (target room must hold cap:token-<currency>)
+      //
+      // The bridge is application-level: we briefly swap activeRoom to the
+      // target context and call the existing dispatcher commands there. The
+      // target room sees the action exactly as if the user typed it locally.
+      const sParts = arg.trim().split(/\s+/);
+      const toIdx = sParts.lastIndexOf("to");
+      if (toIdx < 1 || toIdx >= sParts.length - 1) {
+        sys("usage: /share <selector> to <room-prefix>");
+        sys("  selectors: @<lemma>  |  msg <text>  |  note <currency> <N>");
+        break;
+      }
+      const selector  = sParts.slice(0, toIdx).join(" ");
+      const targetArg = sParts.slice(toIdx + 1).join(" ");
+
+      // Resolve target room by prefix-match on roomId; reject ambiguous/empty.
+      let target: RoomContext | null = null;
+      const matches: RoomContext[] = [];
+      for (const ctx of rooms.values()) {
+        if (ctx.roomId === activeRoom.roomId) continue;
+        if (ctx.roomId.startsWith(targetArg) || ctx.roomId === targetArg) matches.push(ctx);
+      }
+      if (matches.length === 0) { sys(`no other room matches '${targetArg}'`); break; }
+      if (matches.length > 1) {
+        sys(`ambiguous target '${targetArg}' — matches:`);
+        for (const m of matches) sys(`  ${m.roomId}`);
+        break;
+      }
+      target = matches[0];
+
+      // Selector dispatch. We swap activeRoom to the target for the duration
+      // of the bridged action, run the same handleCommand path that a local
+      // tab would use, then restore. The bridged action lands in the target
+      // room with the bridge peer's dyncap chain in *that* room — no new
+      // wire kinds, no infrastructure relay.
+      const runIn = (ctx: RoomContext, cmd: string): string[] => {
+        const prev = activeRoom; setActiveRoom(ctx);
+        try { return handleCommand(cmd); } finally { setActiveRoom(prev); }
+      };
+
+      if (selector.startsWith("@")) {
+        const lemmaName = selector.slice(1).trim();
+        const entry = lemmaStore.get(lemmaName);
+        if (!entry) { sys(`you don't hold @${lemmaName} in this room — nothing to share`); break; }
+        sys(`· sharing @${lemmaName} → ${shortId(target.roomId)}`);
+        runIn(target, `/lemma ${lemmaName} ${entry.twists}`);
+      } else if (selector.startsWith("msg ")) {
+        const text = selector.slice(4);
+        sys(`· sharing chat → ${shortId(target.roomId)}`);
+        // Direct chat envelope; this is the only path that doesn't reuse a
+        // dispatcher command (because chat doesn't have one). Send it raw
+        // through the target room's qpeer if connected.
+        if (target.qpeer) {
+          target.qpeer.broadcast({ kind: "chat", text });
+          // Also reflect into the target's local chat log so the bridge peer
+          // sees what they sent.
+          const prev = activeRoom; setActiveRoom(target);
+          try { addMessage("", text, "self"); } finally { setActiveRoom(prev); }
+        } else {
+          sys(`  · target room not connected — message not sent`);
+        }
+      } else if (selector.startsWith("note ")) {
+        const noteParts = selector.slice(5).trim().split(/\s+/);
+        const currency = noteParts[0];
+        const N = parseInt(noteParts[1] ?? "", 10);
+        if (!currency || isNaN(N) || N < 1) {
+          sys("usage: /share note <currency> <N> to <room-prefix>");
+          break;
+        }
+        sys(`· minting ${currency} ${N} in ${shortId(target.roomId)} (requires target to hold cap:token-${currency})`);
+        runIn(target, `/note grant ${currency} ${N}`);
+      } else {
+        sys(`unknown selector: '${selector}'`);
+        sys("  selectors: @<lemma>  |  msg <text>  |  note <currency> <N>");
+        sys("  example: /share @met-bob to 02460246");
+      }
+      break;
+    }
+
     case "room": {
       const rParts = arg.trim().split(/\s+/);
       const sub = (rParts[0] || "list").toLowerCase();
@@ -2584,7 +2669,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
