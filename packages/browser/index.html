@@ -2,16 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
   <title>QuantumOS — P2P Room</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html, body {
+      /* On mobile Firefox/Safari, 100vh includes the URL bar so the
+         bottom-aligned input row slides below the visible area. 100dvh
+         is the *dynamic* viewport — shrinks when browser chrome appears
+         and when the soft keyboard opens (combined with
+         interactive-widget=resizes-content on the viewport meta). */
+      height: 100vh;     /* fallback */
+      height: 100dvh;
+    }
     body {
       font-family: "SF Mono", "Fira Code", monospace;
       background: #0d0d0d;
       color: #e0e0e0;
-      height: 100vh;
       overflow: hidden;
       display: flex;
       flex-direction: column;

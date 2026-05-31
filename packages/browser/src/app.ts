@@ -3234,6 +3234,23 @@ async function init(): Promise<void> {
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
   msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  // Mobile keyboard fallback: when input gains focus, scroll it into view.
+  // For browsers that honor `interactive-widget=resizes-content` (modern
+  // Chrome/Firefox/Safari) this is a no-op; for the rest it ensures the
+  // input doesn't end up underneath the soft keyboard.
+  msgInput.addEventListener("focus", () => {
+    // Defer to next tick so the keyboard has begun to open before we scroll.
+    setTimeout(() => msgInput.scrollIntoView({ block: "end", behavior: "smooth" }), 200);
+  });
+  // Some browsers expose the visualViewport API. When the keyboard opens,
+  // visualViewport's height shrinks; re-scroll the input to stay visible.
+  if (typeof window !== "undefined" && window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {
+      if (document.activeElement === msgInput) {
+        msgInput.scrollIntoView({ block: "end" });
+      }
+    });
+  }
 
   const qp = new URLSearchParams(window.location.search);
   const sig = qp.get("signal");
