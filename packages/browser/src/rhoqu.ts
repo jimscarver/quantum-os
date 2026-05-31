@@ -26,10 +26,11 @@
 // ---------------------------------------------------------------------------
 
 type TokenKind =
-  | "process" | "new" | "in" | "parallel"
+  | "process" | "new" | "in" | "parallel" | "if" | "else" | "and" | "or" | "not"
   | "ident" | "number" | "string" | "command"
   | "lbrace" | "rbrace" | "lparen" | "rparen"
-  | "semi" | "comma" | "eof";
+  | "semi" | "comma" | "eof"
+  | "eq" | "ne" | "lt" | "le" | "gt" | "ge";
 
 interface Token { kind: TokenKind; value: string; line: number; col: number }
 
@@ -39,7 +40,7 @@ class RhoQuError extends Error {
   }
 }
 
-const KEYWORDS = new Set(["process", "new", "in", "parallel"]);
+const KEYWORDS = new Set(["process", "new", "in", "parallel", "if", "else", "and", "or", "not"]);
 
 function tokenize(src: string): Token[] {
   const tokens: Token[] = [];
@@ -116,6 +117,14 @@ function tokenize(src: string): Token[] {
       continue;
     }
 
+    // Two-character comparison operators (must come before single-char `<`/`>`).
+    if (ch === "=" && src[i + 1] === "=") { push("eq", "==", line, col); advance(2); continue; }
+    if (ch === "!" && src[i + 1] === "=") { push("ne", "!=", line, col); advance(2); continue; }
+    if (ch === "<" && src[i + 1] === "=") { push("le", "<=", line, col); advance(2); continue; }
+    if (ch === ">" && src[i + 1] === "=") { push("ge", ">=", line, col); advance(2); continue; }
+    if (ch === "<") { push("lt", "<", line, col); advance(1); continue; }
+    if (ch === ">") { push("gt", ">", line, col); advance(1); continue; }
+
     // Punctuation
     if (ch === "{") { push("lbrace", "{", line, col); advance(1); continue; }
     if (ch === "}") { push("rbrace", "}", line, col); advance(1); continue; }
@@ -139,11 +148,38 @@ type Stmt =
   | { kind: "new"; names: string[] }
   | { kind: "parallel"; body: Stmt[] }
   | { kind: "call"; name: string; args: string[] }
-  | { kind: "cmd"; text: string };
+  | { kind: "cmd"; text: string }
+  | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] };
+
+// Expression AST. Evaluated against a RhoQuContext at transpile time;
+// the chosen branch's commands are emitted.
+type Expr =
+  | { kind: "num"; value: number }
+  | { kind: "str"; value: string }
+  | { kind: "var"; name: string }              // a bare identifier (looked up in env)
+  | { kind: "lemma"; name: string }            // @name — refers to lemma name string
+  | { kind: "call"; name: string; args: Expr[] }
+  | { kind: "binop"; op: BinOp; left: Expr; right: Expr }
+  | { kind: "unop"; op: UnOp; expr: Expr };
+
+type BinOp = "and" | "or" | "eq" | "ne" | "lt" | "le" | "gt" | "ge";
+type UnOp = "not";
 
 interface ProcessDef { name: string; params: string[]; body: Stmt[] }
 
 interface Program { defs: Map<string, ProcessDef>; top: Stmt[] }
+
+/// Runtime hooks the transpiler calls when evaluating `if` conditions.
+/// Built-in functions: has(@x), bal(currency), declared(currency),
+/// peers(), connected(), seq(). Implementations live in app.ts.
+export interface RhoQuContext {
+  hasLemma(name: string): boolean;
+  balance(currency: string): number;
+  isCurrencyDeclared(currency: string): boolean;
+  peerCount(): number;
+  isConnected(): boolean;
+  myCurrentSeq(): number;
+}
 
 // ---------------------------------------------------------------------------
 // Parser
@@ -211,10 +247,99 @@ class Parser {
     const t = this.peek();
     if (t.kind === "new") return this.parseNew();
     if (t.kind === "parallel") return this.parseParallel();
+    if (t.kind === "if") return this.parseIf();
     if (t.kind === "command") return this.parseCmd();
     if (t.kind === "ident") return this.parseCall();
     if (t.kind === "semi") { this.eat(); return null; }
     throw new RhoQuError(`unexpected token '${t.value}' (kind: ${t.kind})`, t.line, t.col);
+  }
+
+  private parseIf(): Stmt {
+    this.expect("if");
+    const cond = this.parseExpr();
+    this.expect("lbrace");
+    const thenBody = this.parseStmtsUntil("rbrace");
+    this.expect("rbrace");
+    let elseBody: Stmt[] = [];
+    if (this.maybe("else")) {
+      // Allow `else if` chaining by treating it as a single nested if.
+      if (this.peek().kind === "if") {
+        elseBody = [this.parseIf()];
+      } else {
+        this.expect("lbrace");
+        elseBody = this.parseStmtsUntil("rbrace");
+        this.expect("rbrace");
+      }
+    }
+    this.maybe("semi");
+    return { kind: "if", cond, then: thenBody, else: elseBody };
+  }
+
+  // ---- expression grammar: disjunction → conjunction → unary → comparison →
+  // primary. Right-recursive `not` for unary, left-recursive otherwise.
+
+  private parseExpr(): Expr { return this.parseOr(); }
+
+  private parseOr(): Expr {
+    let left = this.parseAnd();
+    while (this.peek().kind === "or") { this.eat(); left = { kind: "binop", op: "or", left, right: this.parseAnd() }; }
+    return left;
+  }
+
+  private parseAnd(): Expr {
+    let left = this.parseUnary();
+    while (this.peek().kind === "and") { this.eat(); left = { kind: "binop", op: "and", left, right: this.parseUnary() }; }
+    return left;
+  }
+
+  private parseUnary(): Expr {
+    if (this.peek().kind === "not") { this.eat(); return { kind: "unop", op: "not", expr: this.parseUnary() }; }
+    return this.parseComparison();
+  }
+
+  private parseComparison(): Expr {
+    const left = this.parsePrimary();
+    const t = this.peek();
+    const cmpOps: TokenKind[] = ["eq", "ne", "lt", "le", "gt", "ge"];
+    if (cmpOps.includes(t.kind)) {
+      const op = t.kind as BinOp;
+      this.eat();
+      const right = this.parsePrimary();
+      return { kind: "binop", op, left, right };
+    }
+    return left;
+  }
+
+  private parsePrimary(): Expr {
+    const t = this.peek();
+    if (t.kind === "lparen") { this.eat(); const e = this.parseExpr(); this.expect("rparen"); return e; }
+    if (t.kind === "number") { this.eat(); return { kind: "num", value: parseFloat(t.value) }; }
+    if (t.kind === "string") {
+      this.eat();
+      const raw = t.value;
+      const stripped = (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))
+        ? raw.slice(1, -1) : raw;
+      return { kind: "str", value: stripped };
+    }
+    if (t.kind === "ident") {
+      const name = this.eat().value;
+      // `@name` syntax: an identifier whose first character is `@` (the
+      // tokenizer allows @ in ident chars) becomes a LemmaRef expression.
+      if (name.startsWith("@")) return { kind: "lemma", name: name.slice(1) };
+      // Function call?
+      if (this.peek().kind === "lparen") {
+        this.eat();
+        const args: Expr[] = [];
+        if (this.peek().kind !== "rparen") {
+          args.push(this.parseExpr());
+          while (this.maybe("comma")) args.push(this.parseExpr());
+        }
+        this.expect("rparen");
+        return { kind: "call", name, args };
+      }
+      return { kind: "var", name };
+    }
+    throw new RhoQuError(`expected expression, got '${t.value}'`, t.line, t.col);
   }
 
   private parseNew(): Stmt {
@@ -302,31 +427,39 @@ function substitute(text: string, env: Map<string, string>): string {
 }
 
 /// Transpile a RhoQu program into a flat list of /command strings.
+/// Conditions in `if` statements are evaluated at transpile time against
+/// `ctx`, so the chosen branch's commands are what gets emitted.
 /// Throws RhoQuError on parse or expansion failure.
-export function transpile(source: string): string[] {
+export function transpile(source: string, ctx?: RhoQuContext): string[] {
   const tokens = tokenize(source);
   const program = new Parser(tokens).parseProgram();
   const out: string[] = [];
   const env = new Map<string, string>();
-  emitStmts(program.top, program, env, out);
+  emitStmts(program.top, program, env, out, ctx);
   return out;
 }
 
-function emitStmts(stmts: Stmt[], program: Program, env: Map<string, string>, out: string[]): void {
-  for (const s of stmts) emitStmt(s, program, env, out);
+function emitStmts(stmts: Stmt[], program: Program, env: Map<string, string>, out: string[], ctx?: RhoQuContext): void {
+  for (const s of stmts) emitStmt(s, program, env, out, ctx);
 }
 
-function emitStmt(s: Stmt, program: Program, env: Map<string, string>, out: string[]): void {
+function emitStmt(s: Stmt, program: Program, env: Map<string, string>, out: string[], ctx?: RhoQuContext): void {
   if (s.kind === "new") {
     for (const name of s.names) out.push(`/grant ${name}`);
     return;
   }
   if (s.kind === "parallel") {
-    emitStmts(s.body, program, env, out);   // sequential expansion; true parallel = separate peers
+    emitStmts(s.body, program, env, out, ctx);
     return;
   }
   if (s.kind === "cmd") {
     out.push(substitute(s.text, env));
+    return;
+  }
+  if (s.kind === "if") {
+    const v = evalExpr(s.cond, env, ctx);
+    const branch = truthy(v) ? s.then : s.else;
+    emitStmts(branch, program, env, out, ctx);
     return;
   }
   if (s.kind === "call") {
@@ -336,22 +469,101 @@ function emitStmt(s: Stmt, program: Program, env: Map<string, string>, out: stri
       throw new RhoQuError(
         `process '${s.name}' takes ${def.params.length} args, got ${s.args.length}`, 0, 0);
     }
-    // Bind args in a fresh child env. Argument values are themselves
-    // substituted against the caller's env so a process can pass through
-    // its own bindings.
     const childEnv = new Map(env);
     for (let k = 0; k < def.params.length; k++) {
       const argVal = substitute(s.args[k], env);
-      // Strip surrounding quotes from string literals so callers don't have
-      // to be aware of token types when passing values into /commands.
       const stripped = (argVal.startsWith('"') && argVal.endsWith('"'))
                     || (argVal.startsWith("'") && argVal.endsWith("'"))
         ? argVal.slice(1, -1)
         : argVal;
       childEnv.set(def.params[k], stripped);
     }
-    emitStmts(def.body, program, childEnv, out);
+    emitStmts(def.body, program, childEnv, out, ctx);
     return;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Expression evaluator
+// ---------------------------------------------------------------------------
+
+type Value = number | string | boolean;
+
+function truthy(v: Value): boolean {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  return v.length > 0;
+}
+
+function evalExpr(e: Expr, env: Map<string, string>, ctx?: RhoQuContext): Value {
+  if (e.kind === "num") return e.value;
+  if (e.kind === "str") return e.value;
+  if (e.kind === "lemma") return e.name;
+  if (e.kind === "var") {
+    const v = env.get(e.name);
+    if (v !== undefined) return tryNumber(v);
+    return e.name;   // unbound identifier: treat as its own literal name (lets `bal(USD)` resolve `USD`)
+  }
+  if (e.kind === "unop") {
+    const v = evalExpr(e.expr, env, ctx);
+    if (e.op === "not") return !truthy(v);
+    throw new RhoQuError(`unknown unary op '${e.op}'`, 0, 0);
+  }
+  if (e.kind === "binop") {
+    // Short-circuit for and/or
+    if (e.op === "and") return truthy(evalExpr(e.left, env, ctx)) && truthy(evalExpr(e.right, env, ctx));
+    if (e.op === "or")  return truthy(evalExpr(e.left, env, ctx)) || truthy(evalExpr(e.right, env, ctx));
+    const l = evalExpr(e.left, env, ctx);
+    const r = evalExpr(e.right, env, ctx);
+    switch (e.op) {
+      case "eq": return l === r;
+      case "ne": return l !== r;
+      case "lt": return cmp(l, r) < 0;
+      case "le": return cmp(l, r) <= 0;
+      case "gt": return cmp(l, r) > 0;
+      case "ge": return cmp(l, r) >= 0;
+    }
+  }
+  if (e.kind === "call") return callBuiltin(e.name, e.args.map(a => evalExpr(a, env, ctx)), ctx);
+  throw new RhoQuError(`unknown expression kind`, 0, 0);
+}
+
+function tryNumber(s: string): Value {
+  const n = Number(s);
+  return !isNaN(n) && isFinite(n) && s.trim() !== "" ? n : s;
+}
+
+function cmp(a: Value, b: Value): number {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+}
+
+function callBuiltin(name: string, args: Value[], ctx?: RhoQuContext): Value {
+  if (!ctx) {
+    // No context: built-ins can't access runtime state. Return a safe default
+    // (false / 0) — callers can opt-in to richer behaviour by passing ctx.
+    if (name === "has" || name === "declared" || name === "connected") return false;
+    if (name === "bal" || name === "peers" || name === "seq") return 0;
+    throw new RhoQuError(`unknown function '${name}'`, 0, 0);
+  }
+  switch (name) {
+    case "has":
+      if (args.length !== 1) throw new RhoQuError(`has() takes 1 arg, got ${args.length}`, 0, 0);
+      return ctx.hasLemma(String(args[0]));
+    case "bal":
+      if (args.length !== 1) throw new RhoQuError(`bal() takes 1 arg, got ${args.length}`, 0, 0);
+      return ctx.balance(String(args[0]));
+    case "declared":
+      if (args.length !== 1) throw new RhoQuError(`declared() takes 1 arg, got ${args.length}`, 0, 0);
+      return ctx.isCurrencyDeclared(String(args[0]));
+    case "peers":
+      return ctx.peerCount();
+    case "connected":
+      return ctx.isConnected();
+    case "seq":
+      return ctx.myCurrentSeq();
+    default:
+      throw new RhoQuError(`unknown function '${name}'`, 0, 0);
   }
 }
 

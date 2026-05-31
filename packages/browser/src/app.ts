@@ -13,7 +13,7 @@ import { newDynCapState, signEnvelope, verifyEnvelope,
 import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
-import { transpile as rhoquTranspile, RhoQuError } from "./rhoqu.js";
+import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext } from "./rhoqu.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -2350,9 +2350,27 @@ function handleCommand(raw: string): string[] {
         sys("  new x y z; parallel { /lemma x; /lemma y; /lemma z; }");
         break;
       }
+      // Build a runtime context for if-conditions (has(@name), bal(currency),
+      // declared(name), peers(), connected(), seq()) that reads from the
+      // active room's stores at transpile time.
+      const rhoCtx: RhoQuContext = {
+        hasLemma:  (name) => lemmaStore.has(name),
+        balance:   (currency) => {
+          let total = 0;
+          for (const n of noteStore.values()) if (n.currency === currency) total += n.denomination;
+          return total;
+        },
+        isCurrencyDeclared: (name) => {
+          for (const e of knownCurrencies.values()) if (e.currency === name) return true;
+          return false;
+        },
+        peerCount:    () => peers.size,
+        isConnected:  () => qpeer !== null,
+        myCurrentSeq: () => dyncapState?.seqByRoom[activeRoom.roomId] ?? 0,
+      };
       let cmds: string[];
       try {
-        cmds = rhoquTranspile(src);
+        cmds = rhoquTranspile(src, rhoCtx);
       } catch (e) {
         if (e instanceof RhoQuError) sys(`· ${e.message}`);
         else sys(`· rhoqu parse error: ${String(e)}`);
