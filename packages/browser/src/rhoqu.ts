@@ -505,9 +505,9 @@ function evalExpr(e: Expr, env: Map<string, string>, ctx?: RhoQuContext): Value 
     return e.name;   // unbound identifier: treat as its own literal name (lets `bal(USD)` resolve `USD`)
   }
   if (e.kind === "unop") {
-    const v = evalExpr(e.expr, env, ctx);
-    if (e.op === "not") return !truthy(v);
-    throw new RhoQuError(`unknown unary op '${e.op}'`, 0, 0);
+    // UnOp is currently only "not"; if a new unary op is added later, the
+    // exhaustiveness check below catches the missing case.
+    return !truthy(evalExpr(e.expr, env, ctx));
   }
   if (e.kind === "binop") {
     // Short-circuit for and/or
