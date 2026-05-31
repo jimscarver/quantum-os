@@ -1850,10 +1850,16 @@ function handleCommand(raw: string): string[] {
           if (!qpeer) { sys("not connected"); break; }
           const state = findByPrefix(prefix);
           if (!state) { sys(`no proposal matching '${prefix}'`); break; }
-          if (state.role !== "participant") { sys("you proposed this; nothing to accept"); break; }
-          if (state.myStatus !== "pending") { sys(`already ${state.myStatus}`); break; }
-
           const myId = qpeer.peerId;
+          const isProposer = state.role === "proposer";
+          // Proposer-after-counter case: state.role is still "proposer" but
+          // acceptedBy was cleared by the inbound counter handler, so the
+          // proposer must re-accept the new terms. For a participant, the
+          // myStatus flag tracks acceptance.
+          const alreadyAccepted = isProposer
+            ? state.acceptedBy.has(myId)
+            : state.myStatus === "accepted";
+          if (alreadyAccepted) { sys(`already accepted`); break; }
           const myRows = state.proposal.rows.filter(r => r.participant === myId);
           if (myRows.length === 0) { sys("you have no row in this rendezvous"); break; }
           if (myRows.length > 1) { sys("multi-row participation not yet supported"); break; }
@@ -1871,6 +1877,43 @@ function handleCommand(raw: string): string[] {
             receivedFrom: chosen.receivedFrom,
           };
           lockToken(detached.outgoing, lockEntry, state.proposal.id);
+
+          if (isProposer) {
+            // Local accept: record in acceptedBy and run the same
+            // "all-accepted → commit" path the inbound rdv-accept handler
+            // does. No envelope sent (we *are* the proposer).
+            state.acceptedBy.set(myId, detached.outgoing);
+            saveNotes();
+            renderNotes();
+            sys(`· re-accepted rendezvous ${shortRdvId(state.proposal.id)} on the new terms`);
+            sys(`  locked ${row.gives.currency} ${row.gives.denomination}`);
+            if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+            const participants = uniqueParticipants(state.proposal);
+            if (!participants.every(p => state.acceptedBy.has(p))) break;
+            // All-accepted — build and dispatch the commit.
+            const N = state.proposal.rows.length;
+            const commitRows: CommitRow[] = state.proposal.rows.map((r, i) => {
+              const nextRow = state.proposal.rows[(i + 1) % N];
+              return {
+                participant: r.participant,
+                givesToken: state.acceptedBy.get(r.participant)!,
+                getsToken:  state.acceptedBy.get(nextRow.participant)!,
+              };
+            });
+            for (const p of participants) {
+              if (p === myId) continue;
+              qpeer.send(p, { kind: "rdv-commit", id: state.proposal.id, rows: commitRows });
+            }
+            const ok = applyCommit(state, commitRows);
+            proposals.delete(state.proposal.id);
+            clearProposalTimeout(state.proposal.id);
+            saveNotes();
+            renderNotes();
+            sys(ok ? `  · committed rdv ${shortRdvId(state.proposal.id)}` : `  · commit application failed locally`);
+            break;
+          }
+
+          // Participant path — original behavior.
           state.myStatus = "accepted";
           saveNotes();
           renderNotes();
@@ -1928,11 +1971,93 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
+        case "counter": {
+          // /rdv counter <id> <giveCur> <giveN> <getCur> <getN>
+          //
+          // Propose new terms in an existing 2-party rendezvous. The current
+          // round's locks (mine and theirs, if accepted) are released; the
+          // proposal's rows are replaced with the new cyclic swap; my new
+          // gives token is locked; an rdv-counter envelope is sent to the
+          // other participant; my status is "accepted" (I just chose these
+          // terms); their status is reset to "pending". Either party can
+          // counter at any pending state; this round-robins until accept,
+          // reject, abort, or timeout.
+          if (!qpeer) { sys("not connected"); break; }
+          const prefix = a[0];
+          const giveCur = a[1];
+          const giveN   = parseInt(a[2] ?? "", 10);
+          const getCur  = a[3];
+          const getN    = parseInt(a[4] ?? "", 10);
+          if (!prefix || !giveCur || !getCur || isNaN(giveN) || isNaN(getN) || giveN < 1 || getN < 1) {
+            sys("usage: /rdv counter <id> <giveCur> <giveN> <getCur> <getN>");
+            sys("  example: /rdv counter a3f1c2 USD 25 EUR 20");
+            break;
+          }
+          const state = findByPrefix(prefix);
+          if (!state) { sys(`no proposal matching '${prefix}'`); break; }
+          const myId = qpeer.peerId;
+          const otherId = uniqueParticipants(state.proposal).find(p => p !== myId);
+          if (!otherId) { sys("no other participant to counter to"); break; }
+
+          // Release current locks (both my own and the other's, if any).
+          releaseLockedFor(state.proposal.id);
+          state.acceptedBy.clear();
+
+          // Replace the proposal's rows with the new cyclic swap.
+          const myName2 = myName || shortId(myId);
+          const newRows: Row[] = cyclicSwap(
+            myId,    { currency: giveCur, denomination: giveN },
+            otherId, { currency: getCur,  denomination: getN  },
+          );
+          state.proposal.rows = newRows;
+          state.proposal.proposerName = myName2;   // attribute the latest terms to the counterer
+          state.proposal.expiresAt = Date.now() + RDV_TIMEOUT_MS;
+          clearProposalTimeout(state.proposal.id);
+          scheduleProposalTimeout(state.proposal.id, RDV_TIMEOUT_MS);
+
+          // Lock my new gives token.
+          const chosen = pickFreeNote(giveCur, giveN);
+          if (!chosen) {
+            sys(`cannot counter: no free ${giveCur} note of denomination ≥ ${giveN}`);
+            break;
+          }
+          const detached = detachFromFree(chosen, giveN);
+          if (!detached) { sys("split failed"); break; }
+          const lockEntry: NoteEntry = {
+            token: detached.outgoing, currency: giveCur, denomination: giveN,
+            receivedFrom: chosen.receivedFrom,
+          };
+          lockToken(detached.outgoing, lockEntry, state.proposal.id);
+          state.acceptedBy.set(myId, detached.outgoing);
+          state.myStatus = "accepted";   // I implicitly accept my own counter
+          saveNotes();
+          renderNotes();
+
+          // Send the counter envelope, including the token I just locked so
+          // the recipient can record it in their acceptedBy for the eventual
+          // commit construction.
+          const sent = qpeer.send(otherId, {
+            kind: "rdv-counter", id: state.proposal.id, rows: newRows,
+            proposerName: myName2, token: detached.outgoing,
+          });
+          if (!sent) {
+            releaseLockedFor(state.proposal.id);
+            state.acceptedBy.delete(myId);
+            sys("cannot reach the other participant — counter not delivered");
+            break;
+          }
+          sys(`· counter sent for rendezvous ${shortRdvId(state.proposal.id)}`);
+          sys(`  new terms: you give ${giveCur} ${giveN}, get ${getCur} ${getN}`);
+          if (detached.change) sys(`  (change ${detached.change.denomination} returned to your wallet)`);
+          break;
+        }
+
         default:
           sys(`unknown subcommand: /rdv ${sub}`);
           sys("  /rdv [list]                                        — show pending proposals");
           sys("  /rdv swap <giveCur> <giveN> <getCur> <getN> <peer> — propose a 2-party swap");
-          sys("  /rdv accept <id>                                   — accept");
+          sys("  /rdv counter <id> <giveCur> <giveN> <getCur> <getN> — propose new terms in an existing rendezvous");
+          sys("  /rdv accept <id>                                   — accept current terms");
           sys("  /rdv reject <id>                                   — decline");
           sys("  /rdv abort  <id>                                   — cancel your proposal");
       }
@@ -2579,6 +2704,72 @@ function connect(): void {
           renderNotes();
           addMessage(from, `aborts rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
           addMessage("", `  · rdv ${shortRdvId(id)} cancelled${reason ? ` (${reason})` : ""}`, "system");
+          return;
+        }
+        if (d.kind === "rdv-counter") {
+          // The other participant proposed new terms for an in-flight rdv.
+          // Validate, release any locks we hold for it (terms changed —
+          // any token we had reserved is no longer the right one), and
+          // replace the proposal's rows. Our status resets to pending; the
+          // counterer's status is "accepted" (acceptedBy tracks them).
+          const id = String(d.id ?? "");
+          const rowsRaw = d.rows;
+          if (!Array.isArray(rowsRaw)) return;
+          const newRows = rowsRaw as Row[];
+          const state = proposals.get(id);
+          if (!state) {
+            addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: no matching proposal`, "system");
+            return;
+          }
+          if (!conservationCheck(newRows)) {
+            addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: conservation violation`, "system");
+            return;
+          }
+          const myId = qpeer?.peerId ?? "";
+          const myNewRow = newRows.find(r => r.participant === myId);
+          if (!myNewRow) {
+            addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: I have no row in the new terms`, "system");
+            return;
+          }
+
+          // Validate the counterer's committed token: must be a real note
+          // matching their new row's gives spec, and ZFA-balanced.
+          const counterToken = String(d.token ?? "");
+          const senderRow = newRows.find(r => r.participant === from);
+          if (!senderRow) {
+            addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: counterer has no row in new terms`, "system");
+            return;
+          }
+          const parsedTok = parseNoteLabel(counterToken);
+          if (!parsedTok || parsedTok.kind !== "note"
+              || parsedTok.currency !== senderRow.gives.currency
+              || noteDenomination(counterToken) !== senderRow.gives.denomination
+              || !validateCapability(counterToken)) {
+            addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+            addMessage("", `  · refused: counterer's token doesn't match new terms`, "system");
+            return;
+          }
+
+          // Release any locks held for the previous round.
+          releaseLockedFor(id);
+          state.acceptedBy.clear();
+          state.acceptedBy.set(from, counterToken);   // counterer implicitly accepted with this token
+          state.proposal.rows = newRows;
+          state.proposal.proposerName = String(d.proposerName ?? peerLabel(from));
+          state.proposal.expiresAt = Date.now() + RDV_TIMEOUT_MS;
+          state.myStatus = "pending";
+          clearProposalTimeout(id);
+          scheduleProposalTimeout(id, RDV_TIMEOUT_MS);
+          saveNotes();
+          renderNotes();
+
+          addMessage(from, `counters rdv ${shortRdvId(id)}`, "peer", peerLabel(from));
+          addMessage("", `  · new terms: you give ${myNewRow.gives.currency} ${myNewRow.gives.denomination}, get ${myNewRow.gets.currency} ${myNewRow.gets.denomination}`, "system");
+          addMessage("", `  · /rdv accept ${shortRdvId(id)}  |  /rdv reject ${shortRdvId(id)}  |  /rdv counter ${shortRdvId(id)} <giveCur> <giveN> <getCur> <getN>`, "system");
           return;
         }
         if (d.kind === "chat" || "text" in d) {
