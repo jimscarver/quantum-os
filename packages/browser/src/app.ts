@@ -98,6 +98,22 @@ interface ProbeWindow {
 type ChatKind = "peer" | "self" | "system";
 interface ChatLine { from: string; text: string; kind: ChatKind; label?: string }
 
+// A persist request is an offer from another peer asking us to also store
+// their lemma / currency declaration so the room's public state has more
+// than one copy and survives any one peer leaving. Acceptance is explicit.
+type PersistKind = "lemma" | "currency";
+interface PersistRequest {
+  id: string;
+  kind: PersistKind;
+  fromPeer: string;          // peerId of the asker
+  fromName: string;          // display label for chat
+  // Inline payload for the kind:
+  lemmaName?: string;
+  lemmaEntry?: LemmaEntry;
+  currencyToken?: string;
+  currencyEntry?: KnownCurrency;
+}
+
 const RDV_TIMEOUT_MS = 60_000;
 
 // Each room is its own Markov blanket — independent state, independent
@@ -129,6 +145,10 @@ interface RoomContext {
   // Channels this peer is subscribed to in this room — inbound channel-msg
   // envelopes on a subscribed name surface in chat; others are silently dropped.
   channelSubscriptions: Set<string>;
+  // Inbound persist requests awaiting accept/reject. Each is a pending offer
+  // from another peer asking us to also hold their state for cross-session
+  // redundancy.
+  pendingPersistRequests: Map<string, PersistRequest>;
   // Chat history for this room (replayed on tab switch)
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
@@ -157,6 +177,7 @@ function createRoom(roomId: string): RoomContext {
     probe: { open: false, observations: [], contributors: new Set(), timer: null },
     ignoredForSync: new Set(),
     channelSubscriptions: new Set(),
+    pendingPersistRequests: new Map(),
     chatLog: [],
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
@@ -206,6 +227,7 @@ let dyncapChains: Map<string, ChainEntry> = new Map();
 let probe: ProbeWindow = { open: false, observations: [], contributors: new Set(), timer: null };
 let ignoredForSync: Set<string> = new Set();
 let channelSubscriptions: Set<string> = new Set();
+let pendingPersistRequests: Map<string, PersistRequest> = new Map();
 
 function setActiveRoom(ctx: RoomContext): void {
   activeRoom = ctx;
@@ -227,6 +249,7 @@ function setActiveRoom(ctx: RoomContext): void {
   probe              = ctx.probe;
   ignoredForSync     = ctx.ignoredForSync;
   channelSubscriptions = ctx.channelSubscriptions;
+  pendingPersistRequests = ctx.pendingPersistRequests;
 }
 
 // Mutate both the active-room's qpeer and the module-level alias in lockstep.
@@ -1183,6 +1206,7 @@ function handleCommand(raw: string): string[] {
       sys("  /share <sel> to <room>  — bridge a lemma/chat/note into another tab");
       sys("  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)");
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
+      sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  //message        — send a message starting with /");
       break;
@@ -2130,6 +2154,135 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "persist": {
+      // /persist <selector> to <peer>   — ask peer to also store this item
+      // /persist accept <id>            — accept a pending inbound request
+      // /persist reject <id>            — discard a pending inbound request
+      // /persist list                   — show pending inbound requests
+      //
+      // Cross-peer redundancy of public room knowledge. The receiver
+      // explicitly opts in, so persistence is "by agreement" — the asker
+      // requests, the receiver consents. On future startups, the existing
+      // consensus probe + supermajority resolution reconciles any drift
+      // across the now-redundant copies.
+      const pParts = arg.trim().split(/\s+/);
+      const sub = (pParts[0] || "list").toLowerCase();
+      if (sub === "list" || sub === "") {
+        if (pendingPersistRequests.size === 0) {
+          sys("no pending persist requests");
+          sys("  /persist @<lemma> to <peer>       — ask peer to store the lemma too");
+          sys("  /persist currency <name> to <peer> — ask peer to store the currency declaration");
+          sys("  /persist accept <id>              — accept an incoming request");
+          break;
+        }
+        sys(`pending persist requests (${pendingPersistRequests.size}):`);
+        for (const [id, req] of pendingPersistRequests) {
+          const desc = req.kind === "lemma"
+            ? `@${req.lemmaName} = ${req.lemmaEntry?.twists ?? "?"}`
+            : `currency ${req.currencyEntry?.currency ?? "?"}  (token ${req.currencyToken?.slice(0, 24) ?? "?"}…)`;
+          sys(`  ${id.slice(0, 8)}  from ${req.fromName}  →  ${desc}`);
+        }
+      } else if (sub === "accept") {
+        const prefix = pParts[1] ?? "";
+        if (!prefix) { sys("usage: /persist accept <id>"); break; }
+        let found: PersistRequest | null = null;
+        let foundId = "";
+        for (const [id, req] of pendingPersistRequests) {
+          if (id.startsWith(prefix)) { found = req; foundId = id; break; }
+        }
+        if (!found) { sys(`no pending request matching '${prefix}'`); break; }
+        if (found.kind === "lemma" && found.lemmaName && found.lemmaEntry) {
+          const name = found.lemmaName;
+          const entry = found.lemmaEntry;
+          const existing = lemmaStore.get(name);
+          if (existing && existing.twists !== entry.twists) {
+            sys(`· refused: you already hold @${name} with different twists (${existing.twists})`);
+            sys(`  (the room's consensus probe will resolve this on next join)`);
+            break;
+          }
+          if (!existing) {
+            lemmaStore.set(name, entry);
+            saveLemmas();
+            renderLemmas();
+          }
+          sys(`· accepted: now persisting @${name} (${entry.twists})`);
+        } else if (found.kind === "currency" && found.currencyToken && found.currencyEntry) {
+          const tok = found.currencyToken;
+          if (!knownCurrencies.has(tok)) {
+            knownCurrencies.set(tok, found.currencyEntry);
+            saveNotes();
+            renderNotes();
+          }
+          sys(`· accepted: now persisting currency ${found.currencyEntry.currency} (issued by ${found.currencyEntry.issuer})`);
+        }
+        pendingPersistRequests.delete(foundId);
+      } else if (sub === "reject") {
+        const prefix = pParts[1] ?? "";
+        if (!prefix) { sys("usage: /persist reject <id>"); break; }
+        let foundId = "";
+        for (const id of pendingPersistRequests.keys()) {
+          if (id.startsWith(prefix)) { foundId = id; break; }
+        }
+        if (!foundId) { sys(`no pending request matching '${prefix}'`); break; }
+        pendingPersistRequests.delete(foundId);
+        sys(`· rejected persist request ${foundId.slice(0, 8)}`);
+      } else if (sub.startsWith("@") || sub === "currency") {
+        // Outbound request: /persist <selector> to <peer>
+        if (!qpeer) { sys("not connected"); break; }
+        const toIdx = pParts.lastIndexOf("to");
+        if (toIdx < 1 || toIdx >= pParts.length - 1) {
+          sys("usage: /persist <@lemma | currency <name>> to <peer>");
+          break;
+        }
+        const targetName = pParts.slice(toIdx + 1).join(" ").trim();
+        const targetId = findPeerByName(targetName);
+        if (!targetId) { sys(`unknown peer: '${targetName}'`); break; }
+
+        const reqId = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+          .map(b => b.toString(16).padStart(2, "0")).join("");
+        const myLabel = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+        let payload: Record<string, unknown> | null = null;
+
+        if (sub.startsWith("@")) {
+          const name = sub.slice(1);
+          const entry = lemmaStore.get(name);
+          if (!entry) { sys(`you don't hold @${name}`); break; }
+          payload = {
+            kind: "persist-request", id: reqId, persistKind: "lemma",
+            fromName: myLabel,
+            lemmaName: name, lemmaEntry: entry,
+          };
+          sys(`· requesting ${targetName} to also persist @${name}`);
+        } else {
+          // sub === "currency"
+          const cname = pParts[1] ?? "";
+          if (!cname) { sys("usage: /persist currency <name> to <peer>"); break; }
+          // Find the currency entry in knownCurrencies (any token I know with this name).
+          let cEntry: KnownCurrency | null = null;
+          let cTok = "";
+          for (const [tok, e] of knownCurrencies) {
+            if (e.currency === cname) { cEntry = e; cTok = tok; break; }
+          }
+          if (!cEntry) { sys(`unknown currency '${cname}' in this room`); break; }
+          payload = {
+            kind: "persist-request", id: reqId, persistKind: "currency",
+            fromName: myLabel,
+            currencyToken: cTok, currencyEntry: cEntry,
+          };
+          sys(`· requesting ${targetName} to also persist currency ${cname}`);
+        }
+        if (payload) qpeer.send(targetId, payload);
+      } else {
+        sys(`unknown subcommand: /persist ${sub}`);
+        sys("  /persist @<lemma> to <peer>        — request peer to also persist");
+        sys("  /persist currency <name> to <peer> — request peer to also persist");
+        sys("  /persist accept <id>               — accept a pending inbound request");
+        sys("  /persist reject <id>               — discard a pending inbound request");
+        sys("  /persist list                      — show pending requests");
+      }
+      break;
+    }
+
     case "channel": {
       // /channel listen <name>        — subscribe in this room
       // /channel unlisten <name>      — unsubscribe
@@ -2866,6 +3019,32 @@ function connect(): void {
           addMessage("", `  · /rdv accept ${shortRdvId(id)}  |  /rdv reject ${shortRdvId(id)}  |  /rdv counter ${shortRdvId(id)} <giveCur> <giveN> <getCur> <getN>`, "system");
           return;
         }
+        if (d.kind === "persist-request") {
+          const id = String(d.id ?? "");
+          const persistKind = String(d.persistKind ?? "");
+          const fromName = String(d.fromName ?? peerLabel(from));
+          if (!id || (persistKind !== "lemma" && persistKind !== "currency")) return;
+          const req: PersistRequest = {
+            id, kind: persistKind as PersistKind,
+            fromPeer: from, fromName,
+          };
+          if (persistKind === "lemma") {
+            req.lemmaName = String(d.lemmaName ?? "");
+            req.lemmaEntry = d.lemmaEntry as LemmaEntry | undefined;
+            if (!req.lemmaName || !req.lemmaEntry?.twists) return;
+            addMessage(from, `requests you persist @${req.lemmaName}`, "peer", fromName);
+            addMessage("", `  · twists: ${req.lemmaEntry.twists}${req.lemmaEntry.cap ? `  [cap: ${req.lemmaEntry.cap}]` : ""}`, "system");
+          } else {
+            req.currencyToken = String(d.currencyToken ?? "");
+            req.currencyEntry = d.currencyEntry as KnownCurrency | undefined;
+            if (!req.currencyToken || !req.currencyEntry?.currency) return;
+            addMessage(from, `requests you persist currency ${req.currencyEntry.currency}`, "peer", fromName);
+            addMessage("", `  · authority: ${req.currencyToken.slice(0, 24)}…  (issued by ${req.currencyEntry.issuer})`, "system");
+          }
+          pendingPersistRequests.set(id, req);
+          addMessage("", `  · /persist accept ${id.slice(0, 8)}  or  /persist reject ${id.slice(0, 8)}`, "system");
+          return;
+        }
         if (d.kind === "channel-msg") {
           // Subscribed channels surface in chat; unsubscribed channels are
           // silently dropped — the tagged broadcast is a public envelope but
@@ -2964,7 +3143,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
