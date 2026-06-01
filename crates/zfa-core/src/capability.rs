@@ -20,32 +20,44 @@ impl Capability {
     /// Generate a new capability from raw bytes (e.g., from getrandom).
     ///
     /// Maps each byte to a twist pair `[pos, neg]` (count-balanced by construction)
-    /// and uses deterministic rejection sampling to ensure the resulting sequence
-    /// is also Pauli-closed (full ZFA). About 25% of random count-balanced
-    /// sequences are Pauli-closed, so expected iterations ≈ 4.
+    /// and uses rejection sampling to ensure the resulting sequence is also
+    /// Pauli-closed (full ZFA). About 25% of random count-balanced sequences are
+    /// Pauli-closed, so expected iterations ≈ 4.
+    ///
+    /// First iteration uses the supplied entropy as-is. On rejection, each retry
+    /// XOR-mixes the caller's bytes with a fresh getrandom block — this gives
+    /// independent samples per iteration (a counter-derived salt can leave fixed
+    /// byte positions for long-enough inputs and fail to converge).
     pub fn from_entropy(bytes: &[u8], label: impl Into<String>) -> Self {
-        let mut counter: u64 = 0;
-        loop {
-            let twists = Self::entropy_to_twists(bytes, counter);
+        // First attempt: use caller's bytes directly.
+        let twists = Self::bytes_to_twists(bytes);
+        if is_pauli_closed(&twists) {
+            debug_assert!(is_count_balanced(&twists));
+            return Self { twists, label: label.into() };
+        }
+        // Rejection sampling with fresh entropy mixed in per iteration.
+        let mut mixed = bytes.to_vec();
+        let mut extra = vec![0u8; bytes.len().max(1)];
+        for _ in 0..1_000_000 {
+            getrandom::getrandom(&mut extra).expect("getrandom failed");
+            for (i, b) in mixed.iter_mut().enumerate() {
+                *b = bytes[i] ^ extra[i % extra.len()];
+            }
+            let twists = Self::bytes_to_twists(&mixed);
             if is_pauli_closed(&twists) {
                 debug_assert!(is_count_balanced(&twists));
                 debug_assert!(achieves_zfa(&twists), "capability must achieve ZFA");
                 return Self { twists, label: label.into() };
             }
-            counter = counter.wrapping_add(1);
-            // Safety: with ~25% acceptance rate, exceeding this budget is
-            // statistically impossible for any realistic entropy input.
-            assert!(counter < 1_000_000, "Pauli closure rejection sampling exceeded budget");
         }
+        panic!("Pauli closure rejection sampling exceeded budget");
     }
 
-    /// Deterministic byte→twist mapping perturbed by a counter.
-    /// On rejection, the counter is incremented and the bytes are XOR-salted.
-    fn entropy_to_twists(bytes: &[u8], counter: u64) -> Vec<Twist> {
-        let salt = counter.to_le_bytes();
+    /// Deterministic byte→twist pair mapping: each byte yields `[pos, neg]`
+    /// where pos ∈ {Up, Right, Slash, Plus} and neg ∈ {Down, Left, BSlash, Minus}.
+    fn bytes_to_twists(bytes: &[u8]) -> Vec<Twist> {
         let mut twists = Vec::with_capacity(bytes.len() * 2);
-        for (i, &raw) in bytes.iter().enumerate() {
-            let b = raw ^ salt[i % 8];
+        for &b in bytes {
             let pos_idx = ((b >> 4) & 0x3) * 2;       // → 0,2,4,6 (all positive)
             let neg_idx = ((b & 0x3) * 2) + 1;        // → 1,3,5,7 (all negative)
             let pos = Twist::from_u8(pos_idx).unwrap_or(Twist::Plus);

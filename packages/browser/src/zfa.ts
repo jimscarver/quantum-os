@@ -127,41 +127,50 @@ export function spectralGap(twists: Uint8Array): number {
 }
 
 /// Generate a ZFA-balanced capability token using browser entropy.
-/// Uses deterministic rejection sampling so the result is also Pauli-closed.
+/// Uses rejection sampling so the result is also Pauli-closed (~25% of random
+/// count-balanced sequences pass; expected ~4 iterations).
 export function generateCapability(label: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   if (_wasm) return _wasm.wasm_capability_from_entropy(bytes, label);
-  // Pure-TS fallback: same rejection-sampling logic as Capability::from_entropy
-  // in Rust. ~25% of random count-balanced sequences are Pauli-closed, so
-  // expected iterations ≈ 4.
-  for (let counter = 0; counter < 1_000_000; counter++) {
-    const twists = entropyToTwists(bytes, counter);
+
+  // First attempt: use the caller's entropy directly.
+  let twists = bytesToTwists(bytes);
+  if (isPauliClosed(twists)) {
+    return formatCap(label, twists);
+  }
+  // Rejection sampling with fresh entropy mixed in per iteration. (A counter-
+  // derived salt can leave fixed byte positions and fail to converge for
+  // 16-byte inputs; independent samples guarantee the ~25% pass rate.)
+  const mixed = new Uint8Array(bytes.length);
+  const extra = new Uint8Array(bytes.length);
+  for (let attempt = 0; attempt < 1_000_000; attempt++) {
+    crypto.getRandomValues(extra);
+    for (let i = 0; i < bytes.length; i++) mixed[i] = bytes[i] ^ extra[i];
+    twists = bytesToTwists(mixed);
     if (isPauliClosed(twists)) {
-      let hex = "";
-      for (const t of twists) hex += t.toString(16);
-      return `cap:${label}:${hex}`;
+      return formatCap(label, twists);
     }
   }
   throw new Error("Pauli closure rejection sampling exceeded budget");
 }
 
-function entropyToTwists(bytes: Uint8Array, counter: number): Uint8Array {
-  // Mirror Capability::entropy_to_twists in Rust: XOR-salt the bytes with
-  // a little-endian counter so each rejection-sampling iteration produces a
-  // deterministically different candidate.
+function bytesToTwists(bytes: Uint8Array): Uint8Array {
+  // Deterministic byte → twist pair: each byte yields [pos, neg] where
+  // pos ∈ {0,2,4,6} (positive twists) and neg ∈ {1,3,5,7} (negative twists).
   const twists = new Uint8Array(bytes.length * 2);
-  const salt = new Uint8Array(8);
-  // Pack counter as little-endian u64 (counter fits in u32 here, high bytes 0)
-  for (let i = 0; i < 4; i++) salt[i] = (counter >>> (i * 8)) & 0xff;
   for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i] ^ salt[i % 8];
-    const pos = ((b >> 4) & 0x3) * 2;        // → 0,2,4,6  (all positive)
-    const neg = ((b & 0x3) * 2) + 1;         // → 1,3,5,7  (all negative)
-    twists[i * 2] = pos;
-    twists[i * 2 + 1] = neg;
+    const b = bytes[i];
+    twists[i * 2]     = ((b >> 4) & 0x3) * 2;   // → 0,2,4,6
+    twists[i * 2 + 1] = ((b & 0x3) * 2) + 1;    // → 1,3,5,7
   }
   return twists;
+}
+
+function formatCap(label: string, twists: Uint8Array): string {
+  let hex = "";
+  for (const t of twists) hex += t.toString(16);
+  return `cap:${label}:${hex}`;
 }
 
 export function validateCapability(token: string): boolean {
