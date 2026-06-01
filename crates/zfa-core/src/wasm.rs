@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::capability::Capability;
 use crate::history::{achieves_zfa, charge, div_b, spectral_gap};
+use crate::pauli::is_pauli_closed;
 use crate::twist::Twist;
 
 /// Parse a twist sequence from a Uint8Array (0..7 encoding).
@@ -15,6 +16,13 @@ fn parse_twists(bytes: &[u8]) -> Vec<Twist> {
 #[wasm_bindgen]
 pub fn wasm_achieves_zfa(twist_bytes: &[u8]) -> bool {
     achieves_zfa(&parse_twists(twist_bytes))
+}
+
+/// Test only the Pauli-fold closure half of ZFA (without count-balance).
+/// Provided for parity with the QLF Python core's `is_pauli_closed`.
+#[wasm_bindgen]
+pub fn wasm_is_pauli_closed(twist_bytes: &[u8]) -> bool {
+    is_pauli_closed(&parse_twists(twist_bytes))
 }
 
 #[wasm_bindgen]

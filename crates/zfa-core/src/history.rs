@@ -1,3 +1,4 @@
+use crate::pauli::is_pauli_closed;
 use crate::twist::Twist;
 
 /// A sequence of twist events — the fundamental QLF history type.
@@ -13,10 +14,29 @@ pub fn count_neg(h: &[Twist]) -> i64 {
     h.iter().filter(|t| t.is_negative()).count() as i64
 }
 
-/// ZFA balance: total_pos = total_neg.
-/// The physically meaningful ZFA condition — non-trivial histories qualify.
-pub fn achieves_zfa(h: &[Twist]) -> bool {
+/// True iff `count_pos(h) == count_neg(h)` — the count-balance half of ZFA.
+///
+/// This is necessary but not sufficient for full ZFA: the Pauli matrix
+/// product must also fold to a scalar (see [`is_pauli_closed`]).
+pub fn is_count_balanced(h: &[Twist]) -> bool {
     count_pos(h) == count_neg(h)
+}
+
+/// Full ZFA: count balance AND Pauli closure.
+///
+/// A history achieves ZFA iff
+///   1. `count_pos(h) == count_neg(h)` (signed action vector vanishes), AND
+///   2. The Pauli matrix product folds to a scalar multiple of identity
+///      (closure in the Pauli group up to phase).
+///
+/// The second condition is order-sensitive — histories with identical
+/// twist counts but different orderings can have different folds. Count
+/// balance alone admits unphysical sequences; Pauli closure enforces the
+/// non-commutative algebraic structure of the 8-twist alphabet.
+///
+/// Mirrors `is_zfa` in the QLF Python core (`twist_core.py`).
+pub fn achieves_zfa(h: &[Twist]) -> bool {
+    is_count_balanced(h) && is_pauli_closed(h)
 }
 
 /// Spectral gap: |count_pos - count_neg|.

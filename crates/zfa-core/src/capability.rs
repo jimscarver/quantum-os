@@ -1,4 +1,5 @@
-use crate::history::{achieves_zfa, spectral_gap};
+use crate::history::{achieves_zfa, is_count_balanced, spectral_gap};
+use crate::pauli::is_pauli_closed;
 use crate::twist::Twist;
 
 /// A capability token: an unforgeable ZFA-balanced identity.
@@ -17,21 +18,42 @@ pub struct Capability {
 
 impl Capability {
     /// Generate a new capability from raw bytes (e.g., from getrandom).
-    /// Maps each byte to a twist pair [pos, neg] to ensure ZFA balance.
+    ///
+    /// Maps each byte to a twist pair `[pos, neg]` (count-balanced by construction)
+    /// and uses deterministic rejection sampling to ensure the resulting sequence
+    /// is also Pauli-closed (full ZFA). About 25% of random count-balanced
+    /// sequences are Pauli-closed, so expected iterations ≈ 4.
     pub fn from_entropy(bytes: &[u8], label: impl Into<String>) -> Self {
+        let mut counter: u64 = 0;
+        loop {
+            let twists = Self::entropy_to_twists(bytes, counter);
+            if is_pauli_closed(&twists) {
+                debug_assert!(is_count_balanced(&twists));
+                debug_assert!(achieves_zfa(&twists), "capability must achieve ZFA");
+                return Self { twists, label: label.into() };
+            }
+            counter = counter.wrapping_add(1);
+            // Safety: with ~25% acceptance rate, exceeding this budget is
+            // statistically impossible for any realistic entropy input.
+            assert!(counter < 1_000_000, "Pauli closure rejection sampling exceeded budget");
+        }
+    }
+
+    /// Deterministic byte→twist mapping perturbed by a counter.
+    /// On rejection, the counter is incremented and the bytes are XOR-salted.
+    fn entropy_to_twists(bytes: &[u8], counter: u64) -> Vec<Twist> {
+        let salt = counter.to_le_bytes();
         let mut twists = Vec::with_capacity(bytes.len() * 2);
-        for &b in bytes {
-            // Positive twists have even values (0,2,4,6); negative have odd (1,3,5,7).
-            // Map 2 bits → pos by *2, → neg by *2+1, guaranteeing ZFA balance.
-            let pos_idx = ((b >> 4) & 0x3) * 2;      // → 0,2,4,6 (all positive)
+        for (i, &raw) in bytes.iter().enumerate() {
+            let b = raw ^ salt[i % 8];
+            let pos_idx = ((b >> 4) & 0x3) * 2;       // → 0,2,4,6 (all positive)
             let neg_idx = ((b & 0x3) * 2) + 1;        // → 1,3,5,7 (all negative)
             let pos = Twist::from_u8(pos_idx).unwrap_or(Twist::Plus);
             let neg = Twist::from_u8(neg_idx).unwrap_or(Twist::Minus);
             twists.push(pos);
             twists.push(neg);
         }
-        debug_assert!(achieves_zfa(&twists), "capability must be ZFA-balanced");
-        Self { twists, label: label.into() }
+        twists
     }
 
     /// Create a named root capability (for testing / bootstrap).
