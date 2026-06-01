@@ -22,8 +22,9 @@ quantum-os/
 ├── crates/
 │   └── zfa-core/          Rust library: ZFA kernel (twist algebra, capabilities, processes)
 │       └── src/
-│           ├── capability.rs   cap:label:hex token generation and validation
-│           ├── history.rs      achieves_zfa, spectral_gap, count_pos/neg, is_symmetric
+│           ├── capability.rs   cap:label:hex token generation (rejection-sampling) and validation
+│           ├── history.rs      achieves_zfa, is_count_balanced, spectral_gap, count_pos/neg, is_symmetric
+│           ├── pauli.rs        Pauli matrix algebra: pauli_fold, is_pauli_closed, twist_matrix
 │           ├── process.rs      Form (2×2 Hermitian), Process (RhoQuCalc)
 │           ├── twist.rs        Twist enum (8-symbol alphabet)
 │           └── wasm.rs         wasm-bindgen exports (feature = "wasm")
@@ -66,14 +67,14 @@ Every peer identity, room ID, and named lemma cap is a `cap:label:hex` token:
 cap:peer:024602460246024602460246…
      ↑       ↑
   label    hex digits 0–7 only (each is a twist value)
-           ZFA-balanced: count of even digits == count of odd digits
+           ZFA: count balance ∧ Pauli closure (see below)
 ```
 
-- Generated with `crypto.getRandomValues()` (browser) or `getrandom` crate (Rust)
-- 128-bit entropy; ZFA balance constraint still leaves astronomically large space
-- `validateCapability(token)` — checks format and balance
-- `tokenTwists(token)` — extracts `Uint8Array` of twist values from hex
-- Knowing a room token IS the capability to join (bearer token in URL hash)
+- Generated with `crypto.getRandomValues()` (browser) or `getrandom` crate (Rust); since v0.17, `from_entropy` uses rejection sampling to guarantee Pauli closure (~4 iterations expected per token).
+- 128-bit entropy; ZFA constraint still leaves astronomically large space.
+- `validateCapability(token)` — checks format, count balance, AND Pauli closure.
+- `tokenTwists(token)` — extracts `Uint8Array` of twist values from hex.
+- Knowing a room token IS the capability to join (bearer token in URL hash).
 
 ### Twist alphabet (8 symbols)
 
@@ -88,7 +89,12 @@ cap:peer:024602460246024602460246…
 | `+` | 6 | even/pos | Plus |
 | `-` | 7 | odd/neg | Minus |
 
-ZFA-balanced = `count_pos == count_neg` (even count == odd count). Spectral gap = `|count_pos - count_neg|`.
+**ZFA = count balance ∧ Pauli closure** (v0.17+). Two conditions are enforced:
+
+1. **Count balance**: `count_pos == count_neg` (even count == odd count). Spectral gap = `|count_pos − count_neg|` = 0.
+2. **Pauli closure**: the matrix product of twists folds to a scalar multiple of the identity — a member of `{+I, −I, +iI, −iI}`. Each twist maps to a Pauli matrix (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I). Order matters because Pauli matrices anti-commute.
+
+Both halves are enforced uniformly in `crates/zfa-core/src/pauli.rs`, `packages/browser/src/zfa.ts`, and the QLF Python core `twist_core.py`.
 
 ### Lemma system
 

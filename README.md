@@ -538,10 +538,15 @@ packages/
 
 See [SECURITY.md](SECURITY.md) for the full threat model, known issues, and vulnerability reporting policy.
 
-The 8-twist alphabet `{^, v, <, >, /, \, +, -}` encodes all processes. A history is **ZFA-balanced** when `count_pos = count_neg` (spectral gap = 0). Every capability token, peer identity, and room ID is ZFA-balanced by construction — unbalanced tokens are algebraically impossible to construct, not merely rejected at runtime.
+The 8-twist alphabet `{^, v, <, >, /, \, +, -}` encodes all processes. A history achieves **ZFA** when both algebraic conditions hold (enforced uniformly in Rust, WASM, TypeScript, and the QLF Python core since v0.17):
+
+1. **Count balance** — `count_pos = count_neg` (spectral gap = 0).
+2. **Pauli closure** — the matrix product of twists folds to a scalar multiple of identity (`{+I, −I, +iI, −iI}`). Each twist maps to a Pauli matrix (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I); order matters because Pauli matrices anti-commute.
+
+`Capability::from_entropy` uses rejection sampling so every issued token satisfies both conditions by construction — unbalanced or Pauli-open tokens are algebraically impossible to construct, not merely rejected at runtime.
 
 Key invariants (machine-verified in [QLF](https://github.com/jimscarver/quantum-logical-framework)):
-- `achieves_zfa` — the physical ZFA condition
+- `achieves_zfa` — the conjunction of count balance and Pauli closure
 - `spectral_gap = 0 ↔ is_symmetric` — eigenvalue-level stability
 - `decoherence_impossibility` — parallel composition stays ZFA-balanced
 - `no_magnetic_monopoles` — Gauss law from ZFA (∇·B = 0)
@@ -680,6 +685,7 @@ WASM exports (via `wasm-bindgen`, enabled with `--features wasm`):
 
 ```typescript
 wasm_achieves_zfa(twists: Uint8Array): boolean
+wasm_is_pauli_closed(twists: Uint8Array): boolean
 wasm_spectral_gap(twists: Uint8Array): number
 wasm_div_b(twists: Uint8Array): number
 wasm_charge(twists: Uint8Array): number
@@ -693,7 +699,8 @@ wasm_capability_valid(hex: string): boolean
 
 | Component | Status |
 |---|---|
-| ZFA Rust kernel | ✓ 19/19 tests pass (all 256 byte values) |
+| ZFA Rust kernel | ✓ 25/25 tests pass (count balance + Pauli closure enforced) |
+| Pauli matrix closure | ✓ `pauli_fold` / `is_pauli_closed` in Rust, TS, and QLF Python; enforced as the second half of `achieves_zfa` since v0.17 |
 | WASM build | ✓ wasm-pack, wasm-bindgen |
 | Signaling server | ✓ deployed — wss://quantum-os-signaling.onrender.com |
 | Browser TypeScript | ✓ 0 type errors |
