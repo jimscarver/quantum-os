@@ -41,6 +41,7 @@ QLF slash commands:
   /zfa [token]     — validate a capability token
   /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)
   /qucalc [twists] — evaluate RhoQuCalc twist sequence
+  /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint
   /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
@@ -145,6 +146,41 @@ Output:
 ZFA balance is the selection principle: `@major @minor` composed (gap=0) is a valid deduction; an unbalanced composition is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
 
 Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+
+### `/conj <twists>` [shared]
+
+Computes the **Hermitian adjoint** of a twist history `H`: reverse the sequence and flip each twist's parity (the pairing `0↔1, 2↔3, 4↔5, 6↔7`). This is QLF's structural "negation" operator — implemented as `Twist::conjugate` in the WASM kernel (`crates/zfa-core/src/twist.rs`), `Twist.conj` in Lean (`lean/QLF_TwistAlphabet.lean`), and `adjointHistory` in `packages/browser/src/app.ts`. Defining identity: `E + E† ≡ ZFA` (see [Hermitian_Conjugacy_Proof.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Hermitian_Conjugacy_Proof.md)).
+
+Accepts the full twist-parsing pipeline used by `/qucalc`: symbolic (`^v<>/\+-`), hex digits 0-7, `cap:label:hex` tokens, and `@lemma` references.
+
+Output:
+
+```
+Hermitian adjoint (H†):
+·   input: ^v<>
+·   H  = ^v<>   (n=4)
+·   H† = ><v^   (reversed + parity-flipped)
+·   self-adjoint (H = H†): ✗
+·   H || H† balanced: ✓  (E + E† ≡ ZFA)
+```
+
+For palindromic-under-flip inputs the output flags self-adjointness:
+
+```
+/conj ^v
+Hermitian adjoint (H†):
+·   input: ^v
+·   H  = ^v   (n=2)
+·   H† = ^v   (reversed + parity-flipped)
+·   self-adjoint (H = H†): ✓
+·   H || H† balanced: ✓  (E + E† ≡ ZFA)
+·   member of Σ_sa  → fixed locus of QLF adjoint involution
+·   (counterpart of Re(s)=1/2 in Riemann ξ;  see ReverseMathematics §4.9)
+```
+
+Self-adjoint histories `Σ_sa = {H : H = H†}` form the operator-side counterpart of the Riemann ξ critical line — see [ReverseMathematics §4.9](https://github.com/jimscarver/quantum-logical-framework/blob/main/ReverseMathematics.md). The vacuum-alignment principle in [VacuumEnergy §6](https://github.com/jimscarver/quantum-logical-framework/blob/main/VacuumEnergy.md) reads the adjoint operator as the framework's negation; under [Magic_numbers.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Magic_numbers.md) the same adjoint structure drives the vacuum-as-intruder selection in nuclear shells.
+
+Lean anchors: [`Twist.conj`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_TwistAlphabet.lean) · [`vacuum_alignment_selects_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`global_alignment_selects_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`rho_process_alignment_saturates`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_RhoProcessBridge.lean)
 
 ### `/grant [label]` [shared]
 Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.
