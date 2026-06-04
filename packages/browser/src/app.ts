@@ -1033,6 +1033,18 @@ function parseSymbolicTwists(s: string): Uint8Array | null {
   return result.length > 0 ? new Uint8Array(result) : null;
 }
 
+function adjointHistory(tw: Uint8Array): Uint8Array {
+  const out = new Uint8Array(tw.length);
+  for (let i = 0; i < tw.length; i++) out[i] = tw[tw.length - 1 - i] ^ 1;
+  return out;
+}
+
+function isSelfAdjoint(tw: Uint8Array): boolean {
+  const adj = adjointHistory(tw);
+  for (let i = 0; i < tw.length; i++) if (tw[i] !== adj[i]) return false;
+  return true;
+}
+
 function resolveLemmaToBytes(twistsStr: string): Uint8Array | null {
   if (twistsStr.startsWith("cap:")) return tokenTwists(twistsStr);
   return parseSymbolicTwists(twistsStr);
@@ -1199,6 +1211,7 @@ function handleCommand(raw: string): string[] {
       sys("  /zfa [token]     — validate a capability token");
       sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
+      sys("  /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint");
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
@@ -1450,6 +1463,55 @@ function handleCommand(raw: string): string[] {
       } else {
         sys("  process: UNBALANCED  → pruned by full_zeno_prune");
         sys(`  achieves_ZFA: ✗  gap=${gap}  (not a physical process)`);
+      }
+      break;
+    }
+
+    case "conj": {
+      let ctwists: Uint8Array | null = null;
+      let csrc = "";
+      if (!arg) {
+        sys("usage: /conj <twists>");
+        sys("  twists: symbolic (^v<>/\\+-) or hex digits 0-7 or cap:label:hex or @name");
+        sys("  Hermitian adjoint: reverse + parity-flip (XOR 1).  Identity: E + E† ≡ ZFA.");
+        break;
+      } else if (arg.trim().includes("@")) {
+        const result = expandLemmaRefs(arg.trim());
+        if (!result) {
+          const badName = arg.trim().split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
+          sys(`unknown lemma: ${badName ?? "@?"}  (type /lemma to list)`);
+          break;
+        }
+        ctwists = parseSymbolicTwists(result.expanded);
+        csrc = `composed: ${arg.trim()}`;
+      } else if (arg.trim().startsWith("cap:")) {
+        ctwists = tokenTwists(arg.trim());
+        csrc = `token: ${arg.trim()}`;
+      } else {
+        ctwists = parseSymbolicTwists(arg.trim());
+        csrc = `input: ${arg.trim()}`;
+      }
+      if (!ctwists || ctwists.length === 0) {
+        sys("/conj: could not parse twists");
+        break;
+      }
+      const adj = adjointHistory(ctwists);
+      const selfAdj = isSelfAdjoint(ctwists);
+      const hSym = twistsToSymbolic(ctwists);
+      const aSym = twistsToSymbolic(adj);
+      const combined = new Uint8Array(ctwists.length + adj.length);
+      combined.set(ctwists, 0);
+      combined.set(adj, ctwists.length);
+      const combinedStats = twistStats(combined);
+      sys("Hermitian adjoint (H†):");
+      sys(`  ${csrc}`);
+      sys(`  H  = ${hSym}   (n=${ctwists.length})`);
+      sys(`  H† = ${aSym}   (reversed + parity-flipped)`);
+      sys(`  self-adjoint (H = H†): ${selfAdj ? "✓" : "✗"}`);
+      sys(`  H || H† balanced: ${combinedStats.balanced ? "✓" : "✗"}  (E + E† ≡ ZFA)`);
+      if (selfAdj) {
+        sys(`  member of Σ_sa  → fixed locus of QLF adjoint involution`);
+        sys(`  (counterpart of Re(s)=1/2 in Riemann ξ;  see ReverseMathematics §4.9)`);
       }
       break;
     }
