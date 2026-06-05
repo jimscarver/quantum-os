@@ -89,12 +89,14 @@ cap:peer:024602460246024602460246…
 | `+` | 6 | even/pos | Plus |
 | `-` | 7 | odd/neg | Minus |
 
-**ZFA = count balance ∧ Pauli closure** (v0.17+). Two conditions are enforced:
+**ZFA = half-spin closure** (v0.17+): a process whose execution returns a spin-1/2 spinor to itself up to a global phase. The predicate `achieves_zfa(H) = pauli_closed(H) ∧ count_balanced(H)` is the algebraic decomposition of that closure into its two faces:
 
-1. **Count balance**: `count_pos == count_neg` (even count == odd count). Spectral gap = `|count_pos − count_neg|` = 0.
-2. **Pauli closure**: the matrix product of twists folds to a scalar multiple of the identity — a member of `{+I, −I, +iI, −iI}`. Each twist maps to a Pauli matrix (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I). Order matters because Pauli matrices anti-commute.
+1. **Pauli closure** (non-abelian face): the ordered matrix product of twists lands in `{+I, −I, +iI, −iI}` — the Pauli scalar group. Each twist maps to an SU(2) generator (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I). Order matters because Paulis anti-commute. **This is the SU(2)-scalar-return reading of half-spin closure** — the spinor closes up to phase.
+2. **Count balance** (abelian face): `count_pos == count_neg`. Spectral gap = `|count_pos − count_neg|` = 0. This is the bra-ket / Hermitian-pair multiset count: each twist is paired with its Hermitian conjugate.
 
-Both halves are enforced uniformly in `crates/zfa-core/src/pauli.rs`, `packages/browser/src/zfa.ts`, and the QLF Python core `twist_core.py`.
+Pauli closure is not a "stronger condition" layered on top of count balance — it IS the SU(2)-scalar-return of the same half-spin closure that count balance reads as a Hermitian-pair multiset. Neither face implies the other in isolation (`σ_x σ_y σ_z = iI` is Pauli-closed but count-imbalanced; `^ < v -` is count-balanced but folds to σ_x); both together are the unique characterisation of a closed half-spin process. The 8-twist alphabet is the SU(2) generator set up to sign (SU(2) ≅ unit quaternions; Hurwitz singles out H as the unique non-commutative associative composition real algebra — see QLF [HALF-SPIN-ZFA-EMBEDDING.md §6](../quantum-logical-framework/HALF-SPIN-ZFA-EMBEDDING.md)).
+
+Both faces are checked uniformly in `crates/zfa-core/src/pauli.rs`, `packages/browser/src/zfa.ts`, and the QLF Python core `twist_core.py`.
 
 ### Lemma system
 

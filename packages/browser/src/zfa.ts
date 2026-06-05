@@ -1,15 +1,24 @@
 /// ZFA kernel wrapper — loads the WASM module and exposes typed APIs.
 /// Falls back to a pure-TS implementation if WASM is unavailable.
 ///
-/// ZFA is the conjunction of two algebraic conditions:
-///   1. Count balance — count_pos == count_neg
-///   2. Pauli closure — the matrix product of twists folds to a scalar
-///      multiple of identity (closure in the Pauli group up to phase ±1, ±i)
+/// ZFA = **half-spin closure**: a process whose execution returns a spin-1/2
+/// spinor to itself up to a global phase. The predicate is the conjunction
+/// of the two algebraic faces of that closure:
 ///
-/// Count balance alone admits sequences whose non-commutative matrix product
-/// is not a scalar. Pauli closure enforces the order-sensitive algebraic
-/// structure of the 8-twist alphabet. Mirrors the QLF Python core
-/// (`twist_core.py`) and the Rust crate (`crates/zfa-core/src/pauli.rs`).
+///   1. **Pauli closure** — the ordered SU(2) product of twist Paulis lands
+///      in {±I, ±iI}. The *non-abelian* face: the spinor returns up to phase.
+///   2. **Count balance** — count_pos == count_neg. The *abelian* face: each
+///      twist is paired with its Hermitian conjugate (bra-ket structure).
+///
+/// Pauli closure is not a stronger second condition; it IS the SU(2)-scalar-
+/// return reading of half-spin closure. Count balance is the same closure
+/// read as a Hermitian-pair multiset count. Neither implies the other in
+/// isolation; both together are the unique characterisation of a closed
+/// half-spin process. The 8-twist alphabet is the SU(2) generator set up to
+/// sign (≅ unit quaternions; see HALF-SPIN-ZFA-EMBEDDING.md §6).
+///
+/// Mirrors the QLF Python core (`twist_core.py`) and the Rust crate
+/// (`crates/zfa-core/src/pauli.rs`).
 
 interface ZfaWasm {
   wasm_achieves_zfa(bytes: Uint8Array): boolean;

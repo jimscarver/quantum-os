@@ -574,15 +574,17 @@ packages/
 
 See [SECURITY.md](SECURITY.md) for the full threat model, known issues, and vulnerability reporting policy.
 
-The 8-twist alphabet `{^, v, <, >, /, \, +, -}` encodes all processes. A history achieves **ZFA** when both algebraic conditions hold (enforced uniformly in Rust, WASM, TypeScript, and the QLF Python core since v0.17):
+The 8-twist alphabet `{^, v, <, >, /, \, +, -}` encodes all processes. A history achieves **ZFA** when it is a **half-spin closure** — a process whose execution returns a spin-1/2 spinor to itself up to a global phase. `achieves_zfa` is the conjunction of the two algebraic faces of that closure (enforced uniformly in Rust, WASM, TypeScript, and the QLF Python core since v0.17):
 
-1. **Count balance** — `count_pos = count_neg` (spectral gap = 0).
-2. **Pauli closure** — the matrix product of twists folds to a scalar multiple of identity (`{+I, −I, +iI, −iI}`). Each twist maps to a Pauli matrix (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I); order matters because Pauli matrices anti-commute.
+1. **Pauli closure** (non-abelian face) — the ordered matrix product of twists lands in `{+I, −I, +iI, −iI}` (the Pauli scalar group). Each twist maps to an SU(2) generator (`^v` ↔ ±σ_y, `<>` ↔ ∓σ_x, `/\` ↔ ±σ_z, `+-` ↔ ±I); order matters because Paulis anti-commute. **This IS the SU(2)-scalar-return reading of half-spin closure** — the spinor closes up to phase.
+2. **Count balance** (abelian face) — `count_pos = count_neg` (spectral gap = 0). The Hermitian-pair multiset count: each twist paired with its conjugate (bra-ket structure).
 
-`Capability::from_entropy` uses rejection sampling so every issued token satisfies both conditions by construction — unbalanced or Pauli-open tokens are algebraically impossible to construct, not merely rejected at runtime.
+Pauli closure is not a "second condition" layered on top of count balance — it IS half-spin closure, read non-abelianly. Count balance is the same closure read as a Hermitian-pair multiset. Neither face implies the other in isolation; both together are the unique characterisation of a closed half-spin process. The 8-twist alphabet is the SU(2) generator set up to sign (SU(2) ≅ unit quaternions; Hurwitz singles out H as the unique non-commutative associative composition real algebra).
+
+`Capability::from_entropy` uses rejection sampling so every issued token satisfies both faces by construction — unbalanced or Pauli-open tokens are algebraically impossible to construct, not merely rejected at runtime.
 
 Key invariants (machine-verified in [QLF](https://github.com/jimscarver/quantum-logical-framework)):
-- `achieves_zfa` — the conjunction of count balance and Pauli closure
+- `achieves_zfa` — half-spin closure (both algebraic faces: Pauli scalar return ∧ Hermitian-pair count balance)
 - `spectral_gap = 0 ↔ is_symmetric` — eigenvalue-level stability
 - `decoherence_impossibility` — parallel composition stays ZFA-balanced
 - `no_magnetic_monopoles` — Gauss law from ZFA (∇·B = 0)
@@ -735,8 +737,8 @@ wasm_capability_valid(hex: string): boolean
 
 | Component | Status |
 |---|---|
-| ZFA Rust kernel | ✓ 25/25 tests pass (count balance + Pauli closure enforced) |
-| Pauli matrix closure | ✓ `pauli_fold` / `is_pauli_closed` in Rust, TS, and QLF Python; enforced as the second half of `achieves_zfa` since v0.17 |
+| ZFA Rust kernel | ✓ 25/25 tests pass (both faces of half-spin closure checked: Pauli scalar return ∧ Hermitian-pair count balance) |
+| Pauli matrix closure | ✓ `pauli_fold` / `is_pauli_closed` in Rust, TS, and QLF Python — the SU(2)-scalar-return face of `achieves_zfa` since v0.17 |
 | WASM build | ✓ wasm-pack, wasm-bindgen |
 | Signaling server | ✓ deployed — wss://quantum-os-signaling.onrender.com |
 | Browser TypeScript | ✓ 0 type errors |

@@ -14,25 +14,35 @@ pub fn count_neg(h: &[Twist]) -> i64 {
     h.iter().filter(|t| t.is_negative()).count() as i64
 }
 
-/// True iff `count_pos(h) == count_neg(h)` — the count-balance half of ZFA.
+/// True iff `count_pos(h) == count_neg(h)` — the Hermitian-pair multiset
+/// face of half-spin closure (the abelian shadow of `achieves_zfa`).
 ///
-/// This is necessary but not sufficient for full ZFA: the Pauli matrix
-/// product must also fold to a scalar (see [`is_pauli_closed`]).
+/// Each event is structurally a bra-ket pair; this predicate counts the
+/// multiset, ignoring order. The non-abelian face is [`is_pauli_closed`].
 pub fn is_count_balanced(h: &[Twist]) -> bool {
     count_pos(h) == count_neg(h)
 }
 
-/// Full ZFA: count balance AND Pauli closure.
+/// Full ZFA = **half-spin closure**: a process whose execution returns a
+/// spin-1/2 spinor to itself up to a global phase. The predicate is the
+/// conjunction of the two algebraic faces of that closure:
 ///
-/// A history achieves ZFA iff
-///   1. `count_pos(h) == count_neg(h)` (signed action vector vanishes), AND
-///   2. The Pauli matrix product folds to a scalar multiple of identity
-///      (closure in the Pauli group up to phase).
+///   1. **Pauli closure** — the ordered SU(2) product folds to a scalar in
+///      {+I, -I, +iI, -iI}. This is the *non-abelian* face: the spinor
+///      returns up to phase. Order-sensitive because Paulis anti-commute.
+///   2. **Count balance** — `count_pos(h) == count_neg(h)`. This is the
+///      *abelian* face: each twist is paired with its Hermitian conjugate,
+///      i.e. the history has bra-ket structure.
 ///
-/// The second condition is order-sensitive — histories with identical
-/// twist counts but different orderings can have different folds. Count
-/// balance alone admits unphysical sequences; Pauli closure enforces the
-/// non-commutative algebraic structure of the 8-twist alphabet.
+/// Neither face implies the other in isolation: `σ_x σ_y σ_z = iI` is
+/// Pauli-closed but count-imbalanced; `^ < v -` is count-balanced but
+/// folds to σ_x. Both together are the unique characterisation of a
+/// closed half-spin process.
+///
+/// Pauli closure is not a "second condition" enforced on top of count
+/// balance — it IS the SU(2)-scalar-return reading of half-spin closure.
+/// See HALF-SPIN-ZFA-EMBEDDING.md §3a (and §6 for why H ≅ SU(2) is the
+/// forced algebra at all).
 ///
 /// Mirrors `is_zfa` in the QLF Python core (`twist_core.py`).
 pub fn achieves_zfa(h: &[Twist]) -> bool {

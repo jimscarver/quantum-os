@@ -45,15 +45,16 @@ Every peer identity, room ID, and granted capability is a `cap:label:hex` token:
 cap:room:024602460246024602460246…
      ↑       ↑
   label    32 hex digits (16 bytes = 128-bit entropy)
-           ZFA = count balance (count_pos == count_neg)
-                 ∧ Pauli closure (matrix fold ∈ {±I, ±iI})
+           ZFA = half-spin closure
+                 = Pauli scalar return (matrix fold ∈ {±I, ±iI})
+                 ∧ Hermitian-pair count balance (count_pos == count_neg)
 ```
 
-Tokens are generated using `crypto.getRandomValues()` (browser) or the `getrandom` crate (Rust/WASM), which calls `crypto.getRandomValues()` internally. Entropy: 128 bits. Since v0.17, `Capability::from_entropy` uses rejection sampling (expected ~4 iterations) to guarantee both halves of the ZFA condition hold for every issued token. The output space is reduced versus the count-only check, but remains astronomically large for 32-twist tokens.
+Tokens are generated using `crypto.getRandomValues()` (browser) or the `getrandom` crate (Rust/WASM), which calls `crypto.getRandomValues()` internally. Entropy: 128 bits. Since v0.17, `Capability::from_entropy` uses rejection sampling (expected ~4 iterations) to guarantee both faces of the half-spin closure hold for every issued token. The output space is reduced versus the count-only check, but remains astronomically large for 32-twist tokens.
 
 The ZFA invariant is machine-verified in [Lean 4](https://github.com/jimscarver/quantum-logical-framework):
 
-- `achieves_ZFA` — the physical condition (count balance + Pauli closure)
+- `achieves_ZFA` — half-spin closure (Pauli scalar return ∧ Hermitian-pair count balance)
 - `rho_process_always_zfa` — parallel composition stays ZFA
 - `decoherence_impossibility` — no operation can break ZFA
 - `no_magnetic_monopoles` (ZFAEventDynamics.lean) — `∇·B = 0` follows from ZFA closure

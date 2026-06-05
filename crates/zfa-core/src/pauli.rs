@@ -6,15 +6,24 @@
 //!   `/ = +σ_z`     `\ = -σ_z`     (Z axis)
 //!   `+ = +I`       `- = -I`       (gauge / U(1) phase)
 //!
-//! A history's **Pauli fold** is the matrix product of its twists.
-//! A history is **Pauli-closed** iff the fold equals a scalar multiple
-//! of the identity (in {+I, -I, +iI, -iI} — the four scalar elements of
-//! the Pauli group).
+//! The alphabet IS the SU(2) generator set up to sign: 3 Pauli axes × 2 signs
+//! + 2 scalar gauge ±I = 8 generators. SU(2) ≅ unit quaternions; "complex
+//! Pauli matrices" and "quaternions" are two names for the same algebra
+//! (Hurwitz singles out H as the unique non-commutative associative
+//! composition real algebra — see HALF-SPIN-ZFA-EMBEDDING.md §6).
 //!
-//! Pauli closure is a stronger condition than count balance:
-//!   - Count balance requires equal counts of pos and neg twists.
-//!   - Pauli closure requires the matrix product to fold to a scalar,
-//!     which is order-sensitive because Pauli matrices anti-commute.
+//! A history's **Pauli fold** is the matrix product of its twists.
+//! A history is **Pauli-closed** iff the fold lands in the Pauli scalar
+//! group {+I, -I, +iI, -iI}.
+//!
+//! **Pauli closure is the SU(2)-scalar-return reading of half-spin closure**:
+//! an ordered product of Paulis lands in {±I, ±iI} exactly when the underlying
+//! half-spin spinor returns to itself up to a global phase. It is not a
+//! "stronger condition" layered on top of count balance — it is the
+//! non-abelian face of one principle. Count balance (count_pos == count_neg)
+//! is the same closure read as a Hermitian-pair multiset count. Both faces
+//! are demanded by half-spin closure; the order-sensitivity comes from
+//! Pauli anti-commutation.
 //!
 //! Mirrors `pauli_fold` / `is_pauli_closed` in the QLF Python core
 //! (`twist_core.py`).
