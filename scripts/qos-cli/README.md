@@ -52,14 +52,53 @@ Options: `--room` (cap or URL, required), `--message`/`-m`, `--name`,
 
 Exit codes: `0` delivered (or listened), `1` error, `2` no peer reached in time.
 
-## Verify the ZFA layer (no network, no deps)
+## Persistent "memory peer" daemon (`qos-daemon.mjs`)
+
+The room has no server and no history — when every browser leaves, its lemmas,
+currencies, and chat are gone. The daemon fixes that: it stays connected (with
+auto-reconnect), **persists the room's public state + transcript to disk**, and
+**re-serves that state to every peer who joins** (`name` + `sync-lemmas` +
+`sync-currencies`, all dyncap-signed). It holds a **stable signed identity**
+(`cap:peer` + dyncap anchor) across restarts, so peers TOFU-pin it as one
+continuous peer.
 
 ```bash
-node selftest.mjs
+node qos-daemon.mjs \
+  --room "https://jimscarver.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
+  --name "memory" --state ./.qos-state
 ```
 
-Generates 200 peer caps and checks each is count-balanced ∧ Pauli-closed,
-plus malformed-token rejection and known closure facts (`+-`→−I, `^v`→+I).
+Options: `--room` (cap or URL, required), `--name` (default `qos-memory`),
+`--signal <url>`, `--state <dir>` (default `./.qos-state`, gitignored),
+`--verbose`. Runs until Ctrl-C, then flushes state and leaves.
+
+State layout (`--state` dir):
+
+```
+identity.json                 # { peerId, name, dyncap:{seed,anchor,seqByRoom} } — cross-room
+rooms/<roomhex>/lemmas.json   # { name: { twists, who, cap?, dyncap? } }
+rooms/<roomhex>/currencies.json
+rooms/<roomhex>/chains.json   # dyncap TOFU pins (fork detection survives restart)
+rooms/<roomhex>/transcript.jsonl   # one JSON line per inbound message
+```
+
+Ingest rules mirror the browser: lemmas are first-write-wins by name and
+immutable (a different-twists redeclare is rejected); currencies are FWW by
+token; both are ZFA-validated before storing. Held notes/receipts are never
+gossiped, so the daemon never stores private bearer value.
+
+**To reset the room's remembered state**, delete the `--state` directory.
+
+## Verify offline (no network, no deps)
+
+```bash
+node selftest.mjs        # ZFA: 200 peer caps + closure facts + parseTwists
+node dyncap.selftest.mjs # dyncap: sign→verify chain, canonicalization, fork detection, state round-trip
+```
+
+The dyncap suite proves the signing port matches the browser byte-for-byte
+(so the daemon's signatures verify there). The WebRTC transport remains the
+only path not exercisable offline.
 
 ## Status / caveats
 

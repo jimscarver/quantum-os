@@ -101,3 +101,28 @@ export function validateCapability(token) {
   const tw = Uint8Array.from([...hex].map((c) => parseInt(c, 10)));
   return achievesZfa(tw);
 }
+
+// Parse a twist sequence from one of three forms a lemma may carry:
+//   symbolic  "^v<>/\\+-"      → mapped per the 8-symbol alphabet
+//   hex       "024657…"        → digits 0–7
+//   capability "cap:label:hex" → the hex segment
+// Returns a Uint8Array of twist values, or null if any char is invalid.
+const SYMBOL = { "^": 0, v: 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7 };
+export function parseTwists(str) {
+  if (typeof str !== "string" || str.length === 0) return null;
+  let s = str;
+  if (s.startsWith("cap:")) {
+    const parts = s.split(":");
+    if (parts.length < 3) return null;
+    s = parts[2];
+  }
+  // All hex digits 0–7?
+  if (/^[0-7]+$/.test(s)) return Uint8Array.from([...s].map((c) => parseInt(c, 10)));
+  // Otherwise treat as symbolic.
+  const out = [];
+  for (const ch of s) {
+    if (!(ch in SYMBOL)) return null;
+    out.push(SYMBOL[ch]);
+  }
+  return Uint8Array.from(out);
+}
