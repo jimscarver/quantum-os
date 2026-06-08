@@ -1,0 +1,16 @@
+{
+  "name": "qos-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless QuantumOS room peer — join a room by capability token and broadcast a message over WebRTC.",
+  "bin": { "qos-cli": "./qos-cli.mjs" },
+  "scripts": {
+    "selftest": "node selftest.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "werift": "^0.20.0"
+  },
+  "engines": { "node": ">=18" }
+}
