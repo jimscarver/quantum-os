@@ -97,8 +97,27 @@ node dyncap.selftest.mjs # dyncap: sign→verify chain, canonicalization, fork d
 ```
 
 The dyncap suite proves the signing port matches the browser byte-for-byte
-(so the daemon's signatures verify there). The WebRTC transport remains the
-only path not exercisable offline.
+(so the daemon's signatures verify there).
+
+```bash
+npm install && node loopback.mjs   # werift↔werift WebRTC round-trip over a local relay
+```
+
+The loopback test spins an in-process signaling relay and two peers that
+connect and exchange a chat — exercising the full handshake + data channel
+locally (needs `ws` + `werift`).
+
+## Verified
+
+- **Offline:** ZFA layer, dyncap sign/verify, and `loopback.mjs` (werift↔werift
+  data channel) all pass.
+- **Live (2026-06-08):** the daemon connected to the public room through the
+  Render signaling server, established a WebRTC data channel **with a browser
+  peer**, received its `name` + `sync-lemmas`, and persisted the room's lemmas
+  to `--state`. werift↔browser interop confirmed. Lemmas that are count-balanced
+  but not Pauli-closed are skipped on sync — identical to the browser's own
+  `sync-lemmas` gate (`achievesZfa` required), so the daemon mirrors the room
+  faithfully.
 
 ## Status / caveats
 

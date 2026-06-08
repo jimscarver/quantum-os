@@ -8,6 +8,7 @@
   "scripts": {
     "selftest": "node selftest.mjs",
     "dyncap-test": "node dyncap.selftest.mjs",
+    "loopback": "node loopback.mjs",
     "daemon": "node qos-daemon.mjs"
   },
   "dependencies": {

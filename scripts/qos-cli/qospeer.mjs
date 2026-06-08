@@ -131,11 +131,14 @@ export class QOSPeer {
       ch.onclose = () => this.channels.delete(remoteId);
     }
     const onMsg = (data) => {
-      let d; try { d = JSON.parse(data.toString()); } catch { d = data.toString(); }
+      const payload = (data && typeof data === "object" && "data" in data) ? data.data : data;
+      let d; try { d = JSON.parse(payload.toString()); } catch { d = payload?.toString?.() ?? payload; }
       this.config.onMessage?.(remoteId, d);
     };
-    if (ch.message?.subscribe) ch.message.subscribe(onMsg);
-    else ch.onmessage = (ev) => onMsg(ev.data);
+    // werift exposes inbound as `onMessage` (an Event); browsers use `onmessage`.
+    if (ch.onMessage?.subscribe) ch.onMessage.subscribe(onMsg);
+    else if (ch.message?.subscribe) ch.message.subscribe(onMsg);
+    else ch.onmessage = (ev) => onMsg(ev && typeof ev === "object" && "data" in ev ? ev.data : ev);
   }
 
   async _initiate(remoteId) {

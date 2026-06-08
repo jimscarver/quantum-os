@@ -150,8 +150,9 @@ async function main() {
         else if (d.kind === "qlf") console.log(`[${remoteId.slice(0, 8)}… /${d.cmd}] ${(d.lines || []).join(" | ")}`);
         else console.log(`[${remoteId.slice(0, 8)}…] ${JSON.stringify(d)}`);
       };
-      if (dc.message?.subscribe) dc.message.subscribe(onMsg);
-      else dc.onmessage = (ev) => onMsg(ev.data);
+      if (dc.onMessage?.subscribe) dc.onMessage.subscribe(onMsg);
+      else if (dc.message?.subscribe) dc.message.subscribe(onMsg);
+      else dc.onmessage = (ev) => onMsg(ev && typeof ev === "object" && "data" in ev ? ev.data : ev);
     }
   }
 
