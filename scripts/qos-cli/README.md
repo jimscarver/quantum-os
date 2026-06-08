@@ -70,7 +70,17 @@ node qos-daemon.mjs \
 
 Options: `--room` (cap or URL, required), `--name` (default `qos-memory`),
 `--signal <url>`, `--state <dir>` (default `./.qos-state`, gitignored),
-`--verbose`. Runs until Ctrl-C, then flushes state and leaves.
+`--lemma <name>` (seed a durable lemma the daemon holds + re-serves to
+joiners; ZFA twists minted automatically; repeatable), `--verbose`.
+Runs until Ctrl-C, then flushes state and leaves.
+
+Seeding a durable announcement (chat is ephemeral; a lemma persists and is
+re-served to late joiners):
+
+```bash
+node qos-daemon.mjs --room "<…>" --name memory \
+  --lemma "QLF v1.6.0 released — …/releases/tag/v1.6.0"
+```
 
 State layout (`--state` dir):
 

@@ -36,6 +36,8 @@ Options:
   --name <s>         Display name (default: "qos-memory").
   --signal <url>     Signaling server (default: ${DEFAULT_SIGNAL}).
   --state <dir>      State directory (default: ./.qos-state).
+  --lemma <name>     Seed a durable lemma the daemon holds + re-serves to
+                     joiners (ZFA twists are minted automatically). Repeatable.
   --verbose          Log every inbound message.
   --help, -h         Show this help.
 
@@ -52,6 +54,7 @@ function parseArgs(argv) {
     else if (x === "--signal") a.signal = argv[++i];
     else if (x === "--state") a.state = argv[++i];
     else if (x === "--verbose") a.verbose = true;
+    else if (x === "--lemma") (a.lemmas ??= []).push(argv[++i]);
     else if (x === "--help" || x === "-h") a.help = true;
   }
   return a;
@@ -116,6 +119,21 @@ async function main() {
   const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: true }); fs.appendFileSync(transcriptPath, JSON.stringify({ t: new Date().toISOString(), from, msg }) + "\n"); } catch {} };
 
   console.log(`[daemon] room ${roomId.slice(0, 18)}…  ${lemmas.size} lemma(s), ${currencies.size} curr/ies loaded  state=${stateDir}`);
+
+  // Seed durable lemmas (--lemma). Mint ZFA-valid twists so receiving peers
+  // accept them on sync (achievesZfa gate). FWW by name: skip if already held.
+  let seeded = 0;
+  for (const lname of args.lemmas ?? []) {
+    if (lemmas.has(lname)) continue;
+    const label = (lname.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "lemma");
+    const cap = generateCapability(label);          // cap:label:hex, hex is ZFA-balanced
+    const twists = cap.split(":")[2];
+    if (!achievesZfa(parseTwists(twists))) continue; // belt-and-suspenders
+    lemmas.set(lname, { twists, who: myName, cap });
+    seeded++;
+    console.log(`[daemon] seeded lemma "${lname.slice(0, 48)}${lname.length > 48 ? "…" : ""}"  ${cap.slice(0, 22)}…`);
+  }
+  if (seeded) persistLemmas();
 
   const peer = new QOSPeer({
     signalingUrl: args.signal, roomId, peerId: identity.peerId,
