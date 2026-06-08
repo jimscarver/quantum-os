@@ -564,6 +564,10 @@ packages/
   zfa-core-wasm/     wasm-pack output (build artifact, not committed)
   signaling/         TypeScript — WebSocket signaling server (port 4444)
   browser/           TypeScript — WebRTC peer, loads ZFA WASM
+
+scripts/
+  qos-cli/           Node — headless room peer: one-shot CLI + persistent
+                     memory-peer daemon. Standalone (outside the workspace).
 ```
 
 **Monorepo:** Cargo workspace + pnpm workspace.
@@ -669,6 +673,50 @@ peer.broadcast({ type: "ping" });
 
 ---
 
+## Headless CLI & memory-peer daemon (`scripts/qos-cli`)
+
+A Node peer for joining rooms outside the browser. It lives under `scripts/`,
+outside the pnpm workspace, so it never touches the WASM/browser build — and it
+speaks the same wire protocol as the browser peer (signaling `join/offer/answer/ice`,
+data channel `"qos"`, dyncap-signed envelopes), with a faithful Node port of the
+ZFA-capability and dyncap logic.
+
+```bash
+cd scripts/qos-cli && npm install      # ws + werift (pure-TS headless WebRTC)
+```
+
+**One-shot announce** — broadcast a chat message to whoever is in the room, then exit:
+
+```bash
+node qos-cli.mjs --room "<cap:room:… | room-URL>" --message "hello room"
+```
+
+**Persistent memory peer** — because a room is pure p2p with no server and no
+history, this daemon gives it durable memory: it stays connected (auto-reconnect),
+**persists the room's lemmas + currencies + a full transcript to disk**, and
+**re-serves that state (dyncap-signed) to every peer who joins** — so room
+knowledge survives when all browsers leave. It keeps a stable signed identity
+across restarts.
+
+```bash
+node qos-daemon.mjs --room "<…>" --name memory --state ./.qos-state \
+  --lemma "an announcement to hold durably and re-serve to late joiners"
+```
+
+State persists under `--state`: `identity.json` plus
+`rooms/<roomhex>/{lemmas,currencies,chains}.json` and `transcript.jsonl`.
+
+Offline self-tests cover the ZFA layer, the dyncap sign→verify chain, and a
+werift↔werift data-channel round-trip (`npm run selftest` / `dyncap-test` /
+`loopback`); werift↔browser interop is verified live. Full docs:
+**[scripts/qos-cli/README.md](scripts/qos-cli/README.md)**.
+
+> Rooms are peer-to-peer: a one-shot message reaches only peers present at that
+> moment, and the daemon serves peers only while it (and they) are connected. It
+> is the room's persistence layer, not a server.
+
+---
+
 ## Rust ZFA Core
 
 ```rust
@@ -768,6 +816,8 @@ wasm_capability_valid(hex: string): boolean
 | RhoQu macro language | ✓ `/rhoqu` — `process` / `new` / `\|` parallel / `if` / `on channel` / `for` transpile to dispatcher commands; handlers persist per-room |
 | Mobile viewport | ✓ `100dvh` + `interactive-widget=resizes-content` — input stays above the Android keyboard; not clipped on mobile Firefox |
 | GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
+| Headless CLI peer | ✓ `scripts/qos-cli` — one-shot join + broadcast (Node + werift); ZFA/dyncap ported and self-tested |
+| Memory-peer daemon | ✓ persistent signed peer — persists + re-serves lemmas/currencies/transcript; stable identity; verified werift↔browser live |
 | Native Rust peer | Planned |
 
 ---
