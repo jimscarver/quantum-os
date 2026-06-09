@@ -99,6 +99,30 @@ gossiped, so the daemon never stores private bearer value.
 
 **To reset the room's remembered state**, delete the `--state` directory.
 
+## Push a lemma to already-connected peers (`pushlemma.mjs`)
+
+The daemon hands lemmas to a peer via `sync-lemmas` only when that peer's data
+channel **opens** (join/refresh). A lemma seeded or learned *after* a peer
+connected is therefore not pushed to it — and restarting the daemon does not
+help, because it keeps a stable `cap:peer:…` identity, so an already-connected
+browser treats it as the same open peer and never re-handshakes.
+
+`pushlemma.mjs` closes that gap: it joins from a **fresh** peerId (which every
+browser will handshake with) and broadcasts the lemma live as a `lemma` envelope
+— the same kind a browser emits on `/lemma` — so connected peers ingest it
+immediately.
+
+```bash
+# Forward a lemma the daemon already holds (read from its state file):
+node pushlemma.mjs --room "<cap|url>" --select "<lemma-name>"
+node pushlemma.mjs --room "<cap|url>" --cap-prefix cap:QLFv170
+
+# Or broadcast an ad-hoc lemma (validated for ZFA before sending):
+node pushlemma.mjs --room "<cap|url>" --lemma-name foo --twists "^v<>/\+-"
+```
+
+It stays connected for `--linger` ms (default 12000) to reach peers, then leaves.
+
 ## Verify offline (no network, no deps)
 
 ```bash
