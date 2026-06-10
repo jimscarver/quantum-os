@@ -313,6 +313,19 @@
     .cmd-item .cmd-name { color:#7fdbca; font-size:0.72rem; white-space:nowrap; }
     .cmd-item .cmd-desc { color:#888; font-size:0.68rem; overflow:hidden; text-overflow:ellipsis; }
 
+    /* Attachments / media */
+    #attach-btn {
+      background:#141414; border:1px solid #333; border-radius:4px; color:#9fceff;
+      font-size:0.95rem; line-height:1; padding:0.4rem 0.6rem; cursor:pointer;
+    }
+    #attach-btn:hover { background:#1e2e3a; border-color:#345; }
+    .msg .text .media-img { max-width:320px; max-height:320px; border-radius:6px; cursor:pointer; display:block; margin-top:0.25rem; border:1px solid #222; }
+    .msg .text .media-vid { max-width:360px; border-radius:6px; display:block; margin-top:0.25rem; border:1px solid #222; }
+    .msg .text audio { display:block; margin-top:0.25rem; max-width:320px; }
+    .msg .text .media-file { display:inline-flex; gap:0.4rem; align-items:center; margin-top:0.25rem; color:#9fceff; }
+    .main.dragover { outline:2px dashed #2a5a5a; outline-offset:-8px; }
+    .dropping { color:#7fdbca; }
+
     /* Onboarding / empty state */
     .welcome { color:#9a9a9a; font-size:0.78rem; line-height:1.7; border:1px dashed #262626; border-radius:8px; padding:1rem 1.1rem; margin:0.5rem 0; }
     .welcome h3 { color:#7fdbca; font-size:0.85rem; margin-bottom:0.5rem; }
@@ -416,7 +429,10 @@
       <div class="input-wrap">
         <div id="cmd-menu" class="cmd-menu" hidden></div>
         <div class="input-row">
-          <input id="msg-input" type="text" placeholder="message · type / for commands · **markdown** ok" disabled />
+          <button id="attach-btn" title="Attach an image or file">📎</button>
+          <input id="file-input" type="file" multiple hidden
+                 accept="image/*,audio/*,video/*,application/pdf,text/*" />
+          <input id="msg-input" type="text" placeholder="message · type / for commands · **markdown** ok · 📎 or drop/paste to attach" disabled />
           <button id="send-btn" disabled>Send</button>
         </div>
       </div>

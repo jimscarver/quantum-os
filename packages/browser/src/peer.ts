@@ -87,6 +87,16 @@ export class QOSPeer {
     }
   }
 
+  /// Largest send-buffer backlog across open channels (bytes) — used to pace
+  /// large chunked transfers so we don't overflow the SCTP send buffer.
+  maxBufferedAmount(): number {
+    let max = 0;
+    for (const ch of this.channels.values()) {
+      if (ch.readyState === "open" && ch.bufferedAmount > max) max = ch.bufferedAmount;
+    }
+    return max;
+  }
+
   private async _openSignaling(): Promise<void> {
     const ws = new WebSocket(this.config.signalingUrl);
     this.ws = ws;
