@@ -326,6 +326,18 @@
     .main.dragover { outline:2px dashed #2a5a5a; outline-offset:-8px; }
     .dropping { color:#7fdbca; }
 
+    /* Live call */
+    .call-bar { border-bottom:1px solid #1a1a1a; background:#0a0f0f; padding:0.6rem 1rem; display:flex; flex-direction:column; gap:0.5rem; }
+    .call-tiles { display:flex; flex-wrap:wrap; gap:0.5rem; }
+    .call-tile { position:relative; width:160px; height:120px; background:#000; border:1px solid #234; border-radius:6px; overflow:hidden; }
+    .call-tile video { width:100%; height:100%; object-fit:cover; background:#000; }
+    .call-tile .call-name { position:absolute; left:4px; bottom:3px; font-size:0.6rem; color:#cfe9e2; background:rgba(0,0,0,0.55); padding:0 0.3rem; border-radius:3px; }
+    .call-controls { display:flex; gap:0.5rem; }
+    .call-ctl { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#cfe9e2; font-size:0.85rem; padding:0.3rem 0.7rem; cursor:pointer; }
+    .call-ctl:hover { background:#1e2e2e; }
+    .call-ctl.hangup { color:#ff9d4a; border-color:#5a2a2a; }
+    .call-ctl.hangup:hover { background:#3a1e1e; }
+
     /* Onboarding / empty state */
     .welcome { color:#9a9a9a; font-size:0.78rem; line-height:1.7; border:1px dashed #262626; border-radius:8px; padding:1rem 1.1rem; margin:0.5rem 0; }
     .welcome h3 { color:#7fdbca; font-size:0.85rem; margin-bottom:0.5rem; }
@@ -423,6 +435,15 @@
       </div>
 
       <div id="actions-row" class="actions-row"></div>
+
+      <div id="call-bar" class="call-bar" hidden>
+        <div id="call-tiles" class="call-tiles"></div>
+        <div class="call-controls">
+          <button id="call-mute" class="call-ctl" title="Mute mic">🎤</button>
+          <button id="call-cam" class="call-ctl" title="Turn camera off">🎥</button>
+          <button id="call-hangup" class="call-ctl hangup" title="Leave call">📵 Leave</button>
+        </div>
+      </div>
 
       <div id="messages"></div>
 

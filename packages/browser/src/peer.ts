@@ -19,6 +19,7 @@ export interface PeerConfig {
   onPeerJoined?: (peerId: string) => void;
   onPeerLeft?: (peerId: string) => void;
   onChannelOpen?: (peerId: string) => void;
+  onRemoteTrack?: (peerId: string, stream: MediaStream) => void;   // live-call media
 }
 
 const DEFAULT_ICE: RTCIceServer[] = [
@@ -42,6 +43,10 @@ export class QOSPeer {
   private _reconnectDelay = 3000;
   private static readonly RECONNECT_MIN = 3000;
   private static readonly RECONNECT_MAX = 30000;
+  // Live-call media: the local mic/cam stream shared into all connections, and a
+  // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
+  private localStream: MediaStream | null = null;
+  private makingOffer = new Map<string, boolean>();
 
   constructor(config: PeerConfig) {
     this.config = config;
@@ -95,6 +100,54 @@ export class QOSPeer {
       if (ch.readyState === "open" && ch.bufferedAmount > max) max = ch.bufferedAmount;
     }
     return max;
+  }
+
+  /// Start sharing a local mic/camera stream into every peer connection (live
+  /// call). Adds the tracks and renegotiates each connection.
+  addLocalMedia(stream: MediaStream): void {
+    this.localStream = stream;
+    for (const [peerId, pc] of this.connections) {
+      for (const track of stream.getTracks()) {
+        if (!pc.getSenders().some((s) => s.track === track)) pc.addTrack(track, stream);
+      }
+      void this.renegotiate(peerId, pc);
+    }
+  }
+
+  /// Stop sharing local media: remove our senders from every connection and
+  /// renegotiate. The remote sees the tracks end.
+  removeLocalMedia(): void {
+    const stream = this.localStream;
+    this.localStream = null;
+    if (!stream) return;
+    const mine = new Set(stream.getTracks());
+    for (const [peerId, pc] of this.connections) {
+      for (const sender of pc.getSenders()) {
+        if (sender.track && mine.has(sender.track)) {
+          try { pc.removeTrack(sender); } catch { /* already gone */ }
+        }
+      }
+      void this.renegotiate(peerId, pc);
+    }
+  }
+
+  /// Send a fresh offer on an established connection (media (re)negotiation).
+  /// Glare is resolved by handleOffer's polite/impolite rule.
+  private async renegotiate(peerId: string, pc: RTCPeerConnection): Promise<void> {
+    try {
+      this.makingOffer.set(peerId, true);
+      const offer = await pc.createOffer();
+      if (pc.signalingState !== "stable") return;   // a remote offer landed first
+      await pc.setLocalDescription(offer);
+      this.signal({
+        type: "offer", roomId: this.config.roomId,
+        from: this.peerId, to: peerId, sdp: pc.localDescription!.sdp,
+      });
+    } catch (e) {
+      console.warn("[qos-peer] renegotiate failed", e);
+    } finally {
+      this.makingOffer.set(peerId, false);
+    }
   }
 
   private async _openSignaling(): Promise<void> {
@@ -195,35 +248,54 @@ export class QOSPeer {
   }
 
   private async handleOffer(fromPeerId: string, sdp: string): Promise<void> {
-    const pc = this.createPeerConnection(fromPeerId);
+    // Reuse the existing connection for a renegotiation (e.g. media tracks added
+    // mid-call). Only create a fresh connection for a first-time offer — the old
+    // "always recreate" behaviour would have torn down the live data channel.
+    let pc = this.connections.get(fromPeerId);
+    if (!pc) {
+      pc = this.createPeerConnection(fromPeerId);
+      pc.ondatachannel = (event) => this.setupDataChannel(fromPeerId, event.channel);
+    }
 
-    pc.ondatachannel = (event) => {
-      this.setupDataChannel(fromPeerId, event.channel);
-    };
+    // Perfect-negotiation glare handling: the peer with the smaller ID is polite.
+    const polite = this.peerId < fromPeerId;
+    const collision = (this.makingOffer.get(fromPeerId) ?? false) || pc.signalingState !== "stable";
+    if (collision && !polite) return;   // impolite peer ignores — its own offer wins
 
-    await pc.setRemoteDescription({ type: "offer", sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    this.signal({
-      type: "answer",
-      roomId: this.config.roomId,
-      from: this.peerId,
-      to: fromPeerId,
-      sdp: answer.sdp!,
-    });
+    try {
+      if (collision && polite) {
+        await pc.setLocalDescription({ type: "rollback" });
+      }
+      await pc.setRemoteDescription({ type: "offer", sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      this.signal({
+        type: "answer",
+        roomId: this.config.roomId,
+        from: this.peerId,
+        to: fromPeerId,
+        sdp: pc.localDescription!.sdp,
+      });
+    } catch (e) {
+      console.warn("[qos-peer] handleOffer failed", e);
+    }
   }
 
   private async handleAnswer(fromPeerId: string, sdp: string): Promise<void> {
     const pc = this.connections.get(fromPeerId);
     if (!pc) return;
-    await pc.setRemoteDescription({ type: "answer", sdp });
+    if (pc.signalingState !== "have-local-offer") return;   // stray/rolled-back answer
+    try { await pc.setRemoteDescription({ type: "answer", sdp }); }
+    catch (e) { console.warn("[qos-peer] handleAnswer failed", e); }
   }
 
   private async handleIce(fromPeerId: string, candidate: RTCIceCandidateInit): Promise<void> {
     const pc = this.connections.get(fromPeerId);
     if (!pc) return;
-    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    // Candidates can arrive while a description is being rolled back during glare;
+    // tolerate the resulting benign failures.
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch { /* ignore */ }
   }
 
   private createPeerConnection(remotePeerId: string): RTCPeerConnection {
@@ -245,6 +317,11 @@ export class QOSPeer {
       });
     };
 
+    pc.ontrack = (event) => {
+      const stream = event.streams[0] ?? new MediaStream([event.track]);
+      this.config.onRemoteTrack?.(remotePeerId, stream);
+    };
+
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       console.log(`[qos-peer] connection to ${remotePeerId.slice(-8)} → ${state}`);
@@ -264,6 +341,16 @@ export class QOSPeer {
       this.channels.set(peerId, ch);
       this.config.onChannelOpen?.(peerId);
       console.log(`[qos-peer] data channel open with ${peerId}`);
+      // If a call is already in progress, push our media to the newcomer.
+      if (this.localStream) {
+        const pc = this.connections.get(peerId);
+        if (pc) {
+          for (const t of this.localStream.getTracks()) {
+            if (!pc.getSenders().some((s) => s.track === t)) pc.addTrack(t, this.localStream);
+          }
+          void this.renegotiate(peerId, pc);
+        }
+      }
     };
     ch.onclose = () => {
       this.channels.delete(peerId);

@@ -3227,6 +3227,16 @@ function connect(): void {
         }
         if (d.kind === "file-start") { handleFileStart(d); return; }
         if (d.kind === "file-chunk") { handleFileChunk(from, d); return; }
+        if (d.kind === "call-start") {
+          addMessage("", `📞 ${peerLabel(from)} started a call — click Call to join`, "system");
+          return;
+        }
+        if (d.kind === "call-end") {
+          removeTile(from);
+          maybeHideCallBar();
+          addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -3281,11 +3291,18 @@ function connect(): void {
           renderPeers();
           addMessage("", `${peerLabel(id)} left`, "system");
           peerNames.delete(id);
+          removeTile(id);
+          maybeHideCallBar();
         } finally { setActiveRoom(prev); }
       }, 6_000);
       // The pendingLeaves mutation happens synchronously; wrap it too.
       const prev = activeRoom; setActiveRoom(ctx);
       try { pendingLeaves.set(id, timer); } finally { setActiveRoom(prev); }
+    },
+    onRemoteTrack(peerId, stream) {
+      const prev = activeRoom; setActiveRoom(ctx);
+      try { if (isUiActive()) addRemoteStream(peerId, stream); }
+      finally { setActiveRoom(prev); }
     },
   });
   setQpeer(newPeer);
@@ -3586,6 +3603,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
 interface QuickAction { label: string; ico: string; fill: string; hint: string }
 const QUICK_ACTIONS: QuickAction[] = [
   { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
+  { label: "Call",       ico: "📞", fill: "",                hint: "" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
   { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
   { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
@@ -3671,6 +3689,7 @@ function initUx(): void {
           else { cmdSel = -1; showCmdMenu("", true); msgInput.focus(); }
           return;
         }
+        if (a.label === "Call") { toggleCall(); return; }
         msgInput.value = a.fill;
         msgInput.focus();
         if (a.hint) addMessage("", a.hint, "system");
@@ -3719,6 +3738,118 @@ function initUx(): void {
     }
     if (files.length) { e.preventDefault(); sendFiles(files); }
   });
+
+  // Live-call controls.
+  callBarEl = document.getElementById("call-bar");
+  callTilesEl = document.getElementById("call-tiles");
+  callMuteBtn = document.getElementById("call-mute") as HTMLButtonElement | null;
+  callCamBtn = document.getElementById("call-cam") as HTMLButtonElement | null;
+  document.getElementById("call-hangup")?.addEventListener("click", endCall);
+  callMuteBtn?.addEventListener("click", toggleMute);
+  callCamBtn?.addEventListener("click", toggleCam);
+}
+
+// ---------------------------------------------------------------------------
+// Live calls: mic / camera over WebRTC media tracks
+// ---------------------------------------------------------------------------
+
+let localStream: MediaStream | null = null;
+let inCall = false;
+const callTiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
+let callBarEl: HTMLElement | null = null;
+let callTilesEl: HTMLElement | null = null;
+let callMuteBtn: HTMLButtonElement | null = null;
+let callCamBtn: HTMLButtonElement | null = null;
+
+function showCallBar(): void { if (callBarEl) callBarEl.hidden = false; }
+function maybeHideCallBar(): void {
+  if (callBarEl && !inCall && callTiles.size === 0) callBarEl.hidden = true;
+}
+
+function makeTile(key: string, label: string): HTMLVideoElement {
+  const wrap = document.createElement("div");
+  wrap.className = "call-tile";
+  wrap.dataset.key = key;
+  const v = document.createElement("video");
+  v.autoplay = true; v.playsInline = true;
+  const cap = document.createElement("span");
+  cap.className = "call-name"; cap.textContent = label;
+  wrap.appendChild(v); wrap.appendChild(cap);
+  callTilesEl?.appendChild(wrap);
+  callTiles.set(key, v);
+  return v;
+}
+
+function removeTile(key: string): void {
+  const v = callTiles.get(key);
+  if (!v) return;
+  v.srcObject = null;
+  v.closest(".call-tile")?.remove();
+  callTiles.delete(key);
+}
+
+function addRemoteStream(peerId: string, stream: MediaStream): void {
+  let v = callTiles.get(peerId);
+  if (!v) v = makeTile(peerId, peerLabel(peerId));
+  if (v.srcObject !== stream) v.srcObject = stream;
+  showCallBar();
+}
+
+async function startCall(): Promise<void> {
+  if (!qpeer) { addMessage("", "connect to a room before starting a call", "system"); return; }
+  if (inCall) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+  } catch {
+    addMessage("", "⚠ could not access camera/microphone (permission denied?)", "system");
+    return;
+  }
+  inCall = true;
+  const local = makeTile("__local__", "you");
+  local.muted = true;
+  local.srcObject = localStream;
+  showCallBar();
+  qpeer.addLocalMedia(localStream);
+  qpeer.broadcast({ kind: "call-start" });
+  addMessage("", "📞 you started a call", "system");
+  updateCallControls();
+}
+
+function endCall(): void {
+  if (qpeer) { qpeer.removeLocalMedia(); qpeer.broadcast({ kind: "call-end" }); }
+  localStream?.getTracks().forEach((t) => t.stop());
+  localStream = null;
+  inCall = false;
+  removeTile("__local__");
+  updateCallControls();
+  maybeHideCallBar();
+}
+
+function toggleCall(): void { if (inCall) endCall(); else void startCall(); }
+
+function toggleMute(): void {
+  const t = localStream?.getAudioTracks()[0];
+  if (t) t.enabled = !t.enabled;
+  updateCallControls();
+}
+
+function toggleCam(): void {
+  const t = localStream?.getVideoTracks()[0];
+  if (t) t.enabled = !t.enabled;
+  updateCallControls();
+}
+
+function updateCallControls(): void {
+  const audioOn = localStream?.getAudioTracks()[0]?.enabled ?? false;
+  const videoOn = localStream?.getVideoTracks()[0]?.enabled ?? false;
+  if (callMuteBtn) {
+    callMuteBtn.textContent = audioOn ? "🎤" : "🔇";
+    callMuteBtn.title = audioOn ? "Mute mic" : "Unmute mic";
+  }
+  if (callCamBtn) {
+    callCamBtn.textContent = videoOn ? "🎥" : "🚫";
+    callCamBtn.title = videoOn ? "Turn camera off" : "Turn camera on";
+  }
 }
 
 // ---------------------------------------------------------------------------
