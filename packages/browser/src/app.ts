@@ -159,6 +159,9 @@ interface RoomContext {
   signalingUrl: string;
   // True if there's been activity since the user last viewed this tab.
   hasUnread: boolean;
+  // True after the first successful signaling open for this room. Subsequent
+  // reopens (reconnects) are silent so a flapping socket doesn't spam the log.
+  hasJoinedOnce: boolean;
 }
 
 function createRoom(roomId: string): RoomContext {
@@ -186,6 +189,7 @@ function createRoom(roomId: string): RoomContext {
     chatLog: [],
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
+    hasJoinedOnce: false,
   };
 }
 
@@ -2677,7 +2681,15 @@ function connect(): void {
           toggleSidebar(false);
         }
         renderPeers();
-        addMessage("", `joined room ${shortId(roomId)}`, "system");
+        // Log the join only once per room. onSignalingOpen also fires on every
+        // signaling reconnect (e.g. a backgrounded tab dropped by the server's
+        // heartbeat), so logging here unconditionally floods the room with
+        // "joined room" lines. The persistent connected status already reflects
+        // reconnects.
+        if (!ctx.hasJoinedOnce) {
+          addMessage("", `joined room ${shortId(roomId)}`, "system");
+          ctx.hasJoinedOnce = true;
+        }
         openProbeWindow();
       } finally { setActiveRoom(prev); }
     },

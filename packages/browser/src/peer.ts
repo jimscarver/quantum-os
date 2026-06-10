@@ -35,6 +35,13 @@ export class QOSPeer {
   private config: PeerConfig;
   private _disconnected = false;   // true after explicit disconnect()
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Reconnect backoff: starts at 3s, doubles on each sustained failure up to a
+  // cap, and resets to 3s once a connection opens cleanly. Prevents a tab that
+  // keeps getting dropped (e.g. background-throttled, killed by the server
+  // heartbeat) from hammering the signaling server every few seconds.
+  private _reconnectDelay = 3000;
+  private static readonly RECONNECT_MIN = 3000;
+  private static readonly RECONNECT_MAX = 30000;
 
   constructor(config: PeerConfig) {
     this.config = config;
@@ -50,7 +57,7 @@ export class QOSPeer {
     this._openSignaling().catch(() => {
       if (!this._disconnected) {
         // Server unreachable (e.g. cold start) — retry same as reconnect path
-        this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 3000);
+        this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
       }
     });
   }
@@ -89,6 +96,9 @@ export class QOSPeer {
       ws.onerror = (e) => reject(e);
     });
 
+    // Clean open — reset the reconnect backoff.
+    this._reconnectDelay = QOSPeer.RECONNECT_MIN;
+
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as SignalMsg;
@@ -100,9 +110,9 @@ export class QOSPeer {
 
     ws.onclose = () => {
       if (this._disconnected) return;
-      console.warn("[qos-peer] signaling disconnected — reconnecting in 3s");
+      console.warn(`[qos-peer] signaling disconnected — reconnecting in ${this._reconnectDelay / 1000}s`);
       this.config.onSignalingClose?.();
-      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 3000);
+      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
     };
 
     // Join the room
@@ -116,8 +126,9 @@ export class QOSPeer {
       await this._openSignaling();
       console.log("[qos-peer] signaling reconnected");
     } catch {
-      console.warn("[qos-peer] signaling reconnect failed — retrying in 5s");
-      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), 5000);
+      this._reconnectDelay = Math.min(this._reconnectDelay * 2, QOSPeer.RECONNECT_MAX);
+      console.warn(`[qos-peer] signaling reconnect failed — retrying in ${this._reconnectDelay / 1000}s`);
+      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
     }
   }
 
