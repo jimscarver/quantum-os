@@ -97,7 +97,9 @@ interface ProbeWindow {
 
 // Per-room chat history so tab switching can replay the messages area.
 type ChatKind = "peer" | "self" | "system";
-interface ChatLine { from: string; text: string; kind: ChatKind; label?: string }
+type MediaKind = "image" | "audio" | "video" | "file";
+interface MediaAttachment { mediaKind: MediaKind; name: string; mime: string; size: number; url: string }
+interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment }
 
 // A persist request is an offer from another peer asking us to also store
 // their lemma / currency declaration so the room's public state has more
@@ -186,7 +188,7 @@ function createRoom(roomId: string): RoomContext {
     channelSubscriptions: new Set(),
     pendingPersistRequests: new Map(),
     rhoquHandlers: [],
-    chatLog: [],
+    chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
     hasJoinedOnce: false,
@@ -597,7 +599,11 @@ function renderChatLine(line: ChatLine): void {
                      : (line.label ?? shortId(line.from));
   const textEl = document.createElement("span");
   textEl.className = "text";
-  textEl.textContent = line.text;
+  if (line.media) {
+    renderMedia(textEl, line.media);
+  } else {
+    textEl.innerHTML = renderMarkdown(line.text);
+  }
   div.appendChild(fromEl);
   div.appendChild(textEl);
   messagesEl.appendChild(div);
@@ -607,6 +613,7 @@ function addMessage(from: string, text: string, kind: "peer" | "self" | "system"
   const line: ChatLine = { from, text, kind, label };
   activeRoom.chatLog.push(line);
   trimChatLog(activeRoom);
+  saveChat(activeRoom);
   if (isUiActive()) {
     renderChatLine(line);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -3218,6 +3225,18 @@ function connect(): void {
           }
           return;
         }
+        if (d.kind === "file-start") { handleFileStart(d); return; }
+        if (d.kind === "file-chunk") { handleFileChunk(from, d); return; }
+        if (d.kind === "call-start") {
+          addMessage("", `📞 ${peerLabel(from)} started a call — click Call to join`, "system");
+          return;
+        }
+        if (d.kind === "call-end") {
+          removeTile(from);
+          maybeHideCallBar();
+          addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -3272,11 +3291,18 @@ function connect(): void {
           renderPeers();
           addMessage("", `${peerLabel(id)} left`, "system");
           peerNames.delete(id);
+          removeTile(id);
+          maybeHideCallBar();
         } finally { setActiveRoom(prev); }
       }, 6_000);
       // The pendingLeaves mutation happens synchronously; wrap it too.
       const prev = activeRoom; setActiveRoom(ctx);
       try { pendingLeaves.set(id, timer); } finally { setActiveRoom(prev); }
+    },
+    onRemoteTrack(peerId, stream) {
+      const prev = activeRoom; setActiveRoom(ctx);
+      try { if (isUiActive()) addRemoteStream(peerId, stream); }
+      finally { setActiveRoom(prev); }
     },
   });
   setQpeer(newPeer);
@@ -3341,6 +3367,492 @@ toggleBtn.addEventListener("click", () => toggleSidebar());
 overlayEl.addEventListener("click", () => toggleSidebar(false));
 
 // ---------------------------------------------------------------------------
+// Rich text (safe Markdown subset) + persistent chat transcript
+// ---------------------------------------------------------------------------
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** A deliberately small, XSS-safe Markdown renderer: everything is HTML-escaped
+ *  first, then a fixed set of tags is re-introduced. No raw peer HTML is ever
+ *  inserted, and link hrefs are constrained to http(s). */
+function renderMarkdown(src: string): string {
+  const codes: string[] = [];
+  let s = escapeHtml(src);
+  // fenced code blocks ``` … ``` (protect from further formatting)
+  s = s.replace(/```([\s\S]*?)```/g, (_m, c: string) => {
+    codes.push(`<pre class="code">${c.replace(/^\n/, "").replace(/\n$/, "")}</pre>`);
+    return `@@@${codes.length - 1}@@@`;
+  });
+  // inline code `…`
+  s = s.replace(/`([^`\n]+)`/g, (_m, c: string) => {
+    codes.push(`<code>${c}</code>`);
+    return `@@@${codes.length - 1}@@@`;
+  });
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  s = s.replace(/\n/g, "<br>");
+  s = s.replace(/@@@(\d+)@@@/g, (_m, i: string) => codes[Number(i)]);
+  return s;
+}
+
+function loadChat(roomId: string): ChatLine[] {
+  try {
+    const raw = localStorage.getItem(`qos-chat-${roomId}`);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function saveChat(room: RoomContext): void {
+  try {
+    // Persist the transcript, but drop large media data-URLs (they'd blow the
+    // localStorage quota). A media line reloads as a labelled placeholder.
+    const slim = room.chatLog.slice(-200).map((l) =>
+      l.media ? { ...l, media: { ...l.media, url: "" } } : l);
+    localStorage.setItem(`qos-chat-${room.roomId}`, JSON.stringify(slim));
+  } catch { /* storage quota — drop silently */ }
+}
+
+// ---------------------------------------------------------------------------
+// Attachments: images / audio / video / files over the data channel (chunked)
+// ---------------------------------------------------------------------------
+
+const FILE_MAX = 8 * 1024 * 1024;     // 8 MB hard cap per attachment
+const FILE_CHUNK = 16 * 1024;         // base64 chars per data-channel message
+let fileSeq = 0;
+
+function fmtSize(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
+  return `${n} B`;
+}
+
+function mediaKindOf(mime: string, name: string): MediaKind {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"].includes(ext)) return "image";
+  if (["mp3", "wav", "ogg", "m4a", "opus", "aac"].includes(ext)) return "audio";
+  if (["mp4", "webm", "mov", "mkv"].includes(ext)) return "video";
+  return "file";
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  const STEP = 0x8000;
+  for (let i = 0; i < bytes.length; i += STEP) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + STEP));
+  }
+  return btoa(bin);
+}
+
+/** Pause until the data-channel send buffers drain below ~1 MB. */
+function paceSend(): Promise<void> {
+  return new Promise((resolve) => {
+    const check = (): void => {
+      if (!qpeer || qpeer.maxBufferedAmount() < (1 << 20)) resolve();
+      else setTimeout(check, 30);
+    };
+    check();
+  });
+}
+
+function renderMedia(host: HTMLElement, m: MediaAttachment): void {
+  if (!m.url) {   // persisted placeholder (data-URL was stripped on save)
+    const span = document.createElement("span");
+    span.className = "media-file";
+    span.textContent = `📎 ${m.name} (${fmtSize(m.size)})`;
+    host.appendChild(span);
+    return;
+  }
+  if (m.mediaKind === "image") {
+    const img = document.createElement("img");
+    img.className = "media-img"; img.src = m.url; img.alt = m.name; img.loading = "lazy";
+    img.title = `${m.name} (${fmtSize(m.size)}) — click to open`;
+    img.addEventListener("click", () => window.open(m.url, "_blank", "noopener"));
+    host.appendChild(img);
+  } else if (m.mediaKind === "audio") {
+    const a = document.createElement("audio"); a.controls = true; a.src = m.url; a.preload = "metadata";
+    host.appendChild(a);
+  } else if (m.mediaKind === "video") {
+    const v = document.createElement("video"); v.className = "media-vid"; v.controls = true; v.src = m.url; v.preload = "metadata";
+    host.appendChild(v);
+  } else {
+    const a = document.createElement("a");
+    a.className = "media-file"; a.href = m.url; a.download = m.name;
+    a.textContent = `📎 ${m.name} (${fmtSize(m.size)})`;
+    host.appendChild(a);
+  }
+}
+
+function addMedia(from: string, media: MediaAttachment, kind: "peer" | "self", label?: string): void {
+  const line: ChatLine = { from, text: "", kind, label, media };
+  activeRoom.chatLog.push(line);
+  trimChatLog(activeRoom);
+  saveChat(activeRoom);
+  if (isUiActive()) {
+    renderChatLine(line);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else {
+    markUnread(activeRoom);
+  }
+}
+
+async function sendFile(file: File): Promise<void> {
+  if (!qpeer) { addMessage("", "connect to a room before sending attachments", "system"); return; }
+  if (file.size > FILE_MAX) {
+    addMessage("", `⚠ "${file.name}" is ${fmtSize(file.size)} — over the ${fmtSize(FILE_MAX)} attachment limit`, "system");
+    return;
+  }
+  const buf = await file.arrayBuffer();
+  const b64 = arrayBufferToBase64(buf);
+  const mime = file.type || "application/octet-stream";
+  const mediaKind = mediaKindOf(file.type, file.name);
+  const id = `${qpeer.peerId.slice(-6)}-${Date.now()}-${fileSeq++}`;
+  const total = Math.ceil(b64.length / FILE_CHUNK);
+  qpeer.broadcast({ kind: "file-start", id, name: file.name, mime, size: file.size, total, mediaKind });
+  for (let i = 0; i < total; i++) {
+    qpeer.broadcast({ kind: "file-chunk", id, seq: i, data: b64.slice(i * FILE_CHUNK, (i + 1) * FILE_CHUNK) });
+    if ((i & 31) === 31) await paceSend();
+  }
+  addMedia("", { mediaKind, name: file.name, mime, size: file.size, url: `data:${mime};base64,${b64}` }, "self");
+}
+
+function sendFiles(files: FileList | File[]): void {
+  for (const f of Array.from(files)) void sendFile(f);
+}
+
+// Inbound reassembly: transfer id → partial state.
+interface IncomingFile {
+  name: string; mime: string; size: number; mediaKind: MediaKind;
+  total: number; chunks: string[]; got: number;
+}
+const incomingFiles = new Map<string, IncomingFile>();
+
+function handleFileStart(d: Record<string, unknown>): void {
+  const id = String(d.id ?? "");
+  const size = Number(d.size ?? 0);
+  const total = Number(d.total ?? 0);
+  if (!id || size > FILE_MAX || total <= 0 || total > Math.ceil(FILE_MAX / FILE_CHUNK) + 2) return;
+  incomingFiles.set(id, {
+    name: String(d.name ?? "file"),
+    mime: String(d.mime ?? "application/octet-stream"),
+    size,
+    mediaKind: (d.mediaKind as MediaKind) ?? "file",
+    total,
+    chunks: new Array(total).fill(""),
+    got: 0,
+  });
+}
+
+function handleFileChunk(from: string, d: Record<string, unknown>): void {
+  const id = String(d.id ?? "");
+  const f = incomingFiles.get(id);
+  if (!f) return;
+  const seq = Number(d.seq ?? -1);
+  if (seq < 0 || seq >= f.total || f.chunks[seq] !== "") return;
+  f.chunks[seq] = String(d.data ?? "");
+  f.got++;
+  if (f.got >= f.total) {
+    incomingFiles.delete(id);
+    const url = `data:${f.mime};base64,${f.chunks.join("")}`;
+    addMedia(from, { mediaKind: f.mediaKind, name: f.name, mime: f.mime, size: f.size, url }, "peer", peerLabel(from));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Self-evident UI: command palette, quick-action toolbar, onboarding
+// ---------------------------------------------------------------------------
+
+interface SlashCmd { name: string; template: string; desc: string }
+const SLASH_COMMANDS: SlashCmd[] = [
+  { name: "help",    template: "/help",       desc: "show all commands" },
+  { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
+  { name: "cap",     template: "/cap ",       desc: "generate a new ZFA capability" },
+  { name: "grant",   template: "/grant ",     desc: "generate + share a capability token" },
+  { name: "zfa",     template: "/zfa ",       desc: "validate a capability token" },
+  { name: "braket",  template: "/braket ",    desc: "evaluate bra-ket (0 1 + - i -i)" },
+  { name: "qucalc",  template: "/qucalc ",    desc: "evaluate a RhoQuCalc twist sequence" },
+  { name: "conj",    template: "/conj ",      desc: "Hermitian adjoint of a twist sequence" },
+  { name: "freq",    template: "/freq ",      desc: "ZFA frequency spectrum / C(2n,n)" },
+  { name: "dump",    template: "/dump",       desc: "summary of logic shared this session" },
+  { name: "lemma",   template: "/lemma ",     desc: "register / list named lemmas" },
+  { name: "request", template: "/request ",   desc: "request a lemma from its holder" },
+  { name: "pass",    template: "/pass ",      desc: "transfer a lemma to a named peer" },
+  { name: "note",    template: "/note ",      desc: "promissory notes (grant|pass|redeem…)" },
+  { name: "rdv",     template: "/rdv ",       desc: "atomic n-party swap (swap|accept…)" },
+  { name: "dyncap",  template: "/dyncap ",    desc: "dynamic capabilities (status|peers)" },
+  { name: "probe",   template: "/probe ",     desc: "consensus discrepancy probe" },
+  { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
+  { name: "share",   template: "/share ",     desc: "bridge a lemma/note into another room" },
+  { name: "channel", template: "/channel ",   desc: "tagged messages (listen|send|list)" },
+  { name: "script",  template: "/script ",    desc: "run a sequential command chain" },
+  { name: "persist", template: "/persist ",   desc: "agreed replication of public state" },
+  { name: "rhoqu",   template: "/rhoqu ",     desc: "RhoQu macro → commands" },
+];
+
+interface QuickAction { label: string; ico: string; fill: string; hint: string }
+const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
+  { label: "Call",       ico: "📞", fill: "",                hint: "" },
+  { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
+  { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
+  { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
+  { label: "Swap",       ico: "⇄", fill: "/rdv swap ",      hint: "atomic swap, e.g. /rdv swap USD 30 EUR 20 Alice" },
+  { label: "Channel",    ico: "#", fill: "/channel send ",  hint: "tagged message, e.g. /channel send news hello" },
+];
+
+let cmdMenuEl: HTMLElement | null = null;
+let actionsRowEl: HTMLElement | null = null;
+let cmdSel = -1;
+let cmdMatches: SlashCmd[] = [];
+
+function cmdMenuOpen(): boolean { return !!cmdMenuEl && !cmdMenuEl.hidden; }
+function hideCmdMenu(): void { if (cmdMenuEl) cmdMenuEl.hidden = true; cmdSel = -1; }
+
+function showCmdMenu(filter: string, all = false): void {
+  if (!cmdMenuEl) return;
+  const f = filter.toLowerCase();
+  cmdMatches = all ? SLASH_COMMANDS.slice() : SLASH_COMMANDS.filter((c) => c.name.startsWith(f));
+  if (cmdMatches.length === 0) { hideCmdMenu(); return; }
+  cmdMenuEl.innerHTML = "";
+  cmdMatches.forEach((c, i) => {
+    const item = document.createElement("div");
+    item.className = "cmd-item" + (i === cmdSel ? " active" : "");
+    const n = document.createElement("span"); n.className = "cmd-name"; n.textContent = "/" + c.name;
+    const d = document.createElement("span"); d.className = "cmd-desc"; d.textContent = c.desc;
+    item.appendChild(n); item.appendChild(d);
+    item.addEventListener("mousedown", (e) => { e.preventDefault(); applyCmd(c); });
+    cmdMenuEl!.appendChild(item);
+  });
+  cmdMenuEl.hidden = false;
+}
+
+function applyCmd(c: SlashCmd): void {
+  msgInput.value = c.template;
+  hideCmdMenu();
+  msgInput.focus();
+}
+
+function moveCmdSel(delta: number): void {
+  if (!cmdMenuEl || cmdMatches.length === 0) return;
+  cmdSel = (cmdSel + delta + cmdMatches.length) % cmdMatches.length;
+  Array.from(cmdMenuEl.children).forEach((el, i) => el.classList.toggle("active", i === cmdSel));
+  (cmdMenuEl.children[cmdSel] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptCmd(): void {
+  const pick = cmdSel >= 0 ? cmdMatches[cmdSel] : cmdMatches[0];
+  if (pick) applyCmd(pick);
+}
+
+function showWelcome(): void {
+  const div = document.createElement("div");
+  div.className = "welcome";
+  div.innerHTML =
+    "<h3>⬡ Welcome to QuantumOS</h3>" +
+    "A peer-to-peer room — no server holds your data. To get started:" +
+    "<ol>" +
+    "<li>Set a <strong>display name</strong> in the left sidebar.</li>" +
+    "<li>Click <strong>Connect</strong>, then <strong>copy</strong> the share link and send it to a peer.</li>" +
+    "<li>Type a message — <strong>Markdown</strong> works: <code>**bold**</code>, <code>*italic*</code>, <code>`code`</code>, links.</li>" +
+    "<li>Use the <strong>action buttons</strong> above, or type <code>/</code> to browse every command.</li>" +
+    "</ol>" +
+    "<div class=\"tip\">Capabilities, lemmas, promissory notes and atomic swaps are all one click — or one slash — away.</div>";
+  messagesEl.appendChild(div);
+}
+
+function initUx(): void {
+  cmdMenuEl = document.getElementById("cmd-menu");
+  actionsRowEl = document.getElementById("actions-row");
+
+  if (actionsRowEl) {
+    for (const a of QUICK_ACTIONS) {
+      const btn = document.createElement("button");
+      btn.className = "action-btn";
+      btn.title = a.hint || "browse all commands";
+      const ico = document.createElement("span"); ico.className = "ico"; ico.textContent = a.ico;
+      btn.appendChild(ico);
+      btn.appendChild(document.createTextNode(a.label));
+      btn.addEventListener("click", () => {
+        if (a.label === "Commands") {
+          if (cmdMenuOpen()) hideCmdMenu();
+          else { cmdSel = -1; showCmdMenu("", true); msgInput.focus(); }
+          return;
+        }
+        if (a.label === "Call") { toggleCall(); return; }
+        msgInput.value = a.fill;
+        msgInput.focus();
+        if (a.hint) addMessage("", a.hint, "system");
+        hideCmdMenu();
+      });
+      actionsRowEl.appendChild(btn);
+    }
+  }
+
+  // Autocomplete: surface matching commands while the user types the command word.
+  msgInput.addEventListener("input", () => {
+    const v = msgInput.value;
+    if (v.startsWith("/") && !v.startsWith("//") && !v.includes(" ")) {
+      cmdSel = -1;
+      showCmdMenu(v.slice(1), false);
+    } else {
+      hideCmdMenu();
+    }
+  });
+  msgInput.addEventListener("blur", () => setTimeout(hideCmdMenu, 120));
+
+  // Attachments: picker button, drag-and-drop, clipboard paste.
+  const attachBtn = document.getElementById("attach-btn");
+  const fileInput = document.getElementById("file-input") as HTMLInputElement | null;
+  if (attachBtn && fileInput) {
+    attachBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files && fileInput.files.length) sendFiles(fileInput.files);
+      fileInput.value = "";
+    });
+  }
+  const dropTarget = (messagesEl.closest(".main") as HTMLElement | null) ?? messagesEl;
+  dropTarget.addEventListener("dragover", (e) => { e.preventDefault(); dropTarget.classList.add("dragover"); });
+  dropTarget.addEventListener("dragleave", () => dropTarget.classList.remove("dragover"));
+  dropTarget.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropTarget.classList.remove("dragover");
+    if (e.dataTransfer?.files?.length) sendFiles(e.dataTransfer.files);
+  });
+  msgInput.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of Array.from(items)) {
+      if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+    }
+    if (files.length) { e.preventDefault(); sendFiles(files); }
+  });
+
+  // Live-call controls.
+  callBarEl = document.getElementById("call-bar");
+  callTilesEl = document.getElementById("call-tiles");
+  callMuteBtn = document.getElementById("call-mute") as HTMLButtonElement | null;
+  callCamBtn = document.getElementById("call-cam") as HTMLButtonElement | null;
+  document.getElementById("call-hangup")?.addEventListener("click", endCall);
+  callMuteBtn?.addEventListener("click", toggleMute);
+  callCamBtn?.addEventListener("click", toggleCam);
+}
+
+// ---------------------------------------------------------------------------
+// Live calls: mic / camera over WebRTC media tracks
+// ---------------------------------------------------------------------------
+
+let localStream: MediaStream | null = null;
+let inCall = false;
+const callTiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
+let callBarEl: HTMLElement | null = null;
+let callTilesEl: HTMLElement | null = null;
+let callMuteBtn: HTMLButtonElement | null = null;
+let callCamBtn: HTMLButtonElement | null = null;
+
+function showCallBar(): void { if (callBarEl) callBarEl.hidden = false; }
+function maybeHideCallBar(): void {
+  if (callBarEl && !inCall && callTiles.size === 0) callBarEl.hidden = true;
+}
+
+function makeTile(key: string, label: string): HTMLVideoElement {
+  const wrap = document.createElement("div");
+  wrap.className = "call-tile";
+  wrap.dataset.key = key;
+  const v = document.createElement("video");
+  v.autoplay = true; v.playsInline = true;
+  const cap = document.createElement("span");
+  cap.className = "call-name"; cap.textContent = label;
+  wrap.appendChild(v); wrap.appendChild(cap);
+  callTilesEl?.appendChild(wrap);
+  callTiles.set(key, v);
+  return v;
+}
+
+function removeTile(key: string): void {
+  const v = callTiles.get(key);
+  if (!v) return;
+  v.srcObject = null;
+  v.closest(".call-tile")?.remove();
+  callTiles.delete(key);
+}
+
+function addRemoteStream(peerId: string, stream: MediaStream): void {
+  let v = callTiles.get(peerId);
+  if (!v) v = makeTile(peerId, peerLabel(peerId));
+  if (v.srcObject !== stream) v.srcObject = stream;
+  showCallBar();
+}
+
+async function startCall(): Promise<void> {
+  if (!qpeer) { addMessage("", "connect to a room before starting a call", "system"); return; }
+  if (inCall) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+  } catch {
+    addMessage("", "⚠ could not access camera/microphone (permission denied?)", "system");
+    return;
+  }
+  inCall = true;
+  const local = makeTile("__local__", "you");
+  local.muted = true;
+  local.srcObject = localStream;
+  showCallBar();
+  qpeer.addLocalMedia(localStream);
+  qpeer.broadcast({ kind: "call-start" });
+  addMessage("", "📞 you started a call", "system");
+  updateCallControls();
+}
+
+function endCall(): void {
+  if (qpeer) { qpeer.removeLocalMedia(); qpeer.broadcast({ kind: "call-end" }); }
+  localStream?.getTracks().forEach((t) => t.stop());
+  localStream = null;
+  inCall = false;
+  removeTile("__local__");
+  updateCallControls();
+  maybeHideCallBar();
+}
+
+function toggleCall(): void { if (inCall) endCall(); else void startCall(); }
+
+function toggleMute(): void {
+  const t = localStream?.getAudioTracks()[0];
+  if (t) t.enabled = !t.enabled;
+  updateCallControls();
+}
+
+function toggleCam(): void {
+  const t = localStream?.getVideoTracks()[0];
+  if (t) t.enabled = !t.enabled;
+  updateCallControls();
+}
+
+function updateCallControls(): void {
+  const audioOn = localStream?.getAudioTracks()[0]?.enabled ?? false;
+  const videoOn = localStream?.getVideoTracks()[0]?.enabled ?? false;
+  if (callMuteBtn) {
+    callMuteBtn.textContent = audioOn ? "🎤" : "🔇";
+    callMuteBtn.title = audioOn ? "Mute mic" : "Unmute mic";
+  }
+  if (callCamBtn) {
+    callCamBtn.textContent = videoOn ? "🎥" : "🚫";
+    callCamBtn.title = videoOn ? "Turn camera off" : "Turn camera on";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -3396,7 +3908,15 @@ async function init(): Promise<void> {
 
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
-  msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  msgInput.addEventListener("keydown", (e) => {
+    if (cmdMenuOpen()) {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveCmdSel(1); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); moveCmdSel(-1); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
+      if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
+    }
+    if (e.key === "Enter") send();
+  });
   // Mobile keyboard fallback: when input gains focus, scroll it into view.
   // For browsers that honor `interactive-widget=resizes-content` (modern
   // Chrome/Firefox/Safari) this is a no-op; for the rest it ensures the
@@ -3431,7 +3951,16 @@ async function init(): Promise<void> {
   // the Connect button is reachable without finding the hamburger toggle.
   toggleSidebar(true);
 
-  handleCommand("/help");
+  // Self-evident UI: quick-action toolbar + command palette.
+  initUx();
+
+  // Restore the saved transcript, or show the onboarding welcome on a fresh room.
+  if (activeRoom.chatLog.length > 0) {
+    for (const line of activeRoom.chatLog) renderChatLine(line);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else {
+    showWelcome();
+  }
 }
 
 init();

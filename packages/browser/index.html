@@ -290,6 +290,61 @@
       white-space: nowrap;
     }
     #copy-btn:hover { color: #aaa; border-color: #555; }
+
+    /* Markdown inside messages */
+    .msg .text code { background:#1a1a1a; border:1px solid #262626; border-radius:3px; padding:0 0.25rem; font-size:0.78rem; color:#aae0d5; }
+    .msg .text pre.code { background:#0a0a0a; border:1px solid #222; border-radius:4px; padding:0.5rem 0.6rem; margin:0.3rem 0; overflow-x:auto; white-space:pre; color:#cfe9e2; }
+    .msg .text a { color:#7fdbca; }
+    .msg .text strong { color:#fff; }
+    .msg .text em { color:#ddd; }
+
+    /* Quick-action toolbar */
+    .actions-row { display:flex; flex-wrap:wrap; gap:0.4rem; padding:0.5rem 1rem; border-bottom:1px solid #1a1a1a; background:#0b0b0b; }
+    .action-btn { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#bdbdbd; font-family:inherit; font-size:0.7rem; padding:0.3rem 0.6rem; cursor:pointer; display:inline-flex; gap:0.35rem; align-items:center; }
+    .action-btn:hover { background:#1e2e2e; border-color:#2a5a5a; color:#7fdbca; }
+    .action-btn .ico { font-size:0.8rem; }
+
+    /* Command palette / autocomplete */
+    .input-wrap { position:relative; }
+    .cmd-menu { position:absolute; left:1.5rem; right:1.5rem; bottom:100%; margin-bottom:4px; background:#0e0e0e; border:1px solid #2a2a2a; border-radius:6px; max-height:16rem; overflow-y:auto; box-shadow:0 -6px 24px rgba(0,0,0,0.6); z-index:50; }
+    .cmd-item { display:flex; gap:0.6rem; align-items:baseline; padding:0.35rem 0.6rem; cursor:pointer; border-bottom:1px solid #161616; }
+    .cmd-item:last-child { border-bottom:none; }
+    .cmd-item.active, .cmd-item:hover { background:#16302e; }
+    .cmd-item .cmd-name { color:#7fdbca; font-size:0.72rem; white-space:nowrap; }
+    .cmd-item .cmd-desc { color:#888; font-size:0.68rem; overflow:hidden; text-overflow:ellipsis; }
+
+    /* Attachments / media */
+    #attach-btn {
+      background:#141414; border:1px solid #333; border-radius:4px; color:#9fceff;
+      font-size:0.95rem; line-height:1; padding:0.4rem 0.6rem; cursor:pointer;
+    }
+    #attach-btn:hover { background:#1e2e3a; border-color:#345; }
+    .msg .text .media-img { max-width:320px; max-height:320px; border-radius:6px; cursor:pointer; display:block; margin-top:0.25rem; border:1px solid #222; }
+    .msg .text .media-vid { max-width:360px; border-radius:6px; display:block; margin-top:0.25rem; border:1px solid #222; }
+    .msg .text audio { display:block; margin-top:0.25rem; max-width:320px; }
+    .msg .text .media-file { display:inline-flex; gap:0.4rem; align-items:center; margin-top:0.25rem; color:#9fceff; }
+    .main.dragover { outline:2px dashed #2a5a5a; outline-offset:-8px; }
+    .dropping { color:#7fdbca; }
+
+    /* Live call */
+    .call-bar { border-bottom:1px solid #1a1a1a; background:#0a0f0f; padding:0.6rem 1rem; display:flex; flex-direction:column; gap:0.5rem; }
+    .call-tiles { display:flex; flex-wrap:wrap; gap:0.5rem; }
+    .call-tile { position:relative; width:160px; height:120px; background:#000; border:1px solid #234; border-radius:6px; overflow:hidden; }
+    .call-tile video { width:100%; height:100%; object-fit:cover; background:#000; }
+    .call-tile .call-name { position:absolute; left:4px; bottom:3px; font-size:0.6rem; color:#cfe9e2; background:rgba(0,0,0,0.55); padding:0 0.3rem; border-radius:3px; }
+    .call-controls { display:flex; gap:0.5rem; }
+    .call-ctl { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#cfe9e2; font-size:0.85rem; padding:0.3rem 0.7rem; cursor:pointer; }
+    .call-ctl:hover { background:#1e2e2e; }
+    .call-ctl.hangup { color:#ff9d4a; border-color:#5a2a2a; }
+    .call-ctl.hangup:hover { background:#3a1e1e; }
+
+    /* Onboarding / empty state */
+    .welcome { color:#9a9a9a; font-size:0.78rem; line-height:1.7; border:1px dashed #262626; border-radius:8px; padding:1rem 1.1rem; margin:0.5rem 0; }
+    .welcome h3 { color:#7fdbca; font-size:0.85rem; margin-bottom:0.5rem; }
+    .welcome ol { margin:0.4rem 0 0.4rem 1.1rem; }
+    .welcome li { margin:0.2rem 0; }
+    .welcome code { background:#1a1a1a; border:1px solid #262626; border-radius:3px; padding:0 0.25rem; color:#aae0d5; }
+    .welcome .tip { color:#666; margin-top:0.5rem; }
   </style>
 </head>
 <body>
@@ -379,11 +434,28 @@
         <button id="copy-btn">copy</button>
       </div>
 
+      <div id="actions-row" class="actions-row"></div>
+
+      <div id="call-bar" class="call-bar" hidden>
+        <div id="call-tiles" class="call-tiles"></div>
+        <div class="call-controls">
+          <button id="call-mute" class="call-ctl" title="Mute mic">🎤</button>
+          <button id="call-cam" class="call-ctl" title="Turn camera off">🎥</button>
+          <button id="call-hangup" class="call-ctl hangup" title="Leave call">📵 Leave</button>
+        </div>
+      </div>
+
       <div id="messages"></div>
 
-      <div class="input-row">
-        <input id="msg-input" type="text" placeholder="broadcast a message…" disabled />
-        <button id="send-btn" disabled>Send</button>
+      <div class="input-wrap">
+        <div id="cmd-menu" class="cmd-menu" hidden></div>
+        <div class="input-row">
+          <button id="attach-btn" title="Attach an image or file">📎</button>
+          <input id="file-input" type="file" multiple hidden
+                 accept="image/*,audio/*,video/*,application/pdf,text/*" />
+          <input id="msg-input" type="text" placeholder="message · type / for commands · **markdown** ok · 📎 or drop/paste to attach" disabled />
+          <button id="send-btn" disabled>Send</button>
+        </div>
       </div>
     </div>
   </div>
