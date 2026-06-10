@@ -186,7 +186,7 @@ function createRoom(roomId: string): RoomContext {
     channelSubscriptions: new Set(),
     pendingPersistRequests: new Map(),
     rhoquHandlers: [],
-    chatLog: [],
+    chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
     hasJoinedOnce: false,
@@ -597,7 +597,7 @@ function renderChatLine(line: ChatLine): void {
                      : (line.label ?? shortId(line.from));
   const textEl = document.createElement("span");
   textEl.className = "text";
-  textEl.textContent = line.text;
+  textEl.innerHTML = renderMarkdown(line.text);
   div.appendChild(fromEl);
   div.appendChild(textEl);
   messagesEl.appendChild(div);
@@ -607,6 +607,7 @@ function addMessage(from: string, text: string, kind: "peer" | "self" | "system"
   const line: ChatLine = { from, text, kind, label };
   activeRoom.chatLog.push(line);
   trimChatLog(activeRoom);
+  saveChat(activeRoom);
   if (isUiActive()) {
     renderChatLine(line);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -3341,6 +3342,197 @@ toggleBtn.addEventListener("click", () => toggleSidebar());
 overlayEl.addEventListener("click", () => toggleSidebar(false));
 
 // ---------------------------------------------------------------------------
+// Rich text (safe Markdown subset) + persistent chat transcript
+// ---------------------------------------------------------------------------
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** A deliberately small, XSS-safe Markdown renderer: everything is HTML-escaped
+ *  first, then a fixed set of tags is re-introduced. No raw peer HTML is ever
+ *  inserted, and link hrefs are constrained to http(s). */
+function renderMarkdown(src: string): string {
+  const codes: string[] = [];
+  let s = escapeHtml(src);
+  // fenced code blocks ``` … ``` (protect from further formatting)
+  s = s.replace(/```([\s\S]*?)```/g, (_m, c: string) => {
+    codes.push(`<pre class="code">${c.replace(/^\n/, "").replace(/\n$/, "")}</pre>`);
+    return `@@@${codes.length - 1}@@@`;
+  });
+  // inline code `…`
+  s = s.replace(/`([^`\n]+)`/g, (_m, c: string) => {
+    codes.push(`<code>${c}</code>`);
+    return `@@@${codes.length - 1}@@@`;
+  });
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  s = s.replace(/\n/g, "<br>");
+  s = s.replace(/@@@(\d+)@@@/g, (_m, i: string) => codes[Number(i)]);
+  return s;
+}
+
+function loadChat(roomId: string): ChatLine[] {
+  try {
+    const raw = localStorage.getItem(`qos-chat-${roomId}`);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function saveChat(room: RoomContext): void {
+  try {
+    localStorage.setItem(`qos-chat-${room.roomId}`, JSON.stringify(room.chatLog.slice(-200)));
+  } catch { /* storage quota — drop silently */ }
+}
+
+// ---------------------------------------------------------------------------
+// Self-evident UI: command palette, quick-action toolbar, onboarding
+// ---------------------------------------------------------------------------
+
+interface SlashCmd { name: string; template: string; desc: string }
+const SLASH_COMMANDS: SlashCmd[] = [
+  { name: "help",    template: "/help",       desc: "show all commands" },
+  { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
+  { name: "cap",     template: "/cap ",       desc: "generate a new ZFA capability" },
+  { name: "grant",   template: "/grant ",     desc: "generate + share a capability token" },
+  { name: "zfa",     template: "/zfa ",       desc: "validate a capability token" },
+  { name: "braket",  template: "/braket ",    desc: "evaluate bra-ket (0 1 + - i -i)" },
+  { name: "qucalc",  template: "/qucalc ",    desc: "evaluate a RhoQuCalc twist sequence" },
+  { name: "conj",    template: "/conj ",      desc: "Hermitian adjoint of a twist sequence" },
+  { name: "freq",    template: "/freq ",      desc: "ZFA frequency spectrum / C(2n,n)" },
+  { name: "dump",    template: "/dump",       desc: "summary of logic shared this session" },
+  { name: "lemma",   template: "/lemma ",     desc: "register / list named lemmas" },
+  { name: "request", template: "/request ",   desc: "request a lemma from its holder" },
+  { name: "pass",    template: "/pass ",      desc: "transfer a lemma to a named peer" },
+  { name: "note",    template: "/note ",      desc: "promissory notes (grant|pass|redeem…)" },
+  { name: "rdv",     template: "/rdv ",       desc: "atomic n-party swap (swap|accept…)" },
+  { name: "dyncap",  template: "/dyncap ",    desc: "dynamic capabilities (status|peers)" },
+  { name: "probe",   template: "/probe ",     desc: "consensus discrepancy probe" },
+  { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
+  { name: "share",   template: "/share ",     desc: "bridge a lemma/note into another room" },
+  { name: "channel", template: "/channel ",   desc: "tagged messages (listen|send|list)" },
+  { name: "script",  template: "/script ",    desc: "run a sequential command chain" },
+  { name: "persist", template: "/persist ",   desc: "agreed replication of public state" },
+  { name: "rhoqu",   template: "/rhoqu ",     desc: "RhoQu macro → commands" },
+];
+
+interface QuickAction { label: string; ico: string; fill: string; hint: string }
+const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
+  { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
+  { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
+  { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
+  { label: "Swap",       ico: "⇄", fill: "/rdv swap ",      hint: "atomic swap, e.g. /rdv swap USD 30 EUR 20 Alice" },
+  { label: "Channel",    ico: "#", fill: "/channel send ",  hint: "tagged message, e.g. /channel send news hello" },
+];
+
+let cmdMenuEl: HTMLElement | null = null;
+let actionsRowEl: HTMLElement | null = null;
+let cmdSel = -1;
+let cmdMatches: SlashCmd[] = [];
+
+function cmdMenuOpen(): boolean { return !!cmdMenuEl && !cmdMenuEl.hidden; }
+function hideCmdMenu(): void { if (cmdMenuEl) cmdMenuEl.hidden = true; cmdSel = -1; }
+
+function showCmdMenu(filter: string, all = false): void {
+  if (!cmdMenuEl) return;
+  const f = filter.toLowerCase();
+  cmdMatches = all ? SLASH_COMMANDS.slice() : SLASH_COMMANDS.filter((c) => c.name.startsWith(f));
+  if (cmdMatches.length === 0) { hideCmdMenu(); return; }
+  cmdMenuEl.innerHTML = "";
+  cmdMatches.forEach((c, i) => {
+    const item = document.createElement("div");
+    item.className = "cmd-item" + (i === cmdSel ? " active" : "");
+    const n = document.createElement("span"); n.className = "cmd-name"; n.textContent = "/" + c.name;
+    const d = document.createElement("span"); d.className = "cmd-desc"; d.textContent = c.desc;
+    item.appendChild(n); item.appendChild(d);
+    item.addEventListener("mousedown", (e) => { e.preventDefault(); applyCmd(c); });
+    cmdMenuEl!.appendChild(item);
+  });
+  cmdMenuEl.hidden = false;
+}
+
+function applyCmd(c: SlashCmd): void {
+  msgInput.value = c.template;
+  hideCmdMenu();
+  msgInput.focus();
+}
+
+function moveCmdSel(delta: number): void {
+  if (!cmdMenuEl || cmdMatches.length === 0) return;
+  cmdSel = (cmdSel + delta + cmdMatches.length) % cmdMatches.length;
+  Array.from(cmdMenuEl.children).forEach((el, i) => el.classList.toggle("active", i === cmdSel));
+  (cmdMenuEl.children[cmdSel] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptCmd(): void {
+  const pick = cmdSel >= 0 ? cmdMatches[cmdSel] : cmdMatches[0];
+  if (pick) applyCmd(pick);
+}
+
+function showWelcome(): void {
+  const div = document.createElement("div");
+  div.className = "welcome";
+  div.innerHTML =
+    "<h3>⬡ Welcome to QuantumOS</h3>" +
+    "A peer-to-peer room — no server holds your data. To get started:" +
+    "<ol>" +
+    "<li>Set a <strong>display name</strong> in the left sidebar.</li>" +
+    "<li>Click <strong>Connect</strong>, then <strong>copy</strong> the share link and send it to a peer.</li>" +
+    "<li>Type a message — <strong>Markdown</strong> works: <code>**bold**</code>, <code>*italic*</code>, <code>`code`</code>, links.</li>" +
+    "<li>Use the <strong>action buttons</strong> above, or type <code>/</code> to browse every command.</li>" +
+    "</ol>" +
+    "<div class=\"tip\">Capabilities, lemmas, promissory notes and atomic swaps are all one click — or one slash — away.</div>";
+  messagesEl.appendChild(div);
+}
+
+function initUx(): void {
+  cmdMenuEl = document.getElementById("cmd-menu");
+  actionsRowEl = document.getElementById("actions-row");
+
+  if (actionsRowEl) {
+    for (const a of QUICK_ACTIONS) {
+      const btn = document.createElement("button");
+      btn.className = "action-btn";
+      btn.title = a.hint || "browse all commands";
+      const ico = document.createElement("span"); ico.className = "ico"; ico.textContent = a.ico;
+      btn.appendChild(ico);
+      btn.appendChild(document.createTextNode(a.label));
+      btn.addEventListener("click", () => {
+        if (a.label === "Commands") {
+          if (cmdMenuOpen()) hideCmdMenu();
+          else { cmdSel = -1; showCmdMenu("", true); msgInput.focus(); }
+          return;
+        }
+        msgInput.value = a.fill;
+        msgInput.focus();
+        if (a.hint) addMessage("", a.hint, "system");
+        hideCmdMenu();
+      });
+      actionsRowEl.appendChild(btn);
+    }
+  }
+
+  // Autocomplete: surface matching commands while the user types the command word.
+  msgInput.addEventListener("input", () => {
+    const v = msgInput.value;
+    if (v.startsWith("/") && !v.startsWith("//") && !v.includes(" ")) {
+      cmdSel = -1;
+      showCmdMenu(v.slice(1), false);
+    } else {
+      hideCmdMenu();
+    }
+  });
+  msgInput.addEventListener("blur", () => setTimeout(hideCmdMenu, 120));
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -3396,7 +3588,15 @@ async function init(): Promise<void> {
 
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
-  msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  msgInput.addEventListener("keydown", (e) => {
+    if (cmdMenuOpen()) {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveCmdSel(1); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); moveCmdSel(-1); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
+      if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
+    }
+    if (e.key === "Enter") send();
+  });
   // Mobile keyboard fallback: when input gains focus, scroll it into view.
   // For browsers that honor `interactive-widget=resizes-content` (modern
   // Chrome/Firefox/Safari) this is a no-op; for the rest it ensures the
@@ -3431,7 +3631,16 @@ async function init(): Promise<void> {
   // the Connect button is reachable without finding the hamburger toggle.
   toggleSidebar(true);
 
-  handleCommand("/help");
+  // Self-evident UI: quick-action toolbar + command palette.
+  initUx();
+
+  // Restore the saved transcript, or show the onboarding welcome on a fresh room.
+  if (activeRoom.chatLog.length > 0) {
+    for (const line of activeRoom.chatLog) renderChatLine(line);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else {
+    showWelcome();
+  }
 }
 
 init();
