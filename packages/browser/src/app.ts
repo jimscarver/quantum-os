@@ -18,7 +18,7 @@ import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHand
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
-         delegationMapFor, type Group, type Issue, type Role } from "./gov.js";
+         delegationMapFor, govCurrency, type Group, type Issue, type Role } from "./gov.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1419,7 +1419,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · show · member · issue · delegate · vote · status");
+      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · vote · treasury · kudos · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1664,7 +1664,58 @@ function handleCommand(raw: string): string[] {
         showGroupCard(g);
         break;
       }
-      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> [on <issue>] · undelegate [on <issue>] · vote <issue> | opts [ranked] · status · list");
+      if (gsub === "treasury") {
+        // Group funds as a /note currency. Thin orchestration over /note.
+        const op = (gParts[1] || "").toLowerCase();
+        if (op === "declare") {
+          if (!isAdmin(g, meId)) { sys("only an admin can set up the treasury"); break; }
+          if (g.treasury) { sys(`treasury already set: ${g.treasury}`); break; }
+          const cur = govCurrency(g, "");
+          handleCommand(`/note declare ${cur}`);
+          g.treasury = cur; saveGroups(); renderGroups(); refreshGroupCard(g);
+          signedBroadcast({ kind: "group-meta", groupId: g.id, treasury: cur });
+          sys(`🏦 treasury currency for ${g.name}: ${cur}  — /gov treasury grant <member> <amount>`);
+          break;
+        }
+        if (!g.treasury) { sys("no treasury yet — an admin runs /gov treasury declare"); break; }
+        if (op === "grant") {
+          if (!isAdmin(g, meId)) { sys("only an admin can fund from the treasury"); break; }
+          const pid = gParts[2] ? findPeerByName(gParts[2]) : null;
+          const n = parseInt(gParts[3] ?? "", 10);
+          if (!pid || !isMember(g, pid) || isNaN(n) || n < 1) { sys("usage: /gov treasury grant <member> <amount>"); break; }
+          handleCommand(`/note grant ${g.treasury} ${n}`);
+          handleCommand(`/note pass ${g.treasury} ${n} ${gParts[2]}`);
+          sys(`🏦 funded ${peerLabel(pid)} ${n} ${g.treasury}`);
+          break;
+        }
+        sys(`🏦 ${g.name} treasury: ${g.treasury}`);
+        handleCommand(`/note balance ${g.treasury}`);
+        break;
+      }
+      if (gsub === "kudos") {
+        // Reputation as a /note currency. Members award kudos; the admin issues.
+        const op = (gParts[1] || "").toLowerCase();
+        if (op === "balance") { if (g.kudos) handleCommand(`/note balance ${g.kudos}`); else sys("no kudos awarded yet"); break; }
+        const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
+        const n = parseInt(gParts[2] ?? "", 10);
+        if (!pid || !isMember(g, pid) || isNaN(n) || n < 1) { sys("usage: /gov kudos <member> <amount>  ·  /gov kudos balance"); break; }
+        if (pid === meId) { sys("award kudos to others, not yourself"); break; }
+        if (!g.kudos) {
+          if (!isAdmin(g, meId)) { sys("kudos isn't set up yet — an admin must award first"); break; }
+          const cur = govCurrency(g, "K");
+          handleCommand(`/note declare ${cur}`);
+          g.kudos = cur; saveGroups(); renderGroups();
+          signedBroadcast({ kind: "group-meta", groupId: g.id, kudos: cur });
+        }
+        const K = g.kudos!;
+        const myBal = [...noteStore.values()].filter((nn) => nn.currency === K).reduce((s, nn) => s + nn.denomination, 0);
+        if (currencyTokens.has(K)) { handleCommand(`/note grant ${K} ${n}`); handleCommand(`/note pass ${K} ${n} ${gParts[1]}`); }
+        else if (myBal >= n) { handleCommand(`/note pass ${K} ${n} ${gParts[1]}`); }
+        else { sys(`you hold ${myBal} kudos to give (need ${n}); only the issuer can mint more`); break; }
+        sys(`👏 awarded ${peerLabel(pid)} ${n} kudos`);
+        break;
+      }
+      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> [on <issue>] · undelegate [on <issue>] · vote <issue> | opts [ranked] · treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · status · list");
       break;
     }
 
@@ -3952,6 +4003,16 @@ function connect(): void {
           saveGroups(); renderGroups();
           return;
         }
+        if (d.kind === "group-meta") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          if (!g || !isAdmin(g, from)) return;                  // only admins set group currencies
+          if (typeof d.treasury === "string") g.treasury = d.treasury;
+          if (typeof d.kudos === "string") g.kudos = d.kudos;
+          saveGroups(); renderGroups(); refreshGroupCard(g);
+          return;
+        }
         if (d.kind === "gov-delegate") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -4699,12 +4760,16 @@ function mergeGroupFromSync(raw: unknown): boolean {
     groupStore.set(id, {
       id, name: String(r.name ?? ""), creator: String(r.creator ?? ""), creatorLabel: String(r.creatorLabel ?? "?"),
       createdAt: typeof r.createdAt === "number" ? r.createdAt : 0, members, delegations,
-      ...(Object.keys(topicDelegations).length ? { topicDelegations } : {}), issues,
+      ...(Object.keys(topicDelegations).length ? { topicDelegations } : {}),
+      ...(typeof r.treasury === "string" ? { treasury: r.treasury } : {}),
+      ...(typeof r.kudos === "string" ? { kudos: r.kudos } : {}), issues,
     });
     return true;
   }
 
   let changed = false;
+  if (typeof r.treasury === "string" && !existing.treasury) { existing.treasury = r.treasury; changed = true; }
+  if (typeof r.kudos === "string" && !existing.kudos) { existing.kudos = r.kudos; changed = true; }
   for (const [pid, m] of Object.entries(inMembers)) {
     const cur = existing.members[pid];
     const at = typeof m.at === "number" ? m.at : 0;
@@ -5263,8 +5328,33 @@ function buildGroupCard(g: Group): HTMLElement {
     card.appendChild(row);
   }
 
+  // Treasury / kudos readout (balances are bearer-private, so this shows yours)
+  if (g.treasury || g.kudos) {
+    const myBal = (cur?: string) => cur ? [...noteStore.values()].filter((n) => n.currency === cur).reduce((s, n) => s + n.denomination, 0) : 0;
+    const fin = document.createElement("div"); fin.className = "poll-you";
+    const parts: string[] = [];
+    if (g.treasury) parts.push(`🏦 treasury: you hold ${myBal(g.treasury)} ${g.treasury}`);
+    if (g.kudos) parts.push(`👏 kudos: you hold ${myBal(g.kudos)}`);
+    fin.textContent = parts.join("  ·  ");
+    card.appendChild(fin);
+  }
+
   // Admin / member controls
   const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
+  if (member) {
+    const k = document.createElement("button"); k.className = "poll-ctlbtn"; k.textContent = "👏 kudos";
+    k.addEventListener("click", () => { msgInput.value = "/gov kudos "; msgInput.focus(); });
+    ctrls.appendChild(k);
+  }
+  if (admin && !g.treasury) {
+    const t = document.createElement("button"); t.className = "poll-ctlbtn"; t.textContent = "🏦 set up treasury";
+    t.addEventListener("click", () => { handleCommand("/gov treasury declare"); });
+    ctrls.appendChild(t);
+  } else if (admin && g.treasury) {
+    const t = document.createElement("button"); t.className = "poll-ctlbtn"; t.textContent = "🏦 fund member";
+    t.addEventListener("click", () => { msgInput.value = "/gov treasury grant "; msgInput.focus(); });
+    ctrls.appendChild(t);
+  }
   if (admin) {
     const am = document.createElement("button"); am.className = "poll-ctlbtn"; am.textContent = "+ member";
     am.addEventListener("click", () => { msgInput.value = `/gov member add `; msgInput.focus(); });
