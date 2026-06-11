@@ -3427,6 +3427,7 @@ function connect(): void {
           savePolls();
           refreshPollCard(poll);
           renderPolls();
+          postPollClosedMessage(poll);
           return;
         }
         if (d.kind === "sync-polls") {
@@ -3436,7 +3437,7 @@ function connect(): void {
           let added = 0, updated = 0;
           for (const raw of d.polls as unknown[]) {
             const r = mergePollFromSync(raw);
-            if (r === "added") { added++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) addPollCard(p); }
+            if (r === "added") { added++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) { addPollCard(p); if (p.status === "closed") postPollClosedMessage(p); } }
             else if (r === "updated") { updated++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) refreshPollCard(p); }
           }
           if (added > 0 || updated > 0) {
@@ -4153,6 +4154,14 @@ function lockNominations(poll: Poll): void {
   signedBroadcast({ kind: "poll-lock", pollId: poll.id });
 }
 
+// Append a permanent, human-readable result line to the transcript so the
+// outcome survives independently of the interactive card (chat scroll-back,
+// the 500-line card cap, export). Idempotent callers ensure it logs once.
+function postPollClosedMessage(poll: Poll): void {
+  const result = poll.result ?? tally(poll);
+  addMessage("", `🗳 poll closed — “${poll.question}” · ${summarizeWinners(poll, result)} (${result.totalBallots} vote${result.totalBallots === 1 ? "" : "s"})`, "system");
+}
+
 function closePoll(poll: Poll): void {
   if (poll.status !== "open") return;
   if (poll.creator !== myPeerId()) { addMessage("", "only the poll creator can close it", "system"); return; }
@@ -4161,6 +4170,7 @@ function closePoll(poll: Poll): void {
   savePolls();
   refreshPollCard(poll);
   renderPolls();
+  postPollClosedMessage(poll);
   signedBroadcast({ kind: "poll-close", pollId: poll.id });
 }
 
