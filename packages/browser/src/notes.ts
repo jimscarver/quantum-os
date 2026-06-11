@@ -16,14 +16,40 @@ import { generateCapability } from "./zfa.js";
 
 export type NoteKind = "note" | "token" | "receipt";
 
-export interface ParsedLabel { kind: NoteKind; currency: string; }
+// A note may be stamped with a terms "series": cap:note-<base>~<termsHash8>:<hex>.
+// `currency` is the FULL unit id (e.g. "USD~a1b2") — split/merge/balance treat
+// each series as its own non-fungible unit. `baseCurrency` is the issuer's
+// declared currency ("USD"); `series` is the terms stamp (hex) or null.
+export interface ParsedLabel { kind: NoteKind; currency: string; baseCurrency: string; series: string | null; }
 
 export function parseNoteLabel(token: string): ParsedLabel | null {
   const parts = token.split(":");
   if (parts.length < 3 || parts[0] !== "cap") return null;
-  const m = parts[1].match(/^(note|token|receipt)-([A-Za-z0-9_]+)$/);
+  const m = parts[1].match(/^(note|token|receipt)-([A-Za-z0-9_]+(?:~[0-9a-f]+)?)$/);
   if (!m) return null;
-  return { kind: m[1] as NoteKind, currency: m[2] };
+  const currency = m[2];
+  const tilde = currency.indexOf("~");
+  const baseCurrency = tilde === -1 ? currency : currency.slice(0, tilde);
+  const series = tilde === -1 ? null : currency.slice(tilde + 1);
+  return { kind: m[1] as NoteKind, currency, baseCurrency, series };
+}
+
+// Deterministic short stamp for a terms text (FNV-1a 32-bit → 8 hex). The
+// issuer's dyncap-signed series declaration — not the hash's strength — is what
+// authoritatively binds a stamp to its terms text, so a fast hash is fine here;
+// this just turns terms into a stable, collision-light series id.
+export function termsHash8(text: string): string {
+  const s = text.trim().replace(/\s+/g, " ");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+export function seriesKey(baseCurrency: string, hash8: string): string {
+  return `${baseCurrency}~${hash8}`;
 }
 
 export function denomination(token: string): number {
@@ -52,6 +78,12 @@ export function mintCurrencyToken(currency: string): string {
 
 export function mintNote(currency: string, n: number): string {
   return `cap:note-${currency}:${balancedHex(n)}`;
+}
+
+// Mint a terms-stamped note: cap:note-<base>~<hash8>:<hex>. The stamp travels
+// in the currency segment, so split/merge carry it untouched.
+export function mintNoteSeries(baseCurrency: string, hash8: string, n: number): string {
+  return `cap:note-${baseCurrency}~${hash8}:${balancedHex(n)}`;
 }
 
 export function mintReceipt(currency: string, n: number): string {

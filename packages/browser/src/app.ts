@@ -2,7 +2,8 @@ import { loadZfa, generateCapability, validateCapability,
          spectralGap, achievesZfa } from "./zfa.js";
 import { QOSPeer } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
-         mintCurrencyToken, mintNote, mintReceipt,
+         mintCurrencyToken, mintNote, mintNoteSeries, mintReceipt,
+         termsHash8, seriesKey as makeSeriesKey,
          splitNote, mergeNotes } from "./notes.js";
 import { newProposalId, conservationCheck,
          uniqueParticipants, shortRdvId, cyclicSwap,
@@ -84,6 +85,11 @@ interface ReceiptEntry { token: string; currency: string; denomination: number; 
 interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
 interface KnownCurrency { currency: string; token: string; issuer: string; dyncap?: DyncapField }
 interface LockedNote extends NoteEntry { proposalId: string; lockedAt: number }
+// Issuer-declared terms for a note "series" (cap:note-<base>~<termsHash8>). Keyed
+// by the full series id ("USD~a1b2") = a stamped note's `currency`. `dyncap`
+// records the declaring issuer's anchor so a non-issuer can't rewrite the terms.
+interface SeriesTerms { seriesKey: string; baseCurrency: string; termsHash: string; terms: string; issuer: string; dyncap?: DyncapField }
+interface AcceptedTerms { termsHash: string; at: number }
 type ProposalRole = "proposer" | "participant";
 type ProposalStatus = "pending" | "accepted" | "rejected";
 interface ProposalState {
@@ -140,6 +146,10 @@ interface RoomContext {
   receiptStore: Map<string, ReceiptEntry>;
   redemptionsHonored: Map<string, RedemptionRecord>;
   knownCurrencies: Map<string, KnownCurrency>;
+  // Note terms-series: issuer-declared terms (seriesKey -> SeriesTerms) and the
+  // series this user has accepted (seriesKey -> AcceptedTerms).
+  seriesTerms: Map<string, SeriesTerms>;
+  acceptedTerms: Map<string, AcceptedTerms>;
   // Rendezvous
   lockedNotes: Map<string, LockedNote>;
   proposals: Map<string, ProposalState>;
@@ -189,6 +199,8 @@ function createRoom(roomId: string): RoomContext {
     receiptStore: new Map(),
     redemptionsHonored: new Map(),
     knownCurrencies: new Map(),
+    seriesTerms: new Map(),
+    acceptedTerms: new Map(),
     lockedNotes: new Map(),
     proposals: new Map(),
     proposalTimers: new Map(),
@@ -244,6 +256,8 @@ let noteStore: Map<string, NoteEntry> = new Map();
 let receiptStore: Map<string, ReceiptEntry> = new Map();
 let redemptionsHonored: Map<string, RedemptionRecord> = new Map();
 let knownCurrencies: Map<string, KnownCurrency> = new Map();
+let seriesTerms: Map<string, SeriesTerms> = new Map();
+let acceptedTerms: Map<string, AcceptedTerms> = new Map();
 let lockedNotes: Map<string, LockedNote> = new Map();
 let proposals: Map<string, ProposalState> = new Map();
 let proposalTimers: Map<string, number> = new Map();
@@ -270,6 +284,8 @@ function setActiveRoom(ctx: RoomContext): void {
   receiptStore       = ctx.receiptStore;
   redemptionsHonored = ctx.redemptionsHonored;
   knownCurrencies    = ctx.knownCurrencies;
+  seriesTerms        = ctx.seriesTerms;
+  acceptedTerms      = ctx.acceptedTerms;
   lockedNotes        = ctx.lockedNotes;
   proposals          = ctx.proposals;
   proposalTimers     = ctx.proposalTimers;
@@ -361,6 +377,8 @@ function saveNotes(): void {
   localStorage.setItem(`qos-receipts-${room}`,         JSON.stringify(Object.fromEntries(receiptStore)));
   localStorage.setItem(`qos-redemptions-${room}`,      JSON.stringify(Object.fromEntries(redemptionsHonored)));
   localStorage.setItem(`qos-known-currencies-${room}`, JSON.stringify(Object.fromEntries(knownCurrencies)));
+  localStorage.setItem(`qos-series-terms-${room}`,     JSON.stringify(Object.fromEntries(seriesTerms)));
+  localStorage.setItem(`qos-accepted-terms-${room}`,   JSON.stringify(Object.fromEntries(acceptedTerms)));
   localStorage.setItem(`qos-locked-notes-${room}`,     JSON.stringify(Object.fromEntries(lockedNotes)));
   localStorage.setItem(`qos-ignored-sync-${room}`,     JSON.stringify(Array.from(ignoredForSync)));
   localStorage.setItem(`qos-channel-subs-${room}`,     JSON.stringify(Array.from(channelSubscriptions)));
@@ -578,6 +596,8 @@ function loadNotes(): void {
   tryLoad<ReceiptEntry>    (`qos-receipts-${room}`,         (k, v) => receiptStore.set(k, v));
   tryLoad<RedemptionRecord>(`qos-redemptions-${room}`,      (k, v) => redemptionsHonored.set(k, v));
   tryLoad<KnownCurrency>   (`qos-known-currencies-${room}`, (k, v) => knownCurrencies.set(k, v));
+  tryLoad<SeriesTerms>     (`qos-series-terms-${room}`,     (k, v) => seriesTerms.set(k, v));
+  tryLoad<AcceptedTerms>   (`qos-accepted-terms-${room}`,   (k, v) => acceptedTerms.set(k, v));
   // Dyncap chain state (per-room)
   const dynChainRaw = localStorage.getItem(`qos-dyncap-chains-${room}`);
   if (dynChainRaw) {
@@ -991,15 +1011,19 @@ function renderNotes(): void {
     const li = document.createElement("li");
     li.className = "row-item";
     const fromTag = n.receivedFrom ? `  (from ${n.receivedFrom})` : "";
+    const st = seriesTerms.get(n.currency);     // stamped notes carry terms
+    const stamp = n.currency.includes("~") ? "  📜" : "";
     const label = document.createElement("span");
-    label.textContent = `${n.currency} ${n.denomination}${fromTag}`;
+    label.textContent = `${n.currency} ${n.denomination}${stamp}${fromTag}`;
     label.style.cursor = "pointer";
     label.style.flex = "1";
     label.addEventListener("click", () => {
       msgInput.value = `/note pass ${n.currency} ${n.denomination} `;
       msgInput.focus();
     });
-    li.title = n.token;
+    li.title = st
+      ? `📜 terms (${st.termsHash})${acceptedTerms.has(n.currency) ? " · accepted" : ""}: ${st.terms}\n${n.token}`
+      : n.token;
     li.appendChild(label);
     appendRemoveBtn(li, "delete this note (destroys its value)", () => forgetNote(n.token));
     noteListEl.appendChild(li);
@@ -1367,7 +1391,7 @@ function handleCommand(raw: string): string[] {
       sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
       sys("  /request <n>     — request @n from whoever holds it");
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
-      sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
+      sys("  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · list");
@@ -1987,24 +2011,44 @@ function handleCommand(raw: string): string[] {
         }
 
         case "grant": {
-          const currency = a1;
-          const N = parseInt(a2, 10);
-          if (!currency || isNaN(N) || N < 1) {
-            sys("usage: /note grant <currency> <N>");
+          // /note grant <currency> <N> [| terms text]. With terms, mint a
+          // terms-stamped note (cap:note-<cur>~<hash>) and publish the series.
+          const gFull = nParts.slice(1).join(" ");
+          const gPipe = gFull.indexOf("|");
+          const gHead = (gPipe === -1 ? gFull : gFull.slice(0, gPipe)).trim();
+          const gTerms = gPipe === -1 ? "" : gFull.slice(gPipe + 1).trim();
+          const gh = gHead.split(/\s+/);
+          const currency = gh[0] || "";
+          const N = parseInt(gh[1] ?? "", 10);
+          if (!currency || !/^[A-Za-z0-9_]+$/.test(currency) || isNaN(N) || N < 1) {
+            sys("usage: /note grant <currency> <N> [| terms & conditions text]");
             break;
           }
           if (!currencyTokens.has(currency)) {
             sys(`you don't hold cap:token-${currency}: declare it first with /note declare ${currency}`);
             break;
           }
-          const note = mintNote(currency, N);
-          noteStore.set(note, { token: note, currency, denomination: N });
+          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+          let note: string; let unit: string; let hash8 = "";
+          if (gTerms) {
+            hash8 = termsHash8(gTerms);
+            unit = makeSeriesKey(currency, hash8);             // "USD~a1b2c3d4"
+            note = mintNoteSeries(currency, hash8, N);
+            if (!seriesTerms.has(unit)) {
+              seriesTerms.set(unit, { seriesKey: unit, baseCurrency: currency, termsHash: hash8, terms: gTerms, issuer: who });
+            }
+            signedBroadcast({ kind: "note-series", seriesKey: unit, baseCurrency: currency, termsHash: hash8, terms: gTerms, who });
+          } else {
+            unit = currency;
+            note = mintNote(currency, N);
+          }
+          noteStore.set(note, { token: note, currency: unit, denomination: N });
           saveNotes();
           renderNotes();
-          const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
-          sys(`minted: ${currency} ${N}`);
+          sys(`minted: ${unit} ${N}${gTerms ? `  · 📜 terms ${hash8}` : ""}`);
           sys(`  ${note}`);
-          if (qpeer) qpeer.broadcast({ kind: "note-grant", currency, denomination: N, who });
+          if (gTerms) sys(`  terms: ${gTerms}`);
+          if (qpeer) qpeer.broadcast({ kind: "note-grant", currency: unit, denomination: N, who });
           break;
         }
 
@@ -2023,7 +2067,9 @@ function handleCommand(raw: string): string[] {
           if (!targetId) { sys(`unknown peer: '${targetName}'`); break; }
           const detached = detach(chosen, N);
           if (!detached) { sys("split failed"); break; }
-          const sent = qpeer.send(targetId, { kind: "note-pass", currency, denomination: N, token: detached.outgoing });
+          const passTerms = seriesTerms.get(currency);
+          const sent = qpeer.send(targetId, { kind: "note-pass", currency, denomination: N, token: detached.outgoing,
+            ...(passTerms ? { terms: passTerms.terms, termsHash: passTerms.termsHash } : {}) });
           if (!sent) {
             undoDetach(chosen, detached.change);
             sys(`cannot reach ${targetName} — data channel not open`);
@@ -2046,6 +2092,14 @@ function handleCommand(raw: string): string[] {
             break;
           }
           if (!qpeer) { sys("not connected"); break; }
+          // Terms gate: redeeming a stamped note requires accepting its terms first.
+          const redeemTerms = seriesTerms.get(currency);
+          if (redeemTerms && !acceptedTerms.has(currency)) {
+            sys(`⚠ ${currency} carries terms you have not accepted:`);
+            sys(`  ${redeemTerms.terms}`);
+            sys(`  review, then:  /note accept ${currency}   (then re-run redeem)`);
+            break;
+          }
           const chosen = pickNote(currency, N);
           if (!chosen) { sys(`no ${currency} note of denomination ≥ ${N} to redeem`); break; }
           const issuerId = findPeerByName(issuerName);
@@ -2106,14 +2160,46 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
+        case "terms":
+        case "series": {
+          const key = a1;
+          if (!key) { sys("usage: /note terms <currency~hash | currency>"); break; }
+          if (key.includes("~")) {
+            const st = seriesTerms.get(key);
+            if (!st) { sys(`no terms known for ${key} (not yet synced from its issuer)`); break; }
+            sys(`terms for ${key}  (issuer ${st.issuer}):`);
+            sys(`  ${st.terms}`);
+            sys(`  hash ${st.termsHash}  ·  accepted: ${acceptedTerms.has(key) ? "✓" : "—  (/note accept " + key + ")"}`);
+          } else {
+            const list = [...seriesTerms.values()].filter(s => s.baseCurrency === key);
+            if (list.length === 0) { sys(`no terms-series under ${key}`); break; }
+            sys(`${key} terms-series (${list.length}):`);
+            for (const s of list) sys(`  ${s.seriesKey}  — ${s.terms.slice(0, 56)}${s.terms.length > 56 ? "…" : ""}`);
+          }
+          break;
+        }
+
+        case "accept": {
+          const key = a1;
+          const st = key ? seriesTerms.get(key) : undefined;
+          if (!st) { sys(`no terms known for '${key}' — cannot accept (try /note terms <currency>)`); break; }
+          acceptedTerms.set(key, { termsHash: st.termsHash, at: Date.now() });
+          saveNotes();
+          renderNotes();
+          sys(`✓ accepted terms for ${key}  (hash ${st.termsHash})`);
+          break;
+        }
+
         default:
           sys(`unknown subcommand: /note ${sub}`);
           sys("  /note [list]                        — show held notes / currencies / receipts");
           sys("  /note balance [currency]            — sum denominations");
           sys("  /note declare <currency>            — issue a new currency");
-          sys("  /note grant <currency> <N>          — mint a denomination-N note");
+          sys("  /note grant <currency> <N> [| terms] — mint a note (with terms → a stamped series)");
           sys("  /note pass <currency> <N> <peer>    — transfer (auto-splits)");
           sys("  /note redeem <currency> <N> <peer>  — redeem with issuer, get receipt");
+          sys("  /note terms <currency[~hash]>       — show a series' terms / list a currency's series");
+          sys("  /note accept <currency~hash>        — accept a series' terms (required before redeem)");
           sys("  /note split <token> <a>             — split into (a, N-a)");
           sys("  /note merge <token1> <token2>       — combine two notes");
       }
@@ -3103,10 +3189,21 @@ function connect(): void {
             return;
           }
           noteStore.set(token, { token, currency, denomination: N, receivedFrom: who });
+          // Absorb a terms cache if the note is stamped: the passed text must
+          // hash to the stamp baked in the token (self-verifying). The issuer's
+          // dyncap-signed note-series, when present/synced, is authoritative and
+          // overrides this. We don't overwrite an already-known series.
+          if (parsed.series && typeof d.terms === "string" && !seriesTerms.has(currency)) {
+            const t = String(d.terms);
+            if (termsHash8(t) === parsed.series) {
+              seriesTerms.set(currency, { seriesKey: currency, baseCurrency: parsed.baseCurrency, termsHash: parsed.series, terms: t, issuer: "(unconfirmed)" });
+            }
+          }
           saveNotes();
           renderNotes();
           addMessage(from, `passes ${currency} ${N}`, "peer", who);
-          addMessage("", `  · received ${currency} ${N} from ${who}`, "system");
+          addMessage("", `  · received ${currency} ${N} from ${who}${parsed.series ? "  · 📜 terms " + parsed.series : ""}`, "system");
+          if (parsed.series && seriesTerms.has(currency)) addMessage("", `    terms: ${seriesTerms.get(currency)!.terms}  (/note accept ${currency} to agree)`, "system");
           addMessage("", `    ${token}`, "system");
           return;
         }
@@ -3116,15 +3213,17 @@ function connect(): void {
           const token    = String(d.token ?? "");
           const who      = peerLabel(from);
           addMessage(from, `redeems ${currency} ${N}`, "peer", who);
-          if (!currencyTokens.has(currency)) {
-            addMessage("", `  · refused: you don't issue ${currency}`, "system");
-            return;
-          }
           const parsed = parseNoteLabel(token);
           const valid  = parsed?.kind === "note" && parsed.currency === currency
                        && noteDenomination(token) === N && validateCapability(token);
           if (!valid) {
             addMessage("", `  · refused: malformed or unbalanced note token`, "system");
+            return;
+          }
+          // Issuance is on the BASE currency; a stamped note (USD~hash) is still
+          // issued by whoever issues USD.
+          if (!currencyTokens.has(parsed.baseCurrency)) {
+            addMessage("", `  · refused: you don't issue ${parsed.baseCurrency}`, "system");
             return;
           }
           const receipt = mintReceipt(currency, N);
@@ -3160,6 +3259,53 @@ function connect(): void {
           addMessage(from, `issues receipt for ${currency} ${N}`, "peer", issuer);
           addMessage("", `  · ${currency} ${N} redemption honored by ${issuer}`, "system");
           addMessage("", `    ${token}`, "system");
+          return;
+        }
+        if (d.kind === "note-series") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const seriesKey    = String(d.seriesKey ?? "");
+          const baseCurrency = String(d.baseCurrency ?? "");
+          const termsHash    = String(d.termsHash ?? "");
+          const terms        = String(d.terms ?? "");
+          // Self-consistency: the series id must be base~hash and the stamp must
+          // commit to exactly these terms.
+          if (!seriesKey || !baseCurrency || !termsHash || !terms) return;
+          if (termsHash8(terms) !== termsHash || seriesKey !== `${baseCurrency}~${termsHash}`) return;
+          // Issuer authority: if we know who issues baseCurrency, the sender's
+          // verified anchor must match (like the lemma-retract author check).
+          const senderAnchor = dyncapChains.get(from)?.anchor;
+          const known = [...knownCurrencies.values()].find((c) => c.currency === baseCurrency);
+          if (known?.dyncap && senderAnchor && known.dyncap.anchor !== senderAnchor) return;
+          const dyncap = d.dyncap as DyncapField | undefined;
+          const prev = seriesTerms.get(seriesKey);
+          // A signed declaration is authoritative; overwrite an unconfirmed cache.
+          if (!prev || prev.issuer === "(unconfirmed)") {
+            seriesTerms.set(seriesKey, { seriesKey, baseCurrency, termsHash, terms, issuer: peerLabel(from), dyncap });
+            saveNotes();
+            renderNotes();
+            addMessage(from, `📜 terms for ${seriesKey}`, "peer", peerLabel(from));
+            addMessage("", `  · ${terms}`, "system");
+          }
+          return;
+        }
+        if (d.kind === "sync-series") {
+          const raw = d.entries;
+          if (!Array.isArray(raw)) return;
+          let added = 0;
+          for (const e of raw as Array<Record<string, unknown>>) {
+            const seriesKey    = String(e.seriesKey ?? "");
+            const baseCurrency = String(e.baseCurrency ?? "");
+            const termsHash    = String(e.termsHash ?? "");
+            const terms        = String(e.terms ?? "");
+            if (!seriesKey || !terms) continue;
+            if (termsHash8(terms) !== termsHash || seriesKey !== `${baseCurrency}~${termsHash}`) continue;
+            const prev = seriesTerms.get(seriesKey);
+            if (prev && prev.issuer !== "(unconfirmed)") continue;
+            seriesTerms.set(seriesKey, { seriesKey, baseCurrency, termsHash, terms, issuer: String(e.issuer ?? peerLabel(from)), dyncap: e.dyncap as DyncapField | undefined });
+            added++;
+          }
+          if (added > 0) { saveNotes(); renderNotes(); }
           return;
         }
         if (d.kind === "sync-lemmas") {
@@ -3658,6 +3804,10 @@ function connect(): void {
           const entries = Array.from(knownCurrencies.values());
           signedSend(peerId, { kind: "sync-currencies", entries });
         }
+        if (seriesTerms.size > 0) {
+          const entries = Array.from(seriesTerms.values());
+          signedSend(peerId, { kind: "sync-series", entries });
+        }
         if (pollStore.size > 0) {
           const polls = Array.from(pollStore.values());
           signedSend(peerId, { kind: "sync-polls", polls });
@@ -4011,7 +4161,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
   { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality  (multi-word: /lemma [all men are mortal])" },
-  { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
+  { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10  (add  | terms…  for a terms-stamped note)" },
   { label: "Swap",       ico: "⇄", fill: "/rdv swap ",      hint: "atomic swap, e.g. /rdv swap USD 30 EUR 20 Alice" },
   { label: "Channel",    ico: "#", fill: "/channel send ",  hint: "tagged message, e.g. /channel send news hello" },
 ];

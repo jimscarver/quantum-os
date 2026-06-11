@@ -45,10 +45,12 @@ QLF slash commands:
   /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
-  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name
+  /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
   /request <n>     — request @n from whoever holds it
   /pass <n> <peer> — transfer @n directly to a named peer
-  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)
+  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)
+  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add · vote · status · lock · close · remove · list
+  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · list
   /rdv [sub]       — n-party atomic rendezvous (swap|counter|accept|reject|abort|list)
   /dyncap [sub]    — hash-only dynamic capabilities (status|peers)
   /probe [sub]     — joiner-local consensus probe (status|clear)
@@ -58,9 +60,20 @@ QLF slash commands:
   /script <c1>;…   — sequential command chain (// to skip a segment)
   /persist [sub]   — agreed-replication of public state (@lemma|currency …)
   /rhoqu <text>    — RhoQu macro: process / new / | / if / on / for over /commands
-  @name in args    — expand named lemma (e.g. /qucalc @major @minor)
+  @name in args    — expand named lemma (e.g. /qucalc @major @minor; @[multi word] for spaced names)
   //message        — send a message starting with /
 ```
+
+**Group decisions** — `/poll` brings approval and ranked-choice (IRV) voting with open
+nominations to a room: `/poll new What's for lunch?`, then everyone adds options and votes,
+and the creator closes it for a deterministic, joiner-local tally. See
+[Group_Decisions.md](Group_Decisions.md) for the full family of decision processes the
+interface supports.
+
+**Notes with terms** — `/note grant USD 5 | redeemable for one coffee` mints a
+**terms-stamped** note (`cap:note-USD~<hash>`); the issuer's terms are dyncap-signed and
+travel with the note. `/note terms` reads them and `/note accept` is required before redeeming.
+Different terms for the same currency are simply different stamped series.
 
 ### `/braket <state>` [shared]
 Evaluates a bra-ket expression using the `Form` 2×2 Hermitian matrix algebra from `SpacetimeDynamics.lean`. States: `0`, `1`, `+`, `-`, `i`, `-i`. Multiple states (space-separated) compose as `parallel` (matrix addition = superposition). Output broadcasts to all peers.

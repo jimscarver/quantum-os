@@ -41,8 +41,9 @@ Options:
   --verbose          Log every inbound message.
   --help, -h         Show this help.
 
-Persists per room: lemmas.json, currencies.json, chains.json, transcript.jsonl.
-Re-serves name + sync-lemmas + sync-currencies (dyncap-signed) to each joiner.
+Persists per room: lemmas.json, currencies.json, chains.json, retracted.json,
+transcript.jsonl. Re-serves name + sync-lemmas + sync-currencies (dyncap-signed)
+to each joiner, and honors author lemma retractions (won't re-serve them).
 Runs until Ctrl-C.`;
 
 function parseArgs(argv) {
@@ -72,6 +73,11 @@ function extractRoomCap(s) {
 const readJSON = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; } };
 const writeJSON = (p, obj) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(obj, null, 2)); };
 
+// Lemma names are canonicalized (trim + collapse inner whitespace) to match the
+// browser's canonLemma, so multi-word names (referenced as @[name with spaces])
+// key identically here and the daemon's first-write-wins agrees with the browser.
+const canonLemma = (name) => String(name ?? "").trim().replace(/\s+/g, " ");
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.room) { console.log(USAGE); process.exit(args.help ? 0 : 1); }
@@ -87,6 +93,7 @@ async function main() {
   const lemmasPath = path.join(roomDir, "lemmas.json");
   const currenciesPath = path.join(roomDir, "currencies.json");
   const chainsPath = path.join(roomDir, "chains.json");
+  const retractedPath = path.join(roomDir, "retracted.json");
   const transcriptPath = path.join(roomDir, "transcript.jsonl");
 
   // ---- identity (stable across restarts) ----
@@ -112,9 +119,11 @@ async function main() {
   const lemmas = new Map(Object.entries(readJSON(lemmasPath, {})));       // name -> {twists,who,cap?,dyncap?}
   const currencies = new Map(Object.entries(readJSON(currenciesPath, {})));// token -> {currency,token,issuer,dyncap?}
   const chains = deserializeChain(fs.existsSync(chainsPath) ? fs.readFileSync(chainsPath, "utf8") : "{}");
+  const retracted = new Set(readJSON(retractedPath, []));                  // canonical lemma names retracted by their author
   const peerNames = new Map();
   const persistLemmas = () => writeJSON(lemmasPath, Object.fromEntries(lemmas));
   const persistCurrencies = () => writeJSON(currenciesPath, Object.fromEntries(currencies));
+  const persistRetracted = () => writeJSON(retractedPath, [...retracted]);
   const persistChains = () => writeJSON(chainsPath, JSON.parse(serializeChain(chains)));
   const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: true }); fs.appendFileSync(transcriptPath, JSON.stringify({ t: new Date().toISOString(), from, msg }) + "\n"); } catch {} };
 
@@ -123,8 +132,9 @@ async function main() {
   // Seed durable lemmas (--lemma). Mint ZFA-valid twists so receiving peers
   // accept them on sync (achievesZfa gate). FWW by name: skip if already held.
   let seeded = 0;
-  for (const lname of args.lemmas ?? []) {
-    if (lemmas.has(lname)) continue;
+  for (const lraw of args.lemmas ?? []) {
+    const lname = canonLemma(lraw);
+    if (!lname || lemmas.has(lname) || retracted.has(lname)) continue;
     const label = (lname.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "lemma");
     const cap = generateCapability(label);          // cap:label:hex, hex is ZFA-balanced
     const twists = cap.split(":")[2];
@@ -177,16 +187,21 @@ async function main() {
 
   function ingestLemma(e, fromName) {
     if (!e || typeof e.name !== "string" || typeof e.twists !== "string") return false;
+    const name = canonLemma(e.name);
+    if (!name || retracted.has(name)) return false;        // tombstoned — don't resurrect
     const tw = parseTwists(e.twists);
     if (!tw || !achievesZfa(tw)) return false;
-    const existing = lemmas.get(e.name);
+    const existing = lemmas.get(name);
     if (existing) { return existing.twists === e.twists; } // FWW + immutability
-    lemmas.set(e.name, { twists: e.twists, who: e.who ?? fromName, cap: e.cap, dyncap: e.dyncap });
+    lemmas.set(name, { twists: e.twists, who: e.who ?? fromName, cap: e.cap, dyncap: e.dyncap });
     return true;
   }
   function ingestCurrency(e, fromName) {
     if (!e || typeof e.token !== "string" || typeof e.currency !== "string") return false;
-    if (!e.token.startsWith("cap:currency:") || !validateCapability(e.token)) return false;
+    // A currency authority token is cap:token-<currency>:<hex> (mintCurrencyToken
+    // in notes.ts; the browser checks parseNoteLabel.kind === "token"). The old
+    // "cap:currency:" prefix never matched, so currencies were silently dropped.
+    if (!e.token.startsWith(`cap:token-${e.currency}:`) || !validateCapability(e.token)) return false;
     if (currencies.has(e.token)) return false; // FWW by token
     currencies.set(e.token, { currency: e.currency, token: e.token, issuer: e.issuer ?? fromName, dyncap: e.dyncap });
     return true;
@@ -206,6 +221,25 @@ async function main() {
       case "note-declare": if (ingestCurrency({ currency: d.currency, token: d.token, dyncap: d.dyncap }, fromName)) { persistCurrencies(); console.log(`[daemon] +currency "${d.currency}"`); } break;
       case "sync-lemmas": { let n = 0; for (const e of d.entries || []) if (ingestLemma(e, fromName)) n++; if (n) { persistLemmas(); console.log(`[daemon] +${n} lemma(s) via sync`); } break; }
       case "sync-currencies": { let n = 0; for (const e of d.entries || []) if (ingestCurrency(e, fromName)) n++; if (n) { persistCurrencies(); console.log(`[daemon] +${n} currency/ies via sync`); } break; }
+      case "retract": {
+        // The daemon only persists lemmas, so it honors lemma retractions. A
+        // retracted lemma is dropped, tombstoned (so it isn't resurrected on a
+        // later sync), and no longer re-served to joiners — otherwise an
+        // always-on memory peer would heal back exactly what an author removed.
+        if (d.what !== "lemma") break;
+        const name = canonLemma(d.id);
+        const entry = lemmas.get(name);
+        const senderAnchor = chains.get(from)?.anchor;
+        // Honor only the author: the sender's verified anchor must match the
+        // anchor recorded when the lemma was learned.
+        if (!entry || !entry.dyncap?.anchor || !senderAnchor || entry.dyncap.anchor !== senderAnchor) break;
+        lemmas.delete(name);
+        retracted.add(name);
+        persistLemmas();
+        persistRetracted();
+        console.log(`[daemon] -lemma "${name}" retracted by author ${fromName}`);
+        break;
+      }
     }
   }
 
@@ -214,7 +248,7 @@ async function main() {
 
   const shutdown = () => {
     console.log("\n[daemon] shutting down…");
-    try { saveIdentity(); persistLemmas(); persistCurrencies(); persistChains(); } catch {}
+    try { saveIdentity(); persistLemmas(); persistCurrencies(); persistChains(); persistRetracted(); } catch {}
     try { peer.disconnect(); } catch {}
     setTimeout(() => process.exit(0), 250);
   };

@@ -132,6 +132,16 @@ Wire kinds: `note-declare` (broadcast), `note-grant` (broadcast — currency + d
 
 The sidebar's **Currencies** block shows `currencyTokens` entries with `✦` and others' declarations with the issuer's name; **Notes** shows `noteStore`. Click handlers prefill the input. Receipts and redemptions are chat-only.
 
+#### Terms & conditions — terms-stamped series
+
+Notes can carry **terms & conditions**, and different notes of the same currency can carry *different* terms, via **series stamps**. A terms-bearing note's token is `cap:note-<base>~<termsHash8>:<hex>` where `termsHash8 = first 8 hex of FNV-1a(canonicalized terms)` (`termsHash8` in `notes.ts`). `parseNoteLabel` returns `{ currency (full, e.g. "USD~a1b2"), baseCurrency ("USD"), series ("a1b2"|null) }`. **`currency` is the full unit**, so each series is its own non-fungible unit: `splitNote` keeps the stamp on both children (terms inherited); `mergeNotes` already requires a matching currency segment, so it refuses to combine different series (or a series with plain). "Different terms for USD" = **different series under USD**.
+
+- Mint: `/note grant USD 5 | <terms text>` → derives the stamp, mints `cap:note-USD~<hash>`, records the series, and broadcasts it. Plain `/note grant USD 5` is unchanged.
+- **Authority/integrity:** the issuer broadcasts a **dyncap-signed `note-series {seriesKey, baseCurrency, termsHash, terms, who}`** (and it rides the join handshake via **`sync-series`**). Inbound is honored only if self-consistent (`termsHash8(terms) === stamp` and `seriesKey === base~hash`) **and** from the currency's issuer (sender's verified dyncap anchor matches the `KnownCurrency.dyncap.anchor`, like the lemma-retract author check). `note-pass` also carries the terms as a self-verifying cache (text must hash to the token's stamp); the signed `note-series` overrides an `(unconfirmed)` cache.
+- **Acceptance gate:** `/note redeem` of a stamped note is blocked until the holder runs `/note accept <currency~hash>`; acceptance is recorded in `acceptedTerms`. `/note terms <currency~hash>` shows a series' terms; `/note terms <currency>` lists a currency's series.
+- Stores: `seriesTerms: Map<seriesKey, SeriesTerms>` and `acceptedTerms: Map<seriesKey, AcceptedTerms>`, persisted `qos-series-terms-<room>` / `qos-accepted-terms-<room>`. Issuance checks use `baseCurrency` (a `USD~hash` note is issued by whoever issues `USD`). Sidebar notes show a 📜 marker with terms in the tooltip.
+- Limitation: terms are fixed at mint (the stamp commits to them); re-terming means minting a new series.
+
 ### Rendezvous (`/rdv` — `rendezvous.ts` + `app.ts`)
 
 N-party atomic synchronization. Each participant contributes a `gives` token and receives a `gets` token; `conservationCheck(rows)` enforces `multiset(gives) == multiset(gets)` over the joint composition.

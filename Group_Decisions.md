@@ -166,7 +166,15 @@ Each maps onto an existing primitive — sketches, not yet built.
 
 Decision state lives in per-room `localStorage` (`qos-polls-<roomId>`,
 `qos-lemmas-<roomId>`, `qos-chat-<roomId>`, …) and replays into the UI on reload
-and tab-switch. Granular removal of individual polls/lemmas (and whether a
-deletion should broadcast a retraction so it doesn't re-sync back) is a **deferred
-feature** — see the discussion in session notes. For now, removal is mostly a side
-effect of transfer (`/pass`, `/note` ops) plus `/probe clear` and the chat-log cap.
+and tab-switch.
+
+**Removal & retraction** is implemented: a sidebar ✕ on each poll/lemma/note, a
+remove button on poll cards, and a `/forget <poll <id> | lemma <name> | note …>`
+command. Because gossiped state (polls, lemmas) otherwise heals back from the
+next peer's `sync-*`, removal uses **tombstones** (`qos-retracted-<roomId>`): the
+owner broadcasts a dyncap-signed `retract` everyone honors (creator for a poll,
+author for a lemma), and anyone else hides the item from their own view. Notes are
+private bearer value, so `/forget note` deletes locally with a confirm.
+(Transfer-as-removal still applies too: `/pass`, `/note` ops, `/probe clear`, the
+chat-log cap.) The headless **memory-peer daemon** honors author lemma retractions
+as well, so an always-on peer won't resurrect a removed lemma.
