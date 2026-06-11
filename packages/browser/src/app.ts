@@ -18,7 +18,7 @@ import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHand
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
-         type Group, type Issue, type Role } from "./gov.js";
+         delegationMapFor, type Group, type Issue, type Role } from "./gov.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1624,14 +1624,31 @@ function handleCommand(raw: string): string[] {
       }
       if (gsub === "delegate") {
         if (!isMember(g, meId)) { sys("only members can delegate"); break; }
+        // /gov delegate <member> [on <issue title>]
+        const onIdx = gParts.findIndex((t) => t.toLowerCase() === "on");
         const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
-        if (!pid || !isMember(g, pid)) { sys("usage: /gov delegate <member>"); break; }
+        if (!pid || !isMember(g, pid)) { sys("usage: /gov delegate <member> [on <issue>]"); break; }
         if (pid === meId) { sys("can't delegate to yourself"); break; }
-        govSetDelegate(g, pid);
-        sys(`you delegate to ${peerLabel(pid)} — your vote flows to them unless you vote`);
+        let iss: Issue | undefined;
+        if (onIdx >= 0) {
+          const title = gParts.slice(onIdx + 1).join(" ").trim();
+          iss = findIssue(g, title); if (!iss) { sys(`no issue matching “${title}” — /gov issue <title> first`); break; }
+        }
+        govSetDelegate(g, pid, iss?.id);
+        sys(iss ? `for “${iss.title}” you delegate to ${peerLabel(pid)} (overrides your global delegate on this issue)`
+                : `you delegate to ${peerLabel(pid)} — your vote flows to them unless you vote`);
         break;
       }
-      if (gsub === "undelegate") { govSetDelegate(g, null); sys("delegation cleared — you vote directly"); break; }
+      if (gsub === "undelegate") {
+        const onIdx = gParts.findIndex((t) => t.toLowerCase() === "on");
+        if (onIdx >= 0) {
+          const title = gParts.slice(onIdx + 1).join(" ").trim();
+          const iss = findIssue(g, title);
+          if (!iss) { sys(`no issue matching “${title}”`); break; }
+          govSetDelegate(g, null, iss.id); sys(`per-issue delegation cleared for “${iss.title}” (your global delegate applies again)`);
+        } else { govSetDelegate(g, null); sys("global delegation cleared — you vote directly"); }
+        break;
+      }
       if (gsub === "vote") {
         if (!isMember(g, meId)) { sys("only members can open a vote"); break; }
         let rest = grest; let method: PollMethod = "approval";
@@ -1647,7 +1664,7 @@ function handleCommand(raw: string): string[] {
         showGroupCard(g);
         break;
       }
-      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> · undelegate · vote <issue> | opts [ranked] · status · list");
+      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> [on <issue>] · undelegate [on <issue>] · vote <issue> | opts [ranked] · status · list");
       break;
     }
 
@@ -3942,8 +3959,16 @@ function connect(): void {
           const delegator = String(d.delegator ?? from);
           if (!g || from !== delegator || !isMember(g, delegator)) return;   // self-signed only
           const delegate = d.delegate == null ? null : String(d.delegate);
-          if (delegate === null) delete g.delegations[delegator];
-          else if (isMember(g, delegate) && delegate !== delegator) g.delegations[delegator] = { delegate, at: Date.now() };
+          const issueId2 = d.issueId ? String(d.issueId) : null;
+          const ok = delegate === null || (isMember(g, delegate) && delegate !== delegator);
+          if (!ok) return;
+          if (issueId2) {                                                    // per-issue delegate
+            g.topicDelegations ??= {};
+            const m = (g.topicDelegations[issueId2] ??= {});
+            if (delegate === null) delete m[delegator]; else m[delegator] = { delegate, at: Date.now() };
+            if (Object.keys(m).length === 0) delete g.topicDelegations[issueId2];
+          } else if (delegate === null) delete g.delegations[delegator];
+          else g.delegations[delegator] = { delegate, at: Date.now() };
           saveGroups(); renderGroups();
           return;
         }
@@ -4659,6 +4684,7 @@ function mergeGroupFromSync(raw: unknown): boolean {
   if (!id || isRetracted("group", id)) return false;
   const inMembers = (r.members && typeof r.members === "object") ? r.members as Record<string, { peerId?: string; role?: string; label?: string; at?: number }> : {};
   const inDeleg = (r.delegations && typeof r.delegations === "object") ? r.delegations as Record<string, { delegate?: string; at?: number }> : {};
+  const inTopic = (r.topicDelegations && typeof r.topicDelegations === "object") ? r.topicDelegations as Record<string, Record<string, { delegate?: string; at?: number }>> : {};
   const inIssues = Array.isArray(r.issues) ? r.issues as Array<Record<string, unknown>> : [];
 
   const existing = groupStore.get(id);
@@ -4667,10 +4693,13 @@ function mergeGroupFromSync(raw: unknown): boolean {
     for (const [pid, m] of Object.entries(inMembers)) members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at: typeof m.at === "number" ? m.at : 0 };
     const delegations: Group["delegations"] = {};
     for (const [pid, dl] of Object.entries(inDeleg)) if (dl.delegate) delegations[pid] = { delegate: String(dl.delegate), at: typeof dl.at === "number" ? dl.at : 0 };
+    const topicDelegations: NonNullable<Group["topicDelegations"]> = {};
+    for (const [iid, mp] of Object.entries(inTopic)) { const t: Record<string, { delegate: string; at: number }> = {}; for (const [pid, dl] of Object.entries(mp)) if (dl.delegate) t[pid] = { delegate: String(dl.delegate), at: typeof dl.at === "number" ? dl.at : 0 }; if (Object.keys(t).length) topicDelegations[iid] = t; }
     const issues: Issue[] = inIssues.map((i): Issue => ({ id: String(i.id ?? issueId(String(i.title ?? ""))), title: String(i.title ?? ""), by: String(i.by ?? "?"), at: typeof i.at === "number" ? i.at as number : 0, status: i.status === "closed" ? "closed" : "open", pollId: i.pollId ? String(i.pollId) : undefined })).filter((i) => i.title);
     groupStore.set(id, {
       id, name: String(r.name ?? ""), creator: String(r.creator ?? ""), creatorLabel: String(r.creatorLabel ?? "?"),
-      createdAt: typeof r.createdAt === "number" ? r.createdAt : 0, members, delegations, issues,
+      createdAt: typeof r.createdAt === "number" ? r.createdAt : 0, members, delegations,
+      ...(Object.keys(topicDelegations).length ? { topicDelegations } : {}), issues,
     });
     return true;
   }
@@ -4685,6 +4714,13 @@ function mergeGroupFromSync(raw: unknown): boolean {
     const cur = existing.delegations[pid];
     const at = typeof dl.at === "number" ? dl.at : 0;
     if (dl.delegate && (!cur || at > cur.at)) { existing.delegations[pid] = { delegate: String(dl.delegate), at }; changed = true; }
+  }
+  for (const [iid, mp] of Object.entries(inTopic)) {
+    for (const [pid, dl] of Object.entries(mp)) {
+      const cur = existing.topicDelegations?.[iid]?.[pid];
+      const at = typeof dl.at === "number" ? dl.at : 0;
+      if (dl.delegate && (!cur || at > cur.at)) { existing.topicDelegations ??= {}; (existing.topicDelegations[iid] ??= {})[pid] = { delegate: String(dl.delegate), at }; changed = true; }
+    }
   }
   for (const i of inIssues) {
     const iid = String(i.id ?? issueId(String(i.title ?? "")));
@@ -5087,10 +5123,10 @@ function findGroup(arg: string): Group | null {
 }
 
 // Delegation-resolved effective weights for a group's issue poll (members only).
-function govWeights(g: Group, poll: Poll): Record<string, number> {
+// Uses the per-issue delegation map (topic overrides global) for `issue`.
+function govWeights(g: Group, issue: Issue, poll: Poll): Record<string, number> {
   const members = Object.keys(g.members);
-  const deleg: Record<string, string> = {};
-  for (const [d, dl] of Object.entries(g.delegations)) deleg[d] = dl.delegate;
+  const deleg = delegationMapFor(g, issue.id);
   const direct = new Set(members.filter((p) => (poll.ballots[p]?.length ?? 0) > 0));
   return resolveWeights(members, deleg, direct).weightByVoter;
 }
@@ -5115,12 +5151,21 @@ function govRemoveMember(g: Group, peerId: string): void {
   saveGroups(); renderGroups(); refreshGroupCard(g);
   signedBroadcast({ kind: "group-member", groupId: g.id, peerId, remove: true });
 }
-function govSetDelegate(g: Group, delegate: string | null): void {
+// Set/clear your delegate. With `issueId`, it's a per-issue delegate that
+// overrides your global one for that issue only; without, it's the global one.
+function govSetDelegate(g: Group, delegate: string | null, issueId?: string): void {
   const me = myPeerId();
-  if (delegate === null) delete g.delegations[me];
-  else g.delegations[me] = { delegate, at: Date.now() };
+  if (issueId) {
+    g.topicDelegations ??= {};
+    const m = (g.topicDelegations[issueId] ??= {});
+    if (delegate === null) delete m[me]; else m[me] = { delegate, at: Date.now() };
+    if (Object.keys(m).length === 0) delete g.topicDelegations[issueId];
+  } else {
+    if (delegate === null) delete g.delegations[me];
+    else g.delegations[me] = { delegate, at: Date.now() };
+  }
   saveGroups(); renderGroups(); refreshGroupCard(g);
-  signedBroadcast({ kind: "gov-delegate", groupId: g.id, delegator: me, delegate });
+  signedBroadcast({ kind: "gov-delegate", groupId: g.id, delegator: me, delegate, ...(issueId ? { issueId } : {}) });
 }
 function govNewIssue(g: Group, title: string): Issue {
   const iid = issueId(title);
@@ -5154,7 +5199,7 @@ function issueResultText(g: Group, issue: Issue): string {
   if (!issue.pollId) return "no vote yet";
   const poll = pollStore.get(issue.pollId);
   if (!poll) return "vote pending sync";
-  const weights = govWeights(g, poll);
+  const weights = govWeights(g, issue, poll);
   const res = tally(poll, weights);
   const verb = poll.status === "closed" ? "winner" : "leading";
   return `${verb}: ${summarizeWinners(poll, res).replace(/^.*?: /, "")} · ${res.totalBallots} weight`;
