@@ -338,6 +338,27 @@
     .call-ctl.hangup { color:#ff9d4a; border-color:#5a2a2a; }
     .call-ctl.hangup:hover { background:#3a1e1e; }
 
+    /* Polls */
+    .msg.poll-msg { display:block; }
+    .poll-card { border:1px solid #2a2a2a; border-radius:8px; background:#0e0e0e; padding:0.6rem 0.7rem; margin:0.4rem 0; max-width:440px; }
+    .poll-card .poll-q { color:#fff; font-weight:600; margin-bottom:0.45rem; font-size:0.82rem; }
+    .poll-card .poll-badge { color:#7fdbca; font-size:0.6rem; border:1px solid #2a5a5a; border-radius:3px; padding:0 0.3rem; margin-left:0.35rem; vertical-align:middle; }
+    .poll-opt { position:relative; display:flex; align-items:center; gap:0.5rem; margin:0.25rem 0; padding:0.2rem 0.4rem; border-radius:4px; }
+    .poll-bar { position:absolute; left:0; top:0; bottom:0; background:#16302e; border-radius:4px; z-index:0; transition:width .2s; }
+    .poll-opt > * { position:relative; z-index:1; }
+    .poll-opt .poll-count { color:#9a9a9a; font-size:0.72rem; min-width:1.4rem; text-align:right; }
+    .poll-opt button { background:#141414; border:1px solid #2a2a2a; border-radius:4px; color:#bdbdbd; font-size:0.66rem; padding:0.15rem 0.5rem; cursor:pointer; white-space:nowrap; }
+    .poll-opt button:hover { background:#1e2e2e; border-color:#2a5a5a; color:#7fdbca; }
+    .poll-opt.voted button { background:#16302e; color:#7fdbca; border-color:#2a5a5a; }
+    .poll-opt.winner { outline:1px solid #2a5a5a; }
+    .poll-rank { color:#ff9d4a; font-size:0.68rem; min-width:1.1rem; }
+    .poll-card .poll-you { color:#777; font-size:0.68rem; margin-top:0.4rem; }
+    .poll-rounds { color:#888; font-size:0.64rem; white-space:pre-wrap; margin-top:0.35rem; line-height:1.5; }
+    .poll-ctlbtn { background:#141414; border:1px solid #2a2a2a; border-radius:4px; color:#bdbdbd; font-size:0.66rem; padding:0.15rem 0.55rem; cursor:pointer; margin-right:0.4rem; }
+    .poll-ctlbtn:hover { background:#1e2e2e; color:#7fdbca; }
+    .poll-ctlbtn.poll-close { color:#ff9d4a; border-color:#5a2a2a; }
+    .poll-ctlbtn.poll-close:hover { background:#3a1e1e; }
+
     /* Onboarding / empty state */
     .welcome { color:#9a9a9a; font-size:0.78rem; line-height:1.7; border:1px dashed #262626; border-radius:8px; padding:1rem 1.1rem; margin:0.5rem 0; }
     .welcome h3 { color:#7fdbca; font-size:0.85rem; margin-bottom:0.5rem; }
@@ -419,6 +440,11 @@
       <div>
         <h2>Notes (<span id="note-count">0</span>)</h2>
         <ul id="note-list" style="list-style:none; max-height:8rem; overflow-y:auto;"></ul>
+      </div>
+
+      <div>
+        <h2>Polls (<span id="poll-count">0</span>)</h2>
+        <ul id="poll-list" style="list-style:none; max-height:8rem; overflow-y:auto;"></ul>
       </div>
 
       <div>
