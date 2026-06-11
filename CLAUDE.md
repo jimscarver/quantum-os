@@ -234,6 +234,8 @@ Lifecycle: `/poll new <q>` opens for nominations (no fixed options); `| a, b` se
 
 Wire kinds (all dyncap-signed, idempotent, out-of-order tolerant): `poll-open` (with `options: PollOption[]`), `poll-option`, `poll-lock`, `poll-ballot` (id list), `poll-close`, and `sync-polls` (join replay). Options/ballots that arrive before their `poll-open` are buffered (`pollOptionBuffer` / `pollBallotBuffer`) and drained on open. Per-room persistence under `qos-polls-<roomId>`; cards rebuild from live `pollStore` on reload/tab-switch via the `pollId` branch in `renderChatLine`. Only the creator can lock/close (`from === poll.creator`).
 
+For the broader family of group-decision processes this interface supports (approval / ranked-choice / consensus / atomic rendezvous / delegation / sortition / …) — built and sketched, each mapped to its primitive — see [Group_Decisions.md](Group_Decisions.md).
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -357,6 +359,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage) |
 | `packages/browser/src/rhoqu.ts` | RhoQu tokenizer, parser (`process`/`new`/`if`/`on`/`for`/`\|`), AST, and `transpile(source, ctx?)` that emits a `string[]` of `/commands`. `RhoQuContext` interface + `OnHandler` for `on channel(x) { … }` dispatcher registration. |
 | `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
+| `Group_Decisions.md` | Map of group-decision processes the interface supports — built (poll / probe / rdv / channel / lemma) and sketched (quorum, weighted, quadratic, delegation, sortition, consent, conviction), each mapped to a primitive |
 | `RhoQuDemo.md` | End-user walkthrough of `/rhoqu` — atomic swap with conditional accept, dining philosophers, multisig with persistence |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
