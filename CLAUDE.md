@@ -295,7 +295,7 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 
 | Command | Description |
 |---------|-------------|
-| `/help` | List all commands |
+| `/help [command]` | List all commands; `/help <command>` shows per-command detail from the `CMD_HELP` registry (e.g. `/help note`) |
 | `/id` | Show your peer ID |
 | `/room` | Show room ID |
 | `/cap [label]` | Mint a random ZFA capability token |

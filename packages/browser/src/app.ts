@@ -1399,8 +1399,15 @@ function handleCommand(raw: string): string[] {
   const sys = (text: string) => { addMessage("", text, "system"); lines.push(text); };
 
   switch (cmd) {
-    case "help":
-      sys("QLF slash commands:");
+    case "help": {
+      const topic = arg.trim().replace(/^\//, "").toLowerCase();
+      if (topic) {
+        const detail = CMD_HELP[topic];
+        if (detail) { sys(`/${topic}:`); for (const l of detail) sys("  " + l); }
+        else sys(`no help for '/${topic}' — type /help for the full list`);
+        break;
+      }
+      sys("QLF slash commands:  (type /help <command> for details on one)");
       sys("  /help            — show this help");
       sys("  /id              — your peer ID and ZFA proof");
       sys("  /cap [label]     — generate a new ZFA capability");
@@ -1432,6 +1439,7 @@ function handleCommand(raw: string): string[] {
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
       break;
+    }
 
     case "id": {
       if (!qpeer) { sys("not connected"); break; }
@@ -4442,6 +4450,51 @@ function handleFileChunk(from: string, d: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 // Self-evident UI: command palette, quick-action toolbar, onboarding
 // ---------------------------------------------------------------------------
+
+// Per-command detailed help, shown by `/help <command>`. Keep each entry to a
+// few scannable lines: syntax, key subcommands, and a short note/example.
+const CMD_HELP: Record<string, string[]> = {
+  help: ["/help — list all commands.", "/help <command> — detailed help for one command (e.g. /help note)."],
+  id: ["/id — show your peer ID and its ZFA proof (twist counts, spectral gap)."],
+  cap: ["/cap [label] — mint a new random ZFA capability token, local only (not broadcast).", "e.g. /cap alice-read"],
+  grant: ["/grant [label] — mint a ZFA capability token AND broadcast it to the room.", "e.g. /grant moderator"],
+  zfa: ["/zfa <token> — validate a cap:label:hex capability; shows ZFA balance, spectral gap, twist counts."],
+  braket: ["/braket <state> [state …] — evaluate bra-ket states as 2×2 density matrices.", "states: 0 1 + - i -i  (space-separated = superposition).", "e.g. /braket 0 1   ·   /braket -i"],
+  qucalc: ["/qucalc [twists | @name | cap:token] — evaluate a RhoQuCalc twist sequence's ZFA balance.", "twists: symbolic ^v<>/\\+- or hex 0-7; compose lemmas with @name (or @[multi word]).", "e.g. /qucalc +-+-   ·   /qucalc @major @minor"],
+  conj: ["/conj <twists> — Hermitian adjoint (reverse + parity-flip); flags self-adjoint inputs.", "Identity: E + E† ≡ ZFA. Accepts @name and cap:token too."],
+  freq: ["/freq [n | twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n (the 2:1 harmonic ladder)."],
+  dump: ["/dump — summary of all logic shared this session."],
+  lemma: ["/lemma — list named lemmas.", "/lemma <name> [twists] — register @name; omit twists to auto-allocate from the name.", "twists: symbolic / hex / cap:token / @ref1 @ref2.", "multi-word: /lemma [all men are mortal] ^v  →  reference as @[all men are mortal]"],
+  request: ["/request <name> — broadcast that you need @name; whoever holds it sees a /pass prompt."],
+  pass: ["/pass <name> <peer> — transfer a lemma @name directly to a named peer (removed from yours).", "multi-word: /pass [name with spaces] Alice"],
+  note: ["/note [list] — held notes / currencies / receipts.   /note balance [currency]",
+         "/note declare <currency> — issue a currency.",
+         "/note grant <cur> <N> [| terms] — mint a denomination-N note; with terms → a stamped series cap:note-cur~hash.",
+         "/note pass <cur> <N> <peer> · redeem <cur> <N> <issuer> · split <token> <a> · merge <t1> <t2>",
+         "/note terms <cur[~hash]> · accept <cur~hash> — terms must be accepted before redeeming."],
+  poll: ["/poll new <q> [| seed1, seed2] [ranked] — open a poll (approval or ranked-choice IRV); no seeds = open nominations.",
+         "/poll add <option> · vote [id] <choices> · lock · close · status · remove · list",
+         "ranked vote uses >, e.g. /poll vote pizza > salad > tacos"],
+  forget: ["/forget <poll <id> | lemma <name> | note <token|cur denom> | group <name>> — remove an item.",
+           "poll/lemma/group: the owner retracts for everyone (tombstoned, won't re-sync back); others hide it locally.",
+           "note: deletes a held note (destroys its value, confirm required)."],
+  gov: ["/gov new <name> · show <name> · list — liquid-democracy groups.",
+        "/gov member add|remove <peer> [admin] · issue <title>",
+        "/gov delegate <member> [on <issue>] · undelegate [on <issue>] — your vote flows to your delegate unless you vote (per-issue overrides global).",
+        "/gov vote <issue> | opt1, opt2 [ranked] — opens a delegation-weighted poll bound to the issue.",
+        "/gov treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · say <msg> · status",
+        "full reference: Governance.md"],
+  rdv: ["/rdv swap <giveCur> <giveN> <getCur> <getN> <peer> — propose an atomic N-party swap (all-or-nothing).",
+        "/rdv accept <id> · reject <id> · abort <id> · counter <id> <giveCur> <giveN> <getCur> <getN> · list"],
+  dyncap: ["/dyncap status — your anchor / current seq / chain depth.", "/dyncap peers — all peers' anchors and seq depths (fork/contested flags)."],
+  probe: ["/probe status — discrepancy-probe window state + ignored-for-sync peers.", "/probe clear — clear the ignored-for-sync list. (The probe runs automatically on join.)"],
+  room: ["/room list · join <cap|url> · leave · ref — multi-room tabs (each room is a separate ZFA process)."],
+  share: ["/share <selector> to <room> — bridge an item into another joined room.", "selectors: @lemma · msg <text> · note <cur> <N>"],
+  channel: ["/channel listen <name> · unlisten <name> · send <name> <text> · list — tagged broadcast messages (per-room subscriptions)."],
+  script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
+  persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
+  rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
+};
 
 interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
