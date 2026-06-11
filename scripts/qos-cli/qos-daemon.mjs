@@ -198,7 +198,10 @@ async function main() {
   }
   function ingestCurrency(e, fromName) {
     if (!e || typeof e.token !== "string" || typeof e.currency !== "string") return false;
-    if (!e.token.startsWith("cap:currency:") || !validateCapability(e.token)) return false;
+    // A currency authority token is cap:token-<currency>:<hex> (mintCurrencyToken
+    // in notes.ts; the browser checks parseNoteLabel.kind === "token"). The old
+    // "cap:currency:" prefix never matched, so currencies were silently dropped.
+    if (!e.token.startsWith(`cap:token-${e.currency}:`) || !validateCapability(e.token)) return false;
     if (currencies.has(e.token)) return false; // FWW by token
     currencies.set(e.token, { currency: e.currency, token: e.token, issuer: e.issuer ?? fromName, dyncap: e.dyncap });
     return true;
