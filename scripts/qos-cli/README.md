@@ -90,7 +90,8 @@ rooms/<roomhex>/lemmas.json   # { name: { twists, who, cap?, dyncap? } }
 rooms/<roomhex>/currencies.json
 rooms/<roomhex>/chains.json   # dyncap TOFU pins (fork detection survives restart)
 rooms/<roomhex>/series.json   # note terms-series { "USD~hash": { baseCurrency, termsHash, terms, issuer, dyncap? } }
-rooms/<roomhex>/retracted.json     # canonical names of author-retracted lemmas (tombstones)
+rooms/<roomhex>/groups.json   # governance groups { groupId: { members, delegations, topicDelegations, issues, treasury?, kudos? } }
+rooms/<roomhex>/retracted.json     # canonical lemma names + "group:<id>" retracted by their owner (tombstones)
 rooms/<roomhex>/transcript.jsonl   # one JSON line per inbound message
 ```
 
@@ -105,8 +106,14 @@ memory peer can't resurrect a lemma the author removed. **Note terms-series**
 (`note-series`) are persisted and re-served via `sync-series`: a declaration is
 accepted only when its terms hash to the series stamp (self-verifying), and a
 live `note-series` additionally requires the sender to be the currency's issuer
-(verified anchor). Polls are ephemeral and not persisted. Held notes/receipts are
-never gossiped, so the daemon never stores private bearer value.
+(verified anchor). **Governance groups** are persisted and re-served via
+`sync-gov`: the daemon applies the same group mutation envelopes the browser sends
+(`group-open` / `group-member` admin-gated / `gov-delegate` self-signed /
+`group-issue` / `group-vote` / `group-meta`), and honors a creator's group
+disband (`retract` → tombstone), so groups + delegations + treasury/kudos
+currencies survive when every browser leaves. Polls and the per-group inbox
+(`group-msg`) are ephemeral and not persisted. Held notes/receipts are never
+gossiped, so the daemon never stores private bearer value.
 
 **To reset the room's remembered state**, delete the `--state` directory.
 

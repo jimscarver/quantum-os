@@ -37,7 +37,7 @@ primitives quantum-os already has:
 | **`delegateVote`** | **`/gov delegate`** — standing, revocable, transitive delegation (global or per-issue) |
 | `RevIssuer` / `makeMint` / `transfer` / `checkBalance` | **`/gov treasury`** — a per-group `/note` currency (declare/grant/balance) |
 | `Kudos` / `awardKudos` | **`/gov kudos`** — a per-group `/note` reputation currency |
-| `Inbox` / `Chat` / `sendMail` | `/channel` (per-group tag) — Phase 2b |
+| `Inbox` / `Chat` / `sendMail` | **`/gov say`** — a membership-scoped `group-msg` (only fellow members see it) |
 | `deployerId` identity | `/dyncap` anchor |
 | registry lookup / durable link | `/lemma` + the memory-peer daemon |
 
@@ -82,6 +82,7 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
 | `/gov kudos <member> <n> \| balance` | Award reputation — a per-group kudos `/note` currency (admin issues; members re-gift what they hold) |
+| `/gov say <message>` | Post to the group's inbox — a `group-msg` only fellow members see |
 | `/gov status` | Group overview: members, delegations, issue results |
 | `/forget group <name>` | Disband (creator) / hide (others) — tombstoned, dyncap-signed |
 
@@ -149,5 +150,11 @@ balance), with the currency names recorded on the group (`group-meta`, synced).
 Because notes are bearer instruments, a balance readout shows *your own* holdings,
 not a global ledger.
 
-**Phase 2c (planned):** per-group inbox via `/channel`, hard role/permission
-enforcement, daemon persistence of `group-*`, and more rgov exemplars.
+**Phase 2c (shipped):** a **per-group inbox** (`/gov say` → a membership-scoped
+`group-msg`; only fellow members render it) and **daemon persistence of groups** —
+the headless memory peer now stores `groups.json` and re-serves `sync-gov`, so a
+group's members, delegations, issues, and treasury/kudos currencies survive when
+every browser leaves; it also honors a creator's group disband (`retract` /
+tombstone) and won't resurrect it.
+
+**Phase 2d (planned):** hard role/permission enforcement and more rgov exemplars.
