@@ -286,7 +286,9 @@ function setQpeer(p: QOSPeer | null): void {
 }
 
 function lemmaToCapToken(name: string, tw: Uint8Array): string {
-  return `cap:${name}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
+  // The cap label sits between colons, so slugify spaces out of the name.
+  const label = name.trim().replace(/\s+/g, "-");
+  return `cap:${label}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
 }
 
 function allocateTwists(name: string): Uint8Array {
@@ -906,10 +908,10 @@ function renderLemmas(): void {
   lemmaListEl.innerHTML = "";
   for (const [name, entry] of lemmaStore) {
     const li = document.createElement("li");
-    li.textContent = `@${name}`;
+    li.textContent = lemmaRefStr(name);
     li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.style.cursor = "pointer";
-    li.addEventListener("click", () => { msgInput.value = `/qucalc @${name}`; msgInput.focus(); });
+    li.addEventListener("click", () => { msgInput.value = `/qucalc ${lemmaRefStr(name)}`; msgInput.focus(); });
     lemmaListEl.appendChild(li);
   }
 }
@@ -1097,27 +1099,83 @@ function resolveLemmaToBytes(twistsStr: string): Uint8Array | null {
   return parseSymbolicTwists(twistsStr);
 }
 
+// A lemma name may contain spaces ("all men are mortal"). It is referenced as
+// @[name with spaces] (bare @name still works for single-word names) and stored
+// under a canonical key: trimmed, with inner whitespace collapsed to one space.
+// canonLemma is idempotent and a no-op for single-word names, so applying it at
+// every store boundary is safe and leaves existing lemmas unchanged.
+function canonLemma(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+// Reference token for display / input prefill: @name or @[name with spaces].
+function lemmaRefStr(name: string): string {
+  return /\s/.test(name) ? `@[${name}]` : `@${name}`;
+}
+// Bare name as a command argument (e.g. after /pass): name or [name with spaces].
+function lemmaArgStr(name: string): string {
+  return /\s/.test(name) ? `[${name}]` : name;
+}
+
+type RefTok = { kind: "ref"; name: string } | { kind: "lit"; text: string };
+// Tokenize a command arg into lemma references (@word or @[multi word]) and
+// literal twist tokens, preserving order. Multi-word refs survive the
+// whitespace split that bare tokenization would otherwise break.
+function parseRefTokens(arg: string): RefTok[] {
+  const out: RefTok[] = [];
+  const re = /@\[([^\]]*)\]|@(\S+)|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(arg)) !== null) {
+    if (m[1] !== undefined) out.push({ kind: "ref", name: canonLemma(m[1]) });
+    else if (m[2] !== undefined) out.push({ kind: "ref", name: canonLemma(m[2]) });
+    else if (m[3] !== undefined) out.push({ kind: "lit", text: m[3] });
+  }
+  return out;
+}
+// First @ref in `arg` not in the store, formatted for display (or null).
+function firstUnknownRef(arg: string): string | null {
+  for (const t of parseRefTokens(arg))
+    if (t.kind === "ref" && !lemmaStore.has(t.name)) return lemmaRefStr(t.name);
+  return null;
+}
+// Parse a lone lemma name from an argument: accepts `name`, `[name with spaces]`,
+// `@name`, or `@[name with spaces]`. Returns the canonical key.
+function parseLemmaNameArg(s: string): string {
+  let t = s.trim();
+  if (t.startsWith("@")) t = t.slice(1).trim();
+  const br = t.match(/^\[([^\]]*)\]$/);
+  if (br) t = br[1];
+  return canonLemma(t);
+}
+// Split a `<name> <rest>` argument into [canonicalName, rest], honoring a
+// leading [bracketed name] so multi-word names don't eat the rest.
+function splitLemmaNameArg(arg: string): [string, string] {
+  const t = arg.trim();
+  const br = t.match(/^\[([^\]]*)\]\s*([\s\S]*)$/);
+  if (br) return [canonLemma(br[1]), br[2].trim()];
+  const sp = t.search(/\s/);
+  if (sp === -1) return [canonLemma(t), ""];
+  return [canonLemma(t.slice(0, sp)), t.slice(sp + 1).trim()];
+}
+
 function expandLemmaRefs(arg: string): {
   expanded: string;
   components: Array<{ label: string | null; twists: string }>;
 } | null {
-  const tokens = arg.trim().split(/\s+/);
   const components: Array<{ label: string | null; twists: string }> = [];
   const parts: string[] = [];
-  for (const tok of tokens) {
-    if (tok.startsWith("@")) {
-      const name = tok.slice(1);
-      const entry = lemmaStore.get(name);
+  for (const t of parseRefTokens(arg)) {
+    if (t.kind === "ref") {
+      const entry = lemmaStore.get(t.name);
       if (!entry) return null;
       const tw = tokenTwists(entry.twists);
       const resolved = entry.twists.startsWith("cap:") && tw
         ? twistsToSymbolic(tw)
         : entry.twists;
       parts.push(resolved);
-      components.push({ label: name, twists: resolved });
-    } else if (tok.length > 0) {
-      parts.push(tok);
-      components.push({ label: null, twists: tok });
+      components.push({ label: t.name, twists: resolved });
+    } else {
+      parts.push(t.text);
+      components.push({ label: null, twists: t.text });
     }
   }
   return { expanded: parts.join(""), components };
@@ -1277,6 +1335,7 @@ function handleCommand(raw: string): string[] {
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
+      sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
       break;
 
@@ -1408,21 +1467,21 @@ function handleCommand(raw: string): string[] {
         } else {
           sys(`lemmas (${lemmaStore.size}):`);
           for (const [name, entry] of lemmaStore) {
-            sys(`  @${name}  =  ${entry.twists}${entry.cap ? `  [cap: ${entry.cap}]` : ""}  (by ${entry.who})`);
+            sys(`  ${lemmaRefStr(name)}  =  ${entry.twists}${entry.cap ? `  [cap: ${entry.cap}]` : ""}  (by ${entry.who})`);
           }
         }
         break;
       }
-      const lemmaParts = arg.trim().split(/\s+/);
-      const lemmaName = lemmaParts[0];
-      const lemmaTwistsArg = lemmaParts.slice(1).join(" ").trim();
+      // Name may be bracketed for multi-word: /lemma [all men are mortal] <tw>.
+      const [lemmaName, lemmaTwistsArg] = splitLemmaNameArg(arg);
       if (!lemmaName) {
         sys("usage: /lemma <name> [twists|@ref1 @ref2|cap:token]");
+        sys("  multi-word name: /lemma [all men are mortal] ^v<>  (reference as @[all men are mortal])");
         sys("  omit twists to auto-allocate from the name");
         break;
       }
-      if (!/^[a-zA-Z0-9_-]+$/.test(lemmaName)) {
-        sys(`invalid lemma name: '${lemmaName}'  (use letters, digits, _ or -)`);
+      if (/[\[\]:]/.test(lemmaName)) {
+        sys(`invalid lemma name: '${lemmaName}'  (no brackets or colons; spaces OK via [name])`);
         break;
       }
       const isAutoAlloc = !lemmaTwistsArg;
@@ -1432,8 +1491,7 @@ function handleCommand(raw: string): string[] {
       } else if (lemmaTwistsArg.includes("@")) {
         const result = expandLemmaRefs(lemmaTwistsArg);
         if (!result) {
-          const badName = lemmaTwistsArg.split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
-          sys(`unknown lemma reference: ${badName ?? "@?"}`);
+          sys(`unknown lemma reference: ${firstUnknownRef(lemmaTwistsArg) ?? "@?"}`);
           break;
         }
         resolvedTwistsStr = result.expanded;
@@ -1451,19 +1509,19 @@ function handleCommand(raw: string): string[] {
       // different content would silently corrupt the shared vocabulary.
       const existing = lemmaStore.get(lemmaName);
       if (existing && existing.twists !== resolvedTwistsStr) {
-        sys(`@${lemmaName} already declared with different twists (${existing.twists})`);
+        sys(`${lemmaRefStr(lemmaName)} already declared with different twists (${existing.twists})`);
         sys("  · refusing re-declaration; choose a new name");
         break;
       }
       if (existing && existing.twists === resolvedTwistsStr) {
-        sys(`@${lemmaName} already declared (no change)`);
+        sys(`${lemmaRefStr(lemmaName)} already declared (no change)`);
         break;
       }
       const { pos: lPos, neg: lNeg, balanced: lBal } = twistStats(checkTw);
       const lemWho = myName || (qpeer ? shortId(qpeer.peerId) : "local");
       const lemCap = lBal ? lemmaToCapToken(lemmaName, checkTw) : undefined;
       lemmaStore.set(lemmaName, { twists: resolvedTwistsStr, who: lemWho, cap: lemCap });
-      sys(`lemma registered: @${lemmaName}  =  ${resolvedTwistsStr}${isAutoAlloc ? "  (auto-allocated)" : ""}`);
+      sys(`lemma registered: ${lemmaRefStr(lemmaName)}  =  ${resolvedTwistsStr}${isAutoAlloc ? "  (auto-allocated)" : ""}`);
       sys(`  twists: ${checkTw.length}  (${lPos}+/${lNeg}-)  ZFA: ${lBal ? "✓" : "✗"}`);
       if (lemCap) sys(`  cap: ${lemCap}  (share with /zfa to verify)`);
       signedBroadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
@@ -1535,7 +1593,7 @@ function handleCommand(raw: string): string[] {
       } else if (arg.trim().includes("@")) {
         const result = expandLemmaRefs(arg.trim());
         if (!result) {
-          const badName = arg.trim().split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
+          const badName = firstUnknownRef(arg.trim());
           sys(`unknown lemma: ${badName ?? "@?"}  (type /lemma to list)`);
           break;
         }
@@ -1567,7 +1625,7 @@ function handleCommand(raw: string): string[] {
           const tw = parseSymbolicTwists(c.twists);
           if (!tw) continue;
           const s = twistStats(tw);
-          const lbl = c.label ? `@${c.label}` : `(${c.twists})`;
+          const lbl = c.label ? lemmaRefStr(c.label) : `(${c.twists})`;
           sys(`    ${lbl}  →  ${c.twists}  (${s.pos}+/${s.neg}-)  ZFA: ${s.balanced ? "✓" : "✗"}`);
         }
         sys(`  composed: ${symbolic}  (${qtwists.length} total)`);
@@ -1604,7 +1662,7 @@ function handleCommand(raw: string): string[] {
       } else if (arg.trim().includes("@")) {
         const result = expandLemmaRefs(arg.trim());
         if (!result) {
-          const badName = arg.trim().split(/\s+/).find(t => t.startsWith("@") && !lemmaStore.has(t.slice(1)));
+          const badName = firstUnknownRef(arg.trim());
           sys(`unknown lemma: ${badName ?? "@?"}  (type /lemma to list)`);
           break;
         }
@@ -1695,24 +1753,23 @@ function handleCommand(raw: string): string[] {
     }
 
     case "request": {
-      const lemmaName = arg.trim();
-      if (!lemmaName) { sys("usage: /request <lemma-name>"); break; }
+      const lemmaName = parseLemmaNameArg(arg);
+      if (!lemmaName) { sys("usage: /request <lemma-name>  (multi-word: /request [name with spaces])"); break; }
       if (!qpeer) { sys("not connected"); break; }
-      if (lemmaStore.has(lemmaName)) { sys(`you already hold @${lemmaName}`); break; }
+      if (lemmaStore.has(lemmaName)) { sys(`you already hold ${lemmaRefStr(lemmaName)}`); break; }
       const myLabel = myName || shortId(qpeer.peerId);
       qpeer.broadcast({ kind: "lemma-request", name: lemmaName, fromName: myLabel });
-      sys(`· requested @${lemmaName} — waiting for holder to /pass it`);
+      sys(`· requested ${lemmaRefStr(lemmaName)} — waiting for holder to /pass it`);
       break;
     }
 
     case "pass": {
-      const passParts = arg.trim().split(/\s+/);
-      const passLemma = passParts[0];
-      const targetName = passParts.slice(1).join(" ").trim();
-      if (!passLemma || !targetName) { sys("usage: /pass <lemma-name> <peer-name>"); break; }
+      // Name may be bracketed for multi-word: /pass [all men are mortal] Alice.
+      const [passLemma, targetName] = splitLemmaNameArg(arg);
+      if (!passLemma || !targetName) { sys("usage: /pass <lemma-name> <peer-name>  (multi-word: /pass [name] peer)"); break; }
       if (!qpeer) { sys("not connected"); break; }
       const passEntry = lemmaStore.get(passLemma);
-      if (!passEntry) { sys(`you don't hold @${passLemma} — nothing to pass`); break; }
+      if (!passEntry) { sys(`you don't hold ${lemmaRefStr(passLemma)} — nothing to pass`); break; }
       const targetId = findPeerByName(targetName);
       if (!targetId) { sys(`unknown peer: '${targetName}'  (check Peers list for exact name)`); break; }
       const sent = qpeer.send(targetId, { kind: "lemma-pass", name: passLemma, twists: passEntry.twists, cap: passEntry.cap });
@@ -1720,7 +1777,7 @@ function handleCommand(raw: string): string[] {
       lemmaStore.delete(passLemma);
       saveLemmas();
       renderLemmas();
-      sys(`· @${passLemma} transferred to ${targetName} — removed from your lemmas`);
+      sys(`· ${lemmaRefStr(passLemma)} transferred to ${targetName} — removed from your lemmas`);
       if (passEntry.cap) sys(`  cap: ${passEntry.cap}`);
       break;
     }
@@ -2440,9 +2497,9 @@ function handleCommand(raw: string): string[] {
         let payload: Record<string, unknown> | null = null;
 
         if (sub.startsWith("@")) {
-          const name = sub.slice(1);
+          const name = parseLemmaNameArg(sub);
           const entry = lemmaStore.get(name);
-          if (!entry) { sys(`you don't hold @${name}`); break; }
+          if (!entry) { sys(`you don't hold ${lemmaRefStr(name)}`); break; }
           payload = {
             kind: "persist-request", id: reqId, persistKind: "lemma",
             fromName: myLabel,
@@ -2554,7 +2611,7 @@ function handleCommand(raw: string): string[] {
         break;
       }
       const rhoCtx: RhoQuContext = {
-        hasLemma:  (name) => lemmaStore.has(name),
+        hasLemma:  (name) => lemmaStore.has(canonLemma(name)),
         balance:   (currency) => {
           let total = 0;
           for (const n of noteStore.values()) if (n.currency === currency) total += n.denomination;
@@ -2665,11 +2722,11 @@ function handleCommand(raw: string): string[] {
       };
 
       if (selector.startsWith("@")) {
-        const lemmaName = selector.slice(1).trim();
+        const lemmaName = parseLemmaNameArg(selector);
         const entry = lemmaStore.get(lemmaName);
-        if (!entry) { sys(`you don't hold @${lemmaName} in this room — nothing to share`); break; }
-        sys(`· sharing @${lemmaName} → ${shortId(target.roomId)}`);
-        runIn(target, `/lemma ${lemmaName} ${entry.twists}`);
+        if (!entry) { sys(`you don't hold ${lemmaRefStr(lemmaName)} in this room — nothing to share`); break; }
+        sys(`· sharing ${lemmaRefStr(lemmaName)} → ${shortId(target.roomId)}`);
+        runIn(target, `/lemma ${lemmaArgStr(lemmaName)} ${entry.twists}`);
       } else if (selector.startsWith("msg ")) {
         const text = selector.slice(4);
         sys(`· sharing chat → ${shortId(target.roomId)}`);
@@ -2861,7 +2918,7 @@ function connect(): void {
             addMessage("", status, "system");
             return;
           }
-          const name = String(d.name ?? "").trim();
+          const name = canonLemma(String(d.name ?? ""));
           const twists = String(d.twists ?? "").trim();
           const cap = d.cap ? String(d.cap) : undefined;
           const who = peerLabel(from);
@@ -2871,8 +2928,8 @@ function connect(): void {
           // and surface the disagreement; the consensus probe will catch up.
           const existing = lemmaStore.get(name);
           if (existing && existing.twists !== twists) {
-            addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
-            addMessage("", `  ⚠ refused: @${name} already declared with different twists (${existing.twists})`, "system");
+            addMessage(from, `/lemma ${lemmaArgStr(name)} ${twists}`, "peer", who);
+            addMessage("", `  ⚠ refused: ${lemmaRefStr(name)} already declared with different twists (${existing.twists})`, "system");
             return;
           }
           if (existing && existing.twists === twists) {
@@ -2880,24 +2937,24 @@ function connect(): void {
           }
           if (name && twists) {
             lemmaStore.set(name, { twists, who, cap, dyncap });
-            addMessage(from, `/lemma ${name} ${twists}`, "peer", who);
-            addMessage("", `  @${name} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
+            addMessage(from, `/lemma ${lemmaArgStr(name)} ${twists}`, "peer", who);
+            addMessage("", `  ${lemmaRefStr(name)} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
             saveLemmas();
             renderLemmas();
           }
           return;
         }
         if (d.kind === "lemma-request") {
-          const name = String(d.name ?? "").trim();
+          const name = canonLemma(String(d.name ?? ""));
           const fromName = String(d.fromName ?? peerLabel(from));
-          addMessage(from, `requests @${name}`, "peer", fromName);
+          addMessage(from, `requests ${lemmaRefStr(name)}`, "peer", fromName);
           if (lemmaStore.has(name)) {
-            addMessage("", `  · you hold @${name} — type /pass ${name} ${fromName} to transfer`, "system");
+            addMessage("", `  · you hold ${lemmaRefStr(name)} — type /pass ${lemmaArgStr(name)} ${fromName} to transfer`, "system");
           }
           return;
         }
         if (d.kind === "lemma-pass") {
-          const name = String(d.name ?? "").trim();
+          const name = canonLemma(String(d.name ?? ""));
           const twists = String(d.twists ?? "").trim();
           const cap = d.cap ? String(d.cap) : undefined;
           const who = peerLabel(from);
@@ -2905,8 +2962,8 @@ function connect(): void {
             lemmaStore.set(name, { twists, who, cap });
             saveLemmas();
             renderLemmas();
-            addMessage(from, `passes @${name}`, "peer", who);
-            addMessage("", `  · @${name} received from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
+            addMessage(from, `passes ${lemmaRefStr(name)}`, "peer", who);
+            addMessage("", `  · ${lemmaRefStr(name)} received from ${who}${cap ? `  [cap: ${cap}]` : ""}`, "system");
             if (cap) addMessage("", `  · run /zfa ${cap} to verify`, "system");
           }
           return;
@@ -3033,7 +3090,7 @@ function connect(): void {
           if (probe.open) recordSyncObservations(from, entries, []);
           let added = 0;
           for (const e of entries) {
-            const name   = String(e.name   ?? "").trim();
+            const name   = canonLemma(String(e.name ?? ""));
             const twists = String(e.twists ?? "").trim();
             if (!name || !twists) continue;
             if (lemmaStore.has(name)) continue;
@@ -3833,7 +3890,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   { label: "Call",       ico: "📞", fill: "",                hint: "" },
   { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
-  { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
+  { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality  (multi-word: /lemma [all men are mortal])" },
   { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
   { label: "Swap",       ico: "⇄", fill: "/rdv swap ",      hint: "atomic swap, e.g. /rdv swap USD 30 EUR 20 Alice" },
   { label: "Channel",    ico: "#", fill: "/channel send ",  hint: "tagged message, e.g. /channel send news hello" },
