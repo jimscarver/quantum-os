@@ -17,6 +17,8 @@ import { findDiscrepancies, losingPeersIn, normalizeValue,
 import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHandler as RhoQuOnHandler } from "./rhoqu.js";
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
+import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
+         type Group, type Issue, type Role } from "./gov.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -172,6 +174,8 @@ interface RoomContext {
   // Polls: pollId -> Poll (persisted); live card DOM nodes (in-memory only).
   pollStore: Map<string, Poll>;
   pollCards: Map<string, HTMLElement>;
+  // Governance: groupId -> Group (liquid-democracy groups; persisted).
+  groupStore: Map<string, Group>;
   // Retraction tombstones: "<kind>:<id>" of removed gossiped items (poll/lemma)
   // so a peer's later sync-* can't heal them back. Persisted per room.
   retracted: Set<string>;
@@ -212,6 +216,7 @@ function createRoom(roomId: string): RoomContext {
     rhoquHandlers: [],
     pollStore: new Map(),
     pollCards: new Map(),
+    groupStore: new Map(),
     retracted: new Set(),
     chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
@@ -269,6 +274,8 @@ let pendingPersistRequests: Map<string, PersistRequest> = new Map();
 let rhoquHandlers: RhoQuOnHandler[] = [];
 let pollStore: Map<string, Poll> = new Map();
 let pollCards: Map<string, HTMLElement> = new Map();
+let groupStore: Map<string, Group> = new Map();
+let focusedGroup: string | null = null;   // groupId that /gov subcommands act on
 let retracted: Set<string> = new Set();
 
 function setActiveRoom(ctx: RoomContext): void {
@@ -297,6 +304,7 @@ function setActiveRoom(ctx: RoomContext): void {
   rhoquHandlers = ctx.rhoquHandlers;
   pollStore          = ctx.pollStore;
   pollCards          = ctx.pollCards;
+  groupStore         = ctx.groupStore;
   retracted          = ctx.retracted;
 }
 
@@ -342,6 +350,21 @@ function loadLemmas(): void {
 function savePolls(): void {
   localStorage.setItem(`qos-polls-${activeRoom.roomId}`,
     JSON.stringify(Object.fromEntries(pollStore.entries())));
+}
+
+function saveGroups(): void {
+  localStorage.setItem(`qos-groups-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(groupStore.entries())));
+}
+
+function loadGroups(): void {
+  const raw = localStorage.getItem(`qos-groups-${activeRoom.roomId}`);
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw) as Record<string, Group>;
+    for (const [id, g] of Object.entries(data)) groupStore.set(id, g);
+    renderGroups();
+  } catch { /* ignore corrupt data */ }
 }
 
 function loadPolls(): void {
@@ -863,6 +886,7 @@ function loadRoomState(ctx: RoomContext): void {
   loadLemmas();
   loadNotes();
   loadPolls();
+  loadGroups();
   loadRetracted();
   if (previousActive) setActiveRoom(previousActive);
 }
@@ -1394,7 +1418,8 @@ function handleCommand(raw: string): string[] {
       sys("  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
-      sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · list");
+      sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
+      sys("  /gov <sub>       — liquid-democracy groups: new · show · member · issue · delegate · vote · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1529,6 +1554,103 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "gov": {
+      const gParts = arg.trim().split(/\s+/);
+      const gsub = (gParts[0] || "").toLowerCase();
+      const grest = gParts.slice(1).join(" ").trim();
+      const focused = (): Group | null =>
+        focusedGroup ? (groupStore.get(focusedGroup) ?? null)
+                     : (groupStore.size === 1 ? [...groupStore.values()][0] : null);
+
+      if (!gsub || gsub === "list") {
+        if (groupStore.size === 0) { sys("no groups yet — /gov new <name>"); break; }
+        sys(`groups (${groupStore.size}):`);
+        for (const grp of groupStore.values())
+          sys(`  🏛 ${grp.name}  (${Object.keys(grp.members).length} members · ${grp.issues.length} issues)${grp.id === focusedGroup ? "  ◂ focused" : ""}`);
+        sys("  /gov show <name>  to focus + view a group");
+        break;
+      }
+      if (gsub === "new") {
+        if (!grest) { sys("usage: /gov new <group name>"); break; }
+        const ng = createGroup(grest);
+        sys(`🏛 created group “${ng.name}” — you are admin. /gov member add <peer>, /gov issue <title>, /gov vote …`);
+        showGroupCard(ng);
+        break;
+      }
+      if (gsub === "show") {
+        const sg = grest ? findGroup(grest) : focused();
+        if (!sg) { sys("group not found — /gov list"); break; }
+        showGroupCard(sg);
+        sys(`focused “${sg.name}”`);
+        break;
+      }
+
+      const g = focused();
+      if (!g) { sys("no focused group — /gov show <name> first (or /gov new)"); break; }
+      const meId = myPeerId();
+
+      if (gsub === "status") {
+        sys(`🏛 ${g.name} — ${Object.keys(g.members).length} members, ${g.issues.length} issues`);
+        for (const m of Object.values(g.members)) {
+          const del = g.delegations[m.peerId]?.delegate;
+          sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}`);
+        }
+        for (const i of g.issues) sys(`  ▸ ${i.title} — ${issueResultText(g, i)}`);
+        showGroupCard(g);
+        break;
+      }
+      if (gsub === "member") {
+        const op = (gParts[1] || "").toLowerCase();
+        if (op === "add" || op === "remove") {
+          if (!isAdmin(g, meId)) { sys("only an admin can manage members"); break; }
+          const pid = gParts[2] ? findPeerByName(gParts[2]) : null;
+          if (!pid) { sys(`usage: /gov member ${op} <peer>  (peer not found)`); break; }
+          if (op === "add") { const role: Role = (gParts[3] || "").toLowerCase() === "admin" ? "admin" : "member"; govSetMember(g, pid, role, peerLabel(pid)); sys(`added ${peerLabel(pid)} as ${role}`); }
+          else { if (pid === g.creator) { sys("can't remove the group creator"); break; } govRemoveMember(g, pid); sys(`removed ${peerLabel(pid)}`); }
+          break;
+        }
+        for (const m of Object.values(g.members)) sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}`);
+        break;
+      }
+      if (gsub === "issue") {
+        if (!grest || grest.toLowerCase() === "list") {
+          if (!g.issues.length) sys("no issues yet — /gov issue <title>");
+          for (const i of g.issues) sys(`  ▸ ${i.title} — ${issueResultText(g, i)}`);
+          break;
+        }
+        if (!isMember(g, meId)) { sys("only members can add issues"); break; }
+        const iss = govNewIssue(g, grest); sys(`▸ issue recorded: ${iss.title}`);
+        break;
+      }
+      if (gsub === "delegate") {
+        if (!isMember(g, meId)) { sys("only members can delegate"); break; }
+        const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
+        if (!pid || !isMember(g, pid)) { sys("usage: /gov delegate <member>"); break; }
+        if (pid === meId) { sys("can't delegate to yourself"); break; }
+        govSetDelegate(g, pid);
+        sys(`you delegate to ${peerLabel(pid)} — your vote flows to them unless you vote`);
+        break;
+      }
+      if (gsub === "undelegate") { govSetDelegate(g, null); sys("delegation cleared — you vote directly"); break; }
+      if (gsub === "vote") {
+        if (!isMember(g, meId)) { sys("only members can open a vote"); break; }
+        let rest = grest; let method: PollMethod = "approval";
+        if (/\branked\b/i.test(rest)) { method = "ranked"; rest = rest.replace(/\branked\b/i, "").trim(); }
+        const bar = rest.indexOf("|");
+        const title = (bar === -1 ? rest : rest.slice(0, bar)).trim();
+        const opts = bar === -1 ? [] : rest.slice(bar + 1).split(",").map((s) => s.trim()).filter(Boolean);
+        if (!title) { sys("usage: /gov vote <issue> | option1, option2 [ranked]"); break; }
+        if (opts.length < 2) { sys("provide at least two options after |"); break; }
+        const issue = govNewIssue(g, title);
+        govOpenVote(g, issue, method, opts);
+        sys(`🗳 vote opened on “${issue.title}” (${method}). Members vote on the poll card; non-voters' weight flows to their delegate.`);
+        showGroupCard(g);
+        break;
+      }
+      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> · undelegate · vote <issue> | opts [ranked] · status · list");
+      break;
+    }
+
     case "forget": {
       const sub = (parts[1] || "").toLowerCase();
       const rest = parts.slice(2).join(" ").trim();
@@ -1563,8 +1685,14 @@ function handleCommand(raw: string): string[] {
         forgetNote(token);
         break;
       }
-      sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | list>");
-      sys("  poll/lemma: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
+      if (sub === "group") {
+        const g = findGroup(rest);
+        if (!g) { sys("usage: /forget group <name>  (see Governance list)"); break; }
+        forgetGroup(g);
+        break;
+      }
+      sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | group <name> | list>");
+      sys("  poll/lemma/group: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
       break;
     }
 
@@ -3766,7 +3894,90 @@ function connect(): void {
             saveLemmas();
             renderLemmas();
             addMessage("", `  · ${lemmaRefStr(name)} retracted by ${peerLabel(from)}`, "system");
+          } else if (what === "group") {
+            const g = groupStore.get(id);
+            if (!g || from !== g.creator) return;          // only the creator disbands for everyone
+            markRetracted("group", id);
+            groupStore.delete(id);
+            const node = govCards.get(id); if (node?.isConnected) node.remove();
+            govCards.delete(id);
+            saveGroups();
+            renderGroups();
+            addMessage("", `🏛 group “${g.name}” disbanded by ${peerLabel(from)}`, "system");
           }
+          return;
+        }
+        if (d.kind === "group-open") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const id = String(d.id ?? "");
+          if (!id || groupStore.has(id) || isRetracted("group", id)) return;
+          const creatorLabel = String(d.creatorLabel ?? peerLabel(from));
+          const g: Group = {
+            id, name: String(d.name ?? ""), creator: from, creatorLabel,
+            createdAt: typeof d.createdAt === "number" ? d.createdAt : Date.now(),
+            members: { [from]: { peerId: from, role: "admin", label: creatorLabel, at: Date.now() } },
+            delegations: {}, issues: [],
+          };
+          groupStore.set(id, g);
+          saveGroups(); renderGroups();
+          addMessage(from, `created group “${g.name}”`, "peer", creatorLabel);
+          return;
+        }
+        if (d.kind === "group-member") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          if (!g || !isAdmin(g, from)) return;                 // only admins manage membership
+          const peerId = String(d.peerId ?? ""); if (!peerId) return;
+          if (d.remove === true) { delete g.members[peerId]; delete g.delegations[peerId]; }
+          else g.members[peerId] = { peerId, role: d.role === "admin" ? "admin" : "member", label: String(d.label ?? peerLabel(peerId)), at: Date.now() };
+          saveGroups(); renderGroups();
+          return;
+        }
+        if (d.kind === "gov-delegate") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          const delegator = String(d.delegator ?? from);
+          if (!g || from !== delegator || !isMember(g, delegator)) return;   // self-signed only
+          const delegate = d.delegate == null ? null : String(d.delegate);
+          if (delegate === null) delete g.delegations[delegator];
+          else if (isMember(g, delegate) && delegate !== delegator) g.delegations[delegator] = { delegate, at: Date.now() };
+          saveGroups(); renderGroups();
+          return;
+        }
+        if (d.kind === "group-issue") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          if (!g || !isMember(g, from)) return;
+          const r = d.issue as Record<string, unknown> | undefined;
+          const title = r ? String(r.title ?? "").trim() : "";
+          if (!title) return;
+          const iid = String(r!.id ?? issueId(title));
+          if (!g.issues.find((i) => i.id === iid)) {
+            g.issues.push({ id: iid, title, by: String(r!.by ?? peerLabel(from)), at: typeof r!.at === "number" ? r!.at as number : Date.now(), status: "open" });
+            saveGroups(); renderGroups();
+          }
+          return;
+        }
+        if (d.kind === "group-vote") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          if (!g || !isMember(g, from)) return;
+          const issue = g.issues.find((i) => i.id === String(d.issueId ?? ""));
+          if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); }
+          return;
+        }
+        if (d.kind === "sync-gov") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (!Array.isArray(d.groups)) return;
+          let changed = 0;
+          for (const raw of d.groups as unknown[]) if (mergeGroupFromSync(raw)) changed++;
+          if (changed) { saveGroups(); renderGroups(); }
           return;
         }
         if (d.kind === "file-start") { handleFileStart(d); return; }
@@ -3811,6 +4022,10 @@ function connect(): void {
         if (pollStore.size > 0) {
           const polls = Array.from(pollStore.values());
           signedSend(peerId, { kind: "sync-polls", polls });
+        }
+        if (groupStore.size > 0) {
+          const groups = Array.from(groupStore.values());
+          signedSend(peerId, { kind: "sync-gov", groups });
         }
       } finally { setActiveRoom(prev); }
     },
@@ -3884,7 +4099,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -4143,7 +4358,8 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "note",    template: "/note ",      desc: "promissory notes (grant|pass|redeem…)" },
   { name: "rdv",     template: "/rdv ",       desc: "atomic n-party swap (swap|accept…)" },
   { name: "poll",    template: "/poll ",      desc: "group vote (approval / ranked-choice)" },
-  { name: "forget",  template: "/forget ",    desc: "remove a poll / lemma / note" },
+  { name: "forget",  template: "/forget ",    desc: "remove a poll / lemma / note / group" },
+  { name: "gov",     template: "/gov ",       desc: "liquid-democracy groups + delegated voting" },
   { name: "dyncap",  template: "/dyncap ",    desc: "dynamic capabilities (status|peers)" },
   { name: "probe",   template: "/probe ",     desc: "consensus discrepancy probe" },
   { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
@@ -4433,6 +4649,54 @@ function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
   return changed ? "updated" : "none";
 }
 
+// Merge a Group received in a join handshake (sync-gov): adopt an unknown group
+// whole; for a known group, union members / delegations / issues by latest `at`.
+// Tombstoned groups are skipped. Returns whether anything changed.
+function mergeGroupFromSync(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const r = raw as Record<string, unknown>;
+  const id = String(r.id ?? "");
+  if (!id || isRetracted("group", id)) return false;
+  const inMembers = (r.members && typeof r.members === "object") ? r.members as Record<string, { peerId?: string; role?: string; label?: string; at?: number }> : {};
+  const inDeleg = (r.delegations && typeof r.delegations === "object") ? r.delegations as Record<string, { delegate?: string; at?: number }> : {};
+  const inIssues = Array.isArray(r.issues) ? r.issues as Array<Record<string, unknown>> : [];
+
+  const existing = groupStore.get(id);
+  if (!existing) {
+    const members: Group["members"] = {};
+    for (const [pid, m] of Object.entries(inMembers)) members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at: typeof m.at === "number" ? m.at : 0 };
+    const delegations: Group["delegations"] = {};
+    for (const [pid, dl] of Object.entries(inDeleg)) if (dl.delegate) delegations[pid] = { delegate: String(dl.delegate), at: typeof dl.at === "number" ? dl.at : 0 };
+    const issues: Issue[] = inIssues.map((i): Issue => ({ id: String(i.id ?? issueId(String(i.title ?? ""))), title: String(i.title ?? ""), by: String(i.by ?? "?"), at: typeof i.at === "number" ? i.at as number : 0, status: i.status === "closed" ? "closed" : "open", pollId: i.pollId ? String(i.pollId) : undefined })).filter((i) => i.title);
+    groupStore.set(id, {
+      id, name: String(r.name ?? ""), creator: String(r.creator ?? ""), creatorLabel: String(r.creatorLabel ?? "?"),
+      createdAt: typeof r.createdAt === "number" ? r.createdAt : 0, members, delegations, issues,
+    });
+    return true;
+  }
+
+  let changed = false;
+  for (const [pid, m] of Object.entries(inMembers)) {
+    const cur = existing.members[pid];
+    const at = typeof m.at === "number" ? m.at : 0;
+    if (!cur || at > cur.at) { existing.members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at }; changed = true; }
+  }
+  for (const [pid, dl] of Object.entries(inDeleg)) {
+    const cur = existing.delegations[pid];
+    const at = typeof dl.at === "number" ? dl.at : 0;
+    if (dl.delegate && (!cur || at > cur.at)) { existing.delegations[pid] = { delegate: String(dl.delegate), at }; changed = true; }
+  }
+  for (const i of inIssues) {
+    const iid = String(i.id ?? issueId(String(i.title ?? "")));
+    const title = String(i.title ?? "");
+    if (!title) continue;
+    const cur = existing.issues.find((x) => x.id === iid);
+    if (!cur) { existing.issues.push({ id: iid, title, by: String(i.by ?? "?"), at: typeof i.at === "number" ? i.at as number : 0, status: i.status === "closed" ? "closed" : "open", pollId: i.pollId ? String(i.pollId) : undefined }); changed = true; }
+    else if (i.pollId && !cur.pollId) { cur.pollId = String(i.pollId); changed = true; }
+  }
+  return changed;
+}
+
 // Resolve a free-text choice list to option ids: option text (exact then prefix)
 // or 1-based number into the displayed order. Ranked uses ">".
 function resolveChoices(poll: Poll, raw: string): string[] {
@@ -4566,7 +4830,7 @@ function forgetNote(token: string): void {
   addMessage("", `· deleted ${n.currency} ${n.denomination} note (value destroyed)`, "system");
 }
 
-function createPoll(question: string, optionTexts: string[], method: PollMethod): void {
+function createPoll(question: string, optionTexts: string[], method: PollMethod): Poll {
   const id = `poll-${myPeerId().slice(-4)}-${Date.now().toString(36)}`;
   const by = myName || shortId(myPeerId());
   const options: PollOption[] = optionTexts.map((t, k) => ({ id: optionId(t), text: t, by, at: Date.now() + k }));
@@ -4583,6 +4847,7 @@ function createPoll(question: string, optionTexts: string[], method: PollMethod)
     kind: "poll-open", id, question, method, options,
     creator: poll.creator, creatorLabel: poll.creatorLabel, createdAt: poll.createdAt,
   });
+  return poll;
 }
 
 function buildPollCard(poll: Poll): HTMLElement {
@@ -4800,6 +5065,218 @@ function renderPolls(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Governance — liquid-democracy groups (gov.ts)
+// ---------------------------------------------------------------------------
+
+const govListEl  = document.getElementById("gov-list");
+const govCountEl = document.getElementById("gov-count");
+const govCards = new Map<string, HTMLElement>();   // groupId -> live card node
+
+function govLabel(): string { return myName || shortId(myPeerId()); }
+
+function findGroup(arg: string): Group | null {
+  if (!arg) return null;
+  if (groupStore.has(arg)) return groupStore.get(arg)!;
+  const low = arg.trim().toLowerCase();
+  let pfx: Group | null = null;
+  for (const g of groupStore.values()) {
+    if (g.name.toLowerCase() === low) return g;
+    if (!pfx && g.name.toLowerCase().startsWith(low)) pfx = g;
+  }
+  return pfx;
+}
+
+// Delegation-resolved effective weights for a group's issue poll (members only).
+function govWeights(g: Group, poll: Poll): Record<string, number> {
+  const members = Object.keys(g.members);
+  const deleg: Record<string, string> = {};
+  for (const [d, dl] of Object.entries(g.delegations)) deleg[d] = dl.delegate;
+  const direct = new Set(members.filter((p) => (poll.ballots[p]?.length ?? 0) > 0));
+  return resolveWeights(members, deleg, direct).weightByVoter;
+}
+
+function createGroup(name: string): Group {
+  const id = `grp-${myPeerId().slice(-4)}-${Date.now().toString(36)}`;
+  const me = myPeerId(); const label = govLabel();
+  const g: Group = { id, name, creator: me, creatorLabel: label, createdAt: Date.now(),
+    members: { [me]: { peerId: me, role: "admin", label, at: Date.now() } }, delegations: {}, issues: [] };
+  groupStore.set(id, g); saveGroups(); renderGroups();
+  signedBroadcast({ kind: "group-open", id, name, creatorLabel: label, createdAt: g.createdAt });
+  return g;
+}
+
+function govSetMember(g: Group, peerId: string, role: Role, label: string): void {
+  g.members[peerId] = { peerId, role, label, at: Date.now() };
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "group-member", groupId: g.id, peerId, role, label });
+}
+function govRemoveMember(g: Group, peerId: string): void {
+  delete g.members[peerId]; delete g.delegations[peerId];
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "group-member", groupId: g.id, peerId, remove: true });
+}
+function govSetDelegate(g: Group, delegate: string | null): void {
+  const me = myPeerId();
+  if (delegate === null) delete g.delegations[me];
+  else g.delegations[me] = { delegate, at: Date.now() };
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "gov-delegate", groupId: g.id, delegator: me, delegate });
+}
+function govNewIssue(g: Group, title: string): Issue {
+  const iid = issueId(title);
+  let iss = g.issues.find((i) => i.id === iid);
+  if (!iss) {
+    iss = { id: iid, title, by: govLabel(), at: Date.now(), status: "open" };
+    g.issues.push(iss); saveGroups(); renderGroups(); refreshGroupCard(g);
+    signedBroadcast({ kind: "group-issue", groupId: g.id, issue: iss });
+  }
+  return iss;
+}
+function govOpenVote(g: Group, issue: Issue, method: PollMethod, optionTexts: string[]): void {
+  const poll = createPoll(`[${g.name}] ${issue.title}`, optionTexts, method);
+  issue.pollId = poll.id; issue.status = "open";
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "group-vote", groupId: g.id, issueId: issue.id, pollId: poll.id });
+}
+function forgetGroup(g: Group): void {
+  const mine = g.creator === myPeerId();
+  markRetracted("group", g.id);
+  groupStore.delete(g.id);
+  saveGroups(); renderGroups();
+  const node = govCards.get(g.id); if (node?.isConnected) node.remove();
+  govCards.delete(g.id);
+  if (mine) { signedBroadcast({ kind: "retract", what: "group", id: g.id }); addMessage("", `🏛 group “${g.name}” disbanded`, "system"); }
+  else addMessage("", `🏛 group “${g.name}” hidden for you`, "system");
+}
+
+// One issue's weighted result line: leader (open) / winner (closed) + total weight.
+function issueResultText(g: Group, issue: Issue): string {
+  if (!issue.pollId) return "no vote yet";
+  const poll = pollStore.get(issue.pollId);
+  if (!poll) return "vote pending sync";
+  const weights = govWeights(g, poll);
+  const res = tally(poll, weights);
+  const verb = poll.status === "closed" ? "winner" : "leading";
+  return `${verb}: ${summarizeWinners(poll, res).replace(/^.*?: /, "")} · ${res.totalBallots} weight`;
+}
+
+function buildGroupCard(g: Group): HTMLElement {
+  const me = myPeerId();
+  const admin = isAdmin(g, me);
+  const member = isMember(g, me);
+  const card = document.createElement("div");
+  card.className = "gov-card";
+
+  const h = document.createElement("div");
+  h.className = "gov-title";
+  h.textContent = `🏛 ${g.name} `;
+  const badge = document.createElement("span");
+  badge.className = "poll-badge";
+  badge.textContent = `${Object.keys(g.members).length} member${Object.keys(g.members).length === 1 ? "" : "s"}`;
+  h.appendChild(badge);
+  if (admin) { const a = document.createElement("span"); a.className = "poll-badge"; a.textContent = "you: admin"; h.appendChild(a); }
+  card.appendChild(h);
+
+  // Members + delegation
+  const myDelegate = g.delegations[me]?.delegate;
+  for (const m of Object.values(g.members).sort((a, b) => a.at - b.at)) {
+    const row = document.createElement("div"); row.className = "gov-row";
+    const del = g.delegations[m.peerId]?.delegate;
+    const tag = `${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${m.peerId === me ? "  (you)" : ""}`;
+    const lab = document.createElement("span"); lab.style.flex = "1"; lab.textContent = tag; row.appendChild(lab);
+    // delegate-to-this-member control (members only; not yourself)
+    if (member && m.peerId !== me) {
+      const b = document.createElement("button"); b.className = "poll-ctlbtn";
+      b.textContent = myDelegate === m.peerId ? "↩ undelegate" : "delegate →";
+      b.addEventListener("click", () => govSetDelegate(g, myDelegate === m.peerId ? null : m.peerId));
+      row.appendChild(b);
+    }
+    if (admin && m.peerId !== g.creator) appendRemoveBtn(row, "remove member", () => govRemoveMember(g, m.peerId));
+    card.appendChild(row);
+  }
+  if (member) {
+    const note = document.createElement("div"); note.className = "poll-you";
+    note.textContent = myDelegate ? `your vote flows to ${memberLabel(g, myDelegate)} unless you vote` : "you vote directly (no delegate set)";
+    card.appendChild(note);
+  }
+
+  // Issues
+  for (const issue of g.issues) {
+    const row = document.createElement("div"); row.className = "gov-row";
+    const lab = document.createElement("span"); lab.style.flex = "1";
+    lab.textContent = `▸ ${issue.title} — ${issueResultText(g, issue)}`;
+    row.appendChild(lab);
+    if (issue.pollId && pollStore.has(issue.pollId)) {
+      const v = document.createElement("button"); v.className = "poll-ctlbtn"; v.textContent = "vote";
+      v.addEventListener("click", () => { msgInput.value = `/poll vote ${issue.pollId} `; msgInput.focus(); });
+      row.appendChild(v);
+    } else if (member) {
+      const o = document.createElement("button"); o.className = "poll-ctlbtn"; o.textContent = "open vote";
+      o.addEventListener("click", () => { msgInput.value = `/gov vote ${g.name} | ${issue.title}  `; msgInput.focus(); });
+      row.appendChild(o);
+    }
+    card.appendChild(row);
+  }
+
+  // Admin / member controls
+  const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
+  if (admin) {
+    const am = document.createElement("button"); am.className = "poll-ctlbtn"; am.textContent = "+ member";
+    am.addEventListener("click", () => { msgInput.value = `/gov member add `; msgInput.focus(); });
+    ctrls.appendChild(am);
+  }
+  if (member) {
+    const ni = document.createElement("button"); ni.className = "poll-ctlbtn"; ni.textContent = "+ issue";
+    ni.addEventListener("click", () => { msgInput.value = `/gov issue new `; msgInput.focus(); });
+    ctrls.appendChild(ni);
+  }
+  if (g.creator === me) {
+    const rm = document.createElement("button"); rm.className = "poll-ctlbtn poll-remove"; rm.textContent = "disband";
+    rm.addEventListener("click", () => forgetGroup(g));
+    ctrls.appendChild(rm);
+  }
+  if (ctrls.childElementCount) card.appendChild(ctrls);
+  return card;
+}
+
+function showGroupCard(g: Group): void {
+  focusedGroup = g.id;
+  if (!isUiActive()) return;
+  const card = buildGroupCard(g);
+  govCards.set(g.id, card);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function refreshGroupCard(g: Group): void {
+  if (!isUiActive()) return;
+  const node = govCards.get(g.id);
+  if (!node || !node.isConnected) return;
+  const fresh = buildGroupCard(g);
+  node.replaceWith(fresh);
+  govCards.set(g.id, fresh);
+}
+
+function renderGroups(): void {
+  if (!isUiActive() || !govListEl || !govCountEl) return;
+  govCountEl.textContent = String(groupStore.size);
+  govListEl.innerHTML = "";
+  for (const g of [...groupStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
+    const li = document.createElement("li");
+    li.className = "row-item";
+    li.style.cssText = "font-size:0.7rem;color:#aaa;padding:0.3rem 0;border-bottom:1px solid #1a1a1a;";
+    const label = document.createElement("span");
+    label.style.cursor = "pointer"; label.style.flex = "1";
+    const open = g.issues.filter((i) => i.status === "open" && i.pollId).length;
+    label.textContent = `🏛 ${g.name.slice(0, 22)} (${Object.keys(g.members).length}● ${open}🗳)`;
+    label.addEventListener("click", () => showGroupCard(g));
+    li.title = `${Object.keys(g.members).length} members · ${g.issues.length} issues`;
+    li.appendChild(label);
+    appendRemoveBtn(li, g.creator === myPeerId() ? "disband this group" : "hide from your view", () => forgetGroup(g));
+    govListEl.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Live calls: mic / camera over WebRTC media tracks
 // ---------------------------------------------------------------------------
 
@@ -4931,6 +5408,7 @@ async function init(): Promise<void> {
   loadLemmas();
   loadNotes();
   loadPolls();
+  loadGroups();
   loadRetracted();
 
   // Restore any rooms the user had joined in previous sessions (besides the
