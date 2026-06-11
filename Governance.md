@@ -77,7 +77,7 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov new <name>` | Create a group (you become admin); focus + show its card |
 | `/gov show <name>` · `/gov list` | Focus + render a group / list all groups |
 | `/gov member add <peer> [admin]` · `member remove <peer>` | Manage roster (admin only); membership is capability-backed |
-| `/gov issue <title>` · `/gov issue list` | Record / list issues to decide |
+| `/gov issue <title>` · `/gov issue list` | Record / list issues to decide. Each issue gets its own **issue card** (title, group, weighted result, open-vote/vote) that persists in the transcript and replays on reload, like a poll card |
 | `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
