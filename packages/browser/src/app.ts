@@ -275,7 +275,13 @@ let rhoquHandlers: RhoQuOnHandler[] = [];
 let pollStore: Map<string, Poll> = new Map();
 let pollCards: Map<string, HTMLElement> = new Map();
 let groupStore: Map<string, Group> = new Map();
-let focusedGroup: string | null = null;   // groupId that /gov subcommands act on
+// groupId that /gov subcommands act on. Persisted per tab so it survives a
+// reload (set via setFocusedGroup).
+let focusedGroup: string | null = (() => { try { return sessionStorage.getItem("qos-focused-group"); } catch { return null; } })();
+function setFocusedGroup(id: string): void {
+  focusedGroup = id;
+  try { sessionStorage.setItem("qos-focused-group", id); } catch { /* ignore */ }
+}
 let retracted: Set<string> = new Set();
 
 function setActiveRoom(ctx: RoomContext): void {
@@ -363,6 +369,17 @@ function loadGroups(): void {
   try {
     const data = JSON.parse(raw) as Record<string, Group>;
     for (const [id, g] of Object.entries(data)) groupStore.set(id, g);
+    // Ensure every group has a transcript card marker so it replays on reload —
+    // groups created before card-replay shipped won't have one yet. Appended to
+    // chatLog (not rendered here); applyActiveRoomToUI replays them.
+    let added = false;
+    for (const g of groupStore.values()) {
+      if (!activeRoom.chatLog.some((l) => l.groupId === g.id)) {
+        activeRoom.chatLog.push({ from: g.creator, text: g.name, kind: "peer", groupId: g.id });
+        added = true;
+      }
+    }
+    if (added) { trimChatLog(activeRoom); saveChat(activeRoom); }
     renderGroups();
   } catch { /* ignore corrupt data */ }
 }
@@ -5407,7 +5424,7 @@ function buildGroupCard(g: Group): HTMLElement {
       row.appendChild(v);
     } else if (member) {
       const o = document.createElement("button"); o.className = "poll-ctlbtn"; o.textContent = "open vote";
-      o.addEventListener("click", () => { showGroupCard(g); msgInput.value = `/gov vote ${issue.title} | `; msgInput.focus(); });
+      o.addEventListener("click", () => { setFocusedGroup(g.id); msgInput.value = `/gov vote ${issue.title} | `; msgInput.focus(); });
       row.appendChild(o);
     }
     card.appendChild(row);
@@ -5426,31 +5443,34 @@ function buildGroupCard(g: Group): HTMLElement {
 
   // Admin / member controls
   const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
+  // Card-button clicks set the focused group, so the prefilled command targets
+  // THIS group (after a reload the typed-command focus would otherwise be unset).
+  const prefill = (text: string) => { setFocusedGroup(g.id); msgInput.value = text; msgInput.focus(); };
   if (member) {
     const s = document.createElement("button"); s.className = "poll-ctlbtn"; s.textContent = "💬 say";
-    s.addEventListener("click", () => { msgInput.value = "/gov say "; msgInput.focus(); });
+    s.addEventListener("click", () => prefill("/gov say "));
     ctrls.appendChild(s);
     const k = document.createElement("button"); k.className = "poll-ctlbtn"; k.textContent = "👏 kudos";
-    k.addEventListener("click", () => { msgInput.value = "/gov kudos "; msgInput.focus(); });
+    k.addEventListener("click", () => prefill("/gov kudos "));
     ctrls.appendChild(k);
   }
   if (admin && !g.treasury) {
     const t = document.createElement("button"); t.className = "poll-ctlbtn"; t.textContent = "🏦 set up treasury";
-    t.addEventListener("click", () => { handleCommand("/gov treasury declare"); });
+    t.addEventListener("click", () => { setFocusedGroup(g.id); handleCommand("/gov treasury declare"); });
     ctrls.appendChild(t);
   } else if (admin && g.treasury) {
     const t = document.createElement("button"); t.className = "poll-ctlbtn"; t.textContent = "🏦 fund member";
-    t.addEventListener("click", () => { msgInput.value = "/gov treasury grant "; msgInput.focus(); });
+    t.addEventListener("click", () => prefill("/gov treasury grant "));
     ctrls.appendChild(t);
   }
   if (admin) {
     const am = document.createElement("button"); am.className = "poll-ctlbtn"; am.textContent = "+ member";
-    am.addEventListener("click", () => { msgInput.value = `/gov member add `; msgInput.focus(); });
+    am.addEventListener("click", () => prefill("/gov member add "));
     ctrls.appendChild(am);
   }
   if (member) {
     const ni = document.createElement("button"); ni.className = "poll-ctlbtn"; ni.textContent = "+ issue";
-    ni.addEventListener("click", () => { msgInput.value = `/gov issue new `; msgInput.focus(); });
+    ni.addEventListener("click", () => prefill("/gov issue "));
     ctrls.appendChild(ni);
   }
   if (g.creator === me) {
@@ -5489,7 +5509,7 @@ function addGroupCard(g: Group): void {
 }
 
 function showGroupCard(g: Group): void {
-  focusedGroup = g.id;
+  setFocusedGroup(g.id);
   if (!isUiActive()) return;
   const existing = govCards.get(g.id);
   if (existing?.isConnected) { refreshGroupCard(g); existing.scrollIntoView?.({ block: "nearest" }); return; }
