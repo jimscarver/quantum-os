@@ -2,8 +2,9 @@
 // QuantumOS persistent "memory peer" daemon.
 //
 // Stays connected to a room, persists the room's public state + transcript to
-// disk, and RE-SERVES that state (name + sync-lemmas + sync-currencies) to every
-// peer who joins — giving the otherwise-ephemeral p2p room durable memory. It
+// disk, and RE-SERVES that state (name + sync-lemmas + sync-currencies +
+// sync-series) to every peer who joins — giving the otherwise-ephemeral p2p
+// room durable memory. It
 // holds a stable signed identity (cap:peer + dyncap anchor) across restarts, so
 // peers TOFU-pin it as one continuous peer.
 //
@@ -24,7 +25,7 @@ import {
 } from "./dyncap.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
-const SIGNED_KINDS = new Set(["name", "lemma", "note-declare", "sync-lemmas", "sync-currencies"]);
+const SIGNED_KINDS = new Set(["name", "lemma", "note-declare", "sync-lemmas", "sync-currencies", "sync-series"]);
 
 const USAGE = `qos-daemon — persistent QuantumOS memory peer
 
@@ -41,10 +42,10 @@ Options:
   --verbose          Log every inbound message.
   --help, -h         Show this help.
 
-Persists per room: lemmas.json, currencies.json, chains.json, retracted.json,
-transcript.jsonl. Re-serves name + sync-lemmas + sync-currencies (dyncap-signed)
-to each joiner, and honors author lemma retractions (won't re-serve them).
-Runs until Ctrl-C.`;
+Persists per room: lemmas.json, currencies.json, series.json, chains.json,
+retracted.json, transcript.jsonl. Re-serves name + sync-lemmas + sync-currencies
++ sync-series (dyncap-signed) to each joiner, and honors author lemma retractions
+(won't re-serve them). Runs until Ctrl-C.`;
 
 function parseArgs(argv) {
   const a = { name: "qos-memory", signal: DEFAULT_SIGNAL, state: "./.qos-state", verbose: false };
@@ -78,6 +79,16 @@ const writeJSON = (p, obj) => { fs.mkdirSync(path.dirname(p), { recursive: true 
 // key identically here and the daemon's first-write-wins agrees with the browser.
 const canonLemma = (name) => String(name ?? "").trim().replace(/\s+/g, " ");
 
+// Terms-series stamp: FNV-1a 32-bit → 8 hex, byte-for-byte the browser's
+// termsHash8 (notes.ts). A note-series declaration is trustworthy when its terms
+// hash to the stamp baked in the series id (self-verifying commitment).
+const termsHash8 = (text) => {
+  const s = String(text ?? "").trim().replace(/\s+/g, " ");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+};
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.room) { console.log(USAGE); process.exit(args.help ? 0 : 1); }
@@ -93,6 +104,7 @@ async function main() {
   const lemmasPath = path.join(roomDir, "lemmas.json");
   const currenciesPath = path.join(roomDir, "currencies.json");
   const chainsPath = path.join(roomDir, "chains.json");
+  const seriesPath = path.join(roomDir, "series.json");
   const retractedPath = path.join(roomDir, "retracted.json");
   const transcriptPath = path.join(roomDir, "transcript.jsonl");
 
@@ -118,16 +130,18 @@ async function main() {
   // ---- per-room stores ----
   const lemmas = new Map(Object.entries(readJSON(lemmasPath, {})));       // name -> {twists,who,cap?,dyncap?}
   const currencies = new Map(Object.entries(readJSON(currenciesPath, {})));// token -> {currency,token,issuer,dyncap?}
+  const seriesTerms = new Map(Object.entries(readJSON(seriesPath, {})));    // seriesKey ("USD~hash") -> {seriesKey,baseCurrency,termsHash,terms,issuer,dyncap?}
   const chains = deserializeChain(fs.existsSync(chainsPath) ? fs.readFileSync(chainsPath, "utf8") : "{}");
   const retracted = new Set(readJSON(retractedPath, []));                  // canonical lemma names retracted by their author
   const peerNames = new Map();
   const persistLemmas = () => writeJSON(lemmasPath, Object.fromEntries(lemmas));
   const persistCurrencies = () => writeJSON(currenciesPath, Object.fromEntries(currencies));
+  const persistSeries = () => writeJSON(seriesPath, Object.fromEntries(seriesTerms));
   const persistRetracted = () => writeJSON(retractedPath, [...retracted]);
   const persistChains = () => writeJSON(chainsPath, JSON.parse(serializeChain(chains)));
   const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: true }); fs.appendFileSync(transcriptPath, JSON.stringify({ t: new Date().toISOString(), from, msg }) + "\n"); } catch {} };
 
-  console.log(`[daemon] room ${roomId.slice(0, 18)}…  ${lemmas.size} lemma(s), ${currencies.size} curr/ies loaded  state=${stateDir}`);
+  console.log(`[daemon] room ${roomId.slice(0, 18)}…  ${lemmas.size} lemma(s), ${currencies.size} curr/ies, ${seriesTerms.size} terms-series loaded  state=${stateDir}`);
 
   // Seed durable lemmas (--lemma). Mint ZFA-valid twists so receiving peers
   // accept them on sync (achievesZfa gate). FWW by name: skip if already held.
@@ -175,6 +189,7 @@ async function main() {
     signedSend(peerId, { kind: "name", name: myName });
     signedSend(peerId, { kind: "sync-lemmas", entries: [...lemmas.entries()].map(([name, e]) => ({ name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap })) });
     signedSend(peerId, { kind: "sync-currencies", entries: [...currencies.values()] });
+    if (seriesTerms.size) signedSend(peerId, { kind: "sync-series", entries: [...seriesTerms.values()] });
   }
 
   async function verifyChain(from, d) {
@@ -206,6 +221,27 @@ async function main() {
     currencies.set(e.token, { currency: e.currency, token: e.token, issuer: e.issuer ?? fromName, dyncap: e.dyncap });
     return true;
   }
+  // Ingest a note terms-series declaration. `senderAnchor` is the sender's
+  // verified dyncap anchor (or undefined). `requireIssuer` is true for a live
+  // note-series (the sender claims to BE the issuer) and false for a forwarded
+  // sync-series (the stamp self-commits to the terms, so a forwarder can't fake
+  // them). FWW by seriesKey.
+  function ingestSeries(e, fromName, senderAnchor, requireIssuer) {
+    if (!e || typeof e.seriesKey !== "string" || typeof e.terms !== "string") return false;
+    const { seriesKey, baseCurrency, termsHash, terms } = e;
+    if (typeof baseCurrency !== "string" || typeof termsHash !== "string") return false;
+    // Self-consistency: the series id must be base~hash and the stamp must
+    // commit to exactly these terms.
+    if (termsHash8(terms) !== termsHash || seriesKey !== `${baseCurrency}~${termsHash}`) return false;
+    if (requireIssuer) {
+      // If we know who issues baseCurrency, the sender must be that issuer.
+      const known = [...currencies.values()].find((c) => c.currency === baseCurrency);
+      if (known?.dyncap?.anchor && senderAnchor && known.dyncap.anchor !== senderAnchor) return false;
+    }
+    if (seriesTerms.has(seriesKey)) return false; // FWW by series id
+    seriesTerms.set(seriesKey, { seriesKey, baseCurrency, termsHash, terms, issuer: e.issuer ?? fromName, dyncap: e.dyncap });
+    return true;
+  }
 
   async function onMessage(from, d) {
     if (args.verbose) console.log(`[daemon] ⇐ ${from.slice(0, 8)}… ${typeof d === "object" ? JSON.stringify(d).slice(0, 200) : d}`);
@@ -221,6 +257,8 @@ async function main() {
       case "note-declare": if (ingestCurrency({ currency: d.currency, token: d.token, dyncap: d.dyncap }, fromName)) { persistCurrencies(); console.log(`[daemon] +currency "${d.currency}"`); } break;
       case "sync-lemmas": { let n = 0; for (const e of d.entries || []) if (ingestLemma(e, fromName)) n++; if (n) { persistLemmas(); console.log(`[daemon] +${n} lemma(s) via sync`); } break; }
       case "sync-currencies": { let n = 0; for (const e of d.entries || []) if (ingestCurrency(e, fromName)) n++; if (n) { persistCurrencies(); console.log(`[daemon] +${n} currency/ies via sync`); } break; }
+      case "note-series": { const senderAnchor = chains.get(from)?.anchor; if (ingestSeries(d, fromName, senderAnchor, true)) { persistSeries(); console.log(`[daemon] +terms-series "${d.seriesKey}"`); } break; }
+      case "sync-series": { let n = 0; for (const e of d.entries || []) if (ingestSeries(e, fromName, undefined, false)) n++; if (n) { persistSeries(); console.log(`[daemon] +${n} terms-series via sync`); } break; }
       case "retract": {
         // The daemon only persists lemmas, so it honors lemma retractions. A
         // retracted lemma is dropped, tombstoned (so it isn't resurrected on a
@@ -248,7 +286,7 @@ async function main() {
 
   const shutdown = () => {
     console.log("\n[daemon] shutting down…");
-    try { saveIdentity(); persistLemmas(); persistCurrencies(); persistChains(); persistRetracted(); } catch {}
+    try { saveIdentity(); persistLemmas(); persistCurrencies(); persistSeries(); persistChains(); persistRetracted(); } catch {}
     try { peer.disconnect(); } catch {}
     setTimeout(() => process.exit(0), 250);
   };
