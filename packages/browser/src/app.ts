@@ -111,7 +111,7 @@ interface ProbeWindow {
 type ChatKind = "peer" | "self" | "system";
 type MediaKind = "image" | "audio" | "video" | "file";
 interface MediaAttachment { mediaKind: MediaKind; name: string; mime: string; size: number; url: string }
-interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string; groupId?: string }
+interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string; groupId?: string; issueId?: string }
 
 // A persist request is an offer from another peer asking us to also store
 // their lemma / currency declaration so the room's public state has more
@@ -374,9 +374,15 @@ function loadGroups(): void {
     // chatLog (not rendered here); applyActiveRoomToUI replays them.
     let added = false;
     for (const g of groupStore.values()) {
-      if (!activeRoom.chatLog.some((l) => l.groupId === g.id)) {
+      if (!activeRoom.chatLog.some((l) => l.groupId === g.id && !l.issueId)) {
         activeRoom.chatLog.push({ from: g.creator, text: g.name, kind: "peer", groupId: g.id });
         added = true;
+      }
+      for (const iss of g.issues) {
+        if (!activeRoom.chatLog.some((l) => l.groupId === g.id && l.issueId === iss.id)) {
+          activeRoom.chatLog.push({ from: g.creator, text: iss.title, kind: "peer", groupId: g.id, issueId: iss.id });
+          added = true;
+        }
       }
     }
     if (added) { trimChatLog(activeRoom); saveChat(activeRoom); }
@@ -707,6 +713,12 @@ function renderChatLine(line: ChatLine): void {
   if (line.pollId) {
     div.className = "msg poll-msg";
     renderPollCardInto(div, line.pollId);
+    messagesEl.appendChild(div);
+    return;
+  }
+  if (line.groupId && line.issueId) {
+    div.className = "msg gov-msg";
+    renderIssueCardInto(div, line.groupId, line.issueId);
     messagesEl.appendChild(div);
     return;
   }
@@ -4082,8 +4094,10 @@ function connect(): void {
           if (!title) return;
           const iid = String(r!.id ?? issueId(title));
           if (!g.issues.find((i) => i.id === iid)) {
-            g.issues.push({ id: iid, title, by: String(r!.by ?? peerLabel(from)), at: typeof r!.at === "number" ? r!.at as number : Date.now(), status: "open" });
+            const iss: Issue = { id: iid, title, by: String(r!.by ?? peerLabel(from)), at: typeof r!.at === "number" ? r!.at as number : Date.now(), status: "open" };
+            g.issues.push(iss);
             saveGroups(); renderGroups(); refreshGroupCard(g);
+            addIssueCard(g, iss);
           }
           return;
         }
@@ -4093,7 +4107,7 @@ function connect(): void {
           const g = groupStore.get(String(d.groupId ?? ""));
           if (!g || !isMember(g, from)) return;
           const issue = g.issues.find((i) => i.id === String(d.issueId ?? ""));
-          if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); refreshGroupCard(g); }
+          if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); refreshGroupCard(g); refreshIssueCard(g, issue); }
           return;
         }
         if (d.kind === "group-msg") {
@@ -5231,6 +5245,7 @@ function refreshPollCard(poll: Poll): void {
     const inp = fresh.querySelector(".poll-add-input") as HTMLInputElement | null;
     if (inp) { inp.value = draft; inp.focus(); }
   }
+  refreshIssueCardsForPoll(poll.id);   // keep a governance issue card's result in sync
 }
 
 function addPollCard(poll: Poll): void {
@@ -5274,6 +5289,8 @@ function renderPolls(): void {
 const govListEl  = document.getElementById("gov-list");
 const govCountEl = document.getElementById("gov-count");
 const govCards = new Map<string, HTMLElement>();   // groupId -> live card node
+const issueCards = new Map<string, HTMLElement>(); // "groupId::issueId" -> live card node
+const issueCardKey = (groupId: string, issueId: string): string => `${groupId}::${issueId}`;
 
 function govLabel(): string { return myName || shortId(myPeerId()); }
 
@@ -5340,14 +5357,17 @@ function govNewIssue(g: Group, title: string): Issue {
   if (!iss) {
     iss = { id: iid, title, by: govLabel(), at: Date.now(), status: "open" };
     g.issues.push(iss); saveGroups(); renderGroups(); refreshGroupCard(g);
+    addIssueCard(g, iss);
     signedBroadcast({ kind: "group-issue", groupId: g.id, issue: iss });
+  } else {
+    addIssueCard(g, iss);   // surface the existing issue's card
   }
   return iss;
 }
 function govOpenVote(g: Group, issue: Issue, method: PollMethod, optionTexts: string[]): void {
   const poll = createPoll(`[${g.name}] ${issue.title}`, optionTexts, method);
   issue.pollId = poll.id; issue.status = "open";
-  saveGroups(); renderGroups(); refreshGroupCard(g);
+  saveGroups(); renderGroups(); refreshGroupCard(g); refreshIssueCard(g, issue);
   signedBroadcast({ kind: "group-vote", groupId: g.id, issueId: issue.id, pollId: poll.id });
 }
 function forgetGroup(g: Group): void {
@@ -5522,6 +5542,82 @@ function refreshGroupCard(g: Group): void {
   const fresh = buildGroupCard(g);
   node.replaceWith(fresh);
   govCards.set(g.id, fresh);
+}
+
+// A standalone card for one issue: title, group, delegation-weighted result, and
+// an open-vote / vote control. Like a poll card, it persists in the transcript.
+function buildIssueCard(g: Group, issue: Issue): HTMLElement {
+  const me = myPeerId();
+  const member = isMember(g, me);
+  const card = document.createElement("div"); card.className = "gov-card";
+  const h = document.createElement("div"); h.className = "gov-title";
+  h.textContent = `▸ ${issue.title} `;
+  const badge = document.createElement("span"); badge.className = "poll-badge"; badge.textContent = `🏛 ${g.name}`; h.appendChild(badge);
+  card.appendChild(h);
+
+  const res = document.createElement("div"); res.className = "poll-you"; res.textContent = issueResultText(g, issue); card.appendChild(res);
+
+  if (member) {
+    const myDelegate = g.topicDelegations?.[issue.id]?.[me]?.delegate ?? g.delegations[me]?.delegate;
+    const dn = document.createElement("div"); dn.className = "poll-you";
+    dn.textContent = myDelegate ? `your vote flows to ${memberLabel(g, myDelegate)} unless you vote` : "you vote directly";
+    card.appendChild(dn);
+  }
+
+  const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
+  if (issue.pollId && pollStore.has(issue.pollId)) {
+    const v = document.createElement("button"); v.className = "poll-ctlbtn"; v.textContent = "vote";
+    v.addEventListener("click", () => { msgInput.value = `/poll vote ${issue.pollId} `; msgInput.focus(); });
+    ctrls.appendChild(v);
+    const g2 = document.createElement("button"); g2.className = "poll-ctlbtn"; g2.textContent = "🏛 group";
+    g2.addEventListener("click", () => showGroupCard(g));
+    ctrls.appendChild(g2);
+  } else if (member) {
+    const o = document.createElement("button"); o.className = "poll-ctlbtn"; o.textContent = "open vote";
+    o.addEventListener("click", () => { setFocusedGroup(g.id); msgInput.value = `/gov vote ${issue.title} | `; msgInput.focus(); });
+    ctrls.appendChild(o);
+  }
+  if (ctrls.childElementCount) card.appendChild(ctrls);
+  return card;
+}
+
+function renderIssueCardInto(host: HTMLElement, groupId: string, issueId: string): void {
+  const g = groupStore.get(groupId);
+  const issue = g?.issues.find((i) => i.id === issueId);
+  if (!g || !issue) {
+    const ph = document.createElement("span"); ph.className = "poll-you"; ph.textContent = "▸ issue unavailable";
+    host.appendChild(ph); return;
+  }
+  const card = buildIssueCard(g, issue);
+  issueCards.set(issueCardKey(groupId, issueId), card);
+  host.appendChild(card);
+}
+
+function refreshIssueCard(g: Group, issue: Issue): void {
+  if (!isUiActive()) return;
+  const node = issueCards.get(issueCardKey(g.id, issue.id));
+  if (!node || !node.isConnected) return;
+  const fresh = buildIssueCard(g, issue);
+  node.replaceWith(fresh);
+  issueCards.set(issueCardKey(g.id, issue.id), fresh);
+}
+
+// Update any issue card whose vote is this poll (called when the poll changes).
+function refreshIssueCardsForPoll(pollId: string): void {
+  for (const g of groupStore.values())
+    for (const issue of g.issues)
+      if (issue.pollId === pollId) refreshIssueCard(g, issue);
+}
+
+// Add a persistent issue-card marker to the transcript (one per issue).
+function addIssueCard(g: Group, issue: Issue): void {
+  if (activeRoom.chatLog.some((l) => l.groupId === g.id && l.issueId === issue.id)) { refreshIssueCard(g, issue); return; }
+  const line: ChatLine = { from: g.creator, text: issue.title, kind: "peer", groupId: g.id, issueId: issue.id };
+  activeRoom.chatLog.push(line);
+  trimChatLog(activeRoom);
+  saveChat(activeRoom);
+  if (isUiActive()) { renderChatLine(line); messagesEl.scrollTop = messagesEl.scrollHeight; }
+  else markUnread(activeRoom);
 }
 
 function renderGroups(): void {
