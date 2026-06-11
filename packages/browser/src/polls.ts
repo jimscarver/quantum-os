@@ -51,16 +51,25 @@ function cleanBallot(ballot: string[], valid: Set<string>): string[] {
   return out;
 }
 
-export function tallyApproval(poll: Poll): ApprovalResult {
+// Each voter's ballot counts `weights[peerId]` times (default 1). At all-1
+// weights this is one-person-one-vote, unchanged; the governance layer passes
+// liquid-democracy weights resolved from the delegation graph. `totalBallots` is
+// the total *weight* cast (== ballot count when unweighted).
+const ballotWeight = (weights: Record<string, number> | undefined, peer: string): number =>
+  weights ? (weights[peer] ?? 0) : 1;
+
+export function tallyApproval(poll: Poll, weights?: Record<string, number>): ApprovalResult {
   const valid = validIds(poll);
   const counts: Record<string, number> = {};
   for (const o of poll.options) counts[o.id] = 0;
   let total = 0;
-  for (const b of Object.values(poll.ballots)) {
+  for (const [peer, b] of Object.entries(poll.ballots)) {
     const clean = cleanBallot(b, valid);
     if (clean.length === 0) continue;
-    for (const id of clean) counts[id]++;
-    total++;
+    const w = ballotWeight(weights, peer);
+    if (w <= 0) continue;
+    for (const id of clean) counts[id] += w;
+    total += w;
   }
   let max = 0;
   for (const o of poll.options) if (counts[o.id] > max) max = counts[o.id];
@@ -68,11 +77,13 @@ export function tallyApproval(poll: Poll): ApprovalResult {
   return { method: "approval", counts, winners, totalBallots: total };
 }
 
-export function tallyRanked(poll: Poll): RankedResult {
+export function tallyRanked(poll: Poll, weights?: Record<string, number>): RankedResult {
   const valid = validIds(poll);
   const ids = poll.options.map((o) => o.id);
-  const ballots = Object.values(poll.ballots).map((b) => cleanBallot(b, valid)).filter((b) => b.length > 0);
-  const total = ballots.length;
+  const ballots = Object.entries(poll.ballots)
+    .map(([peer, b]) => ({ ranks: cleanBallot(b, valid), w: ballotWeight(weights, peer) }))
+    .filter((x) => x.ranks.length > 0 && x.w > 0);
+  const total = ballots.reduce((s, x) => s + x.w, 0);
   const eliminated = new Set<string>();
   const rounds: IrvRound[] = [];
 
@@ -81,9 +92,9 @@ export function tallyRanked(poll: Poll): RankedResult {
     for (const id of ids) counts[id] = 0;
     let exhausted = 0;
     for (const b of ballots) {
-      const top = b.find((id) => !eliminated.has(id));
-      if (top === undefined) exhausted++;
-      else counts[top]++;
+      const top = b.ranks.find((id) => !eliminated.has(id));
+      if (top === undefined) exhausted += b.w;
+      else counts[top] += b.w;
     }
     const continuing = total - exhausted;
     const display: Record<string, number> = {};
@@ -115,8 +126,8 @@ export function tallyRanked(poll: Poll): RankedResult {
   return { method: "ranked", rounds, winners: [], totalBallots: total };
 }
 
-export function tally(poll: Poll): PollResult {
-  return poll.method === "ranked" ? tallyRanked(poll) : tallyApproval(poll);
+export function tally(poll: Poll, weights?: Record<string, number>): PollResult {
+  return poll.method === "ranked" ? tallyRanked(poll, weights) : tallyApproval(poll, weights);
 }
 
 /** Per-option live counts (approval counts, or IRV first-preferences). */

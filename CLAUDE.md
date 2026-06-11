@@ -259,6 +259,14 @@ Removal is **authoritative for the owner, local-hide for everyone else**:
 
 Limitation: there is intentionally **no** `sync-retracted` join replay (it would let a joiner push unverified tombstones and wipe a peer's view). So a peer that was *offline* during a retract keeps its own copy until told otherwise; peers that received the retract still ignore that peer's re-sync of it.
 
+### Governance — liquid democracy (`/gov` — `gov.ts` + `app.ts`)
+
+Exposes RChain [rgov](https://github.com/rchain-community/rgov)'s governance (groups, members, issues, delegated voting) on quantum-os primitives instead of running its `.rho` — the full rationale + mapping is in `Governance.md`.
+
+Per-room `groupStore: Map<groupId, Group>` (persisted `qos-groups-<roomId>`, synced via `sync-gov`, tombstone-aware with kind `"group"`). `Group = {id,name,creator,members:Record<peerId,{role,label,at}>, delegations:Record<peerId,{delegate,at}>, issues:Issue[]}`. Wire kinds (dyncap-signed): `group-open`, `group-member` (admin-gated by `from === creator`/admin), `group-issue`, `group-vote` (links an issue to a `/poll`), and **`gov-delegate`** (self-signed — only `from === delegator`). `mergeGroupFromSync` unions members/delegations/issues by latest `at` on join.
+
+**Liquid democracy is the centerpiece.** `gov.ts` `resolveWeights(members, delegations, directVoters)` implements: *if a member votes, their ballot counts (overrides delegation); if not, their weight flows transitively along delegation edges to whoever ultimately voted*; cycles / dead-ends abstain; `weight(d) = 1 + #(members flowing to d)`. Those weights feed `polls.ts` `tally(poll, weights)` (the approval/IRV engines now take an optional `weights` map — no change at weight 1), so a `/gov vote` opens a normal `/poll` bound to an issue but tallies **delegation-weighted**. Voting *is* the per-issue override. `/gov` subcommands act on a **focused group** (set by `/gov new`/`show` or clicking the Governance sidebar); the group card shows members, each member's delegate, and the weighted issue result. Phase 2 (not yet built): treasury/kudos via `/note`, per-topic delegation, per-group inbox via `/channel`, daemon persistence of `group-*`.
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -297,7 +305,8 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
 | `/poll <sub>` | Group decision — `new <q> [\| seeds] [ranked]`, `add <opt>`, `vote [id] <choices>`, `status`, `lock`, `close`, `remove`, `list`. Collect-then-vote with approval / ranked-choice (IRV); deterministic joiner-local tally |
-| `/forget <sub>` | Remove an item — `poll <id>`, `lemma <name>`, `note <token\|currency denom>`, `list`. Owner retracts for everyone (dyncap-signed `retract`, tombstoned so it can't re-sync back); others hide locally. Notes delete with confirm |
+| `/forget <sub>` | Remove an item — `poll <id>`, `lemma <name>`, `note <token\|currency denom>`, `group <name>`, `list`. Owner retracts for everyone (dyncap-signed `retract`, tombstoned so it can't re-sync back); others hide locally. Notes delete with confirm |
+| `/gov <sub>` | **Liquid-democracy governance** (rgov on primitives) — `new <name>`, `show`, `member add\|remove`, `issue <title>`, `delegate <peer>`/`undelegate`, `vote <issue> \| opts [ranked]`, `status`, `list`. Standing transitive delegation + weighted tally; see `Governance.md` |
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
 | `/room <sub>` | Multi-room tabs — `list`, `join <cap\|url>`, `leave`, `ref` |
@@ -380,7 +389,8 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
 | `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
 | `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
-| `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage) |
+| `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage). Tallies take an optional `weights` map for liquid-democracy weighting (no change at weight 1) |
+| `packages/browser/src/gov.ts` | Pure governance module — `Group`/`Issue`/`Member` types + **`resolveWeights`** (transitive delegation → per-voter weight, with override + cycle abstention), `issueId`, `delegatorsOf`. Drives `/gov`; see `Governance.md` |
 | `packages/browser/src/rhoqu.ts` | RhoQu tokenizer, parser (`process`/`new`/`if`/`on`/`for`/`\|`), AST, and `transpile(source, ctx?)` that emits a `string[]` of `/commands`. `RhoQuContext` interface + `OnHandler` for `on channel(x) { … }` dispatcher registration. |
 | `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
 | `Group_Decisions.md` | Map of group-decision processes the interface supports — built (poll / probe / rdv / channel / lemma) and sketched (quorum, weighted, quadratic, delegation, sortition, consent, conviction), each mapped to a primitive |

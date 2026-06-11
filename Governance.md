@@ -1,0 +1,138 @@
+# Governance — liquid democracy on quantum-os
+
+A governance layer that exposes the functionality of RChain's
+[rgov](https://github.com/rchain-community/rgov) — groups, members, issues,
+delegated voting — using quantum-os's own primitives, rather than running rgov's
+`.rho` contracts. The centerpiece is **delegated (liquid) democracy**: members
+delegate their vote, delegation flows transitively, and a non-voter's weight is
+cast by their delegate.
+
+This is the same ZFA substrate as everything else: dyncap-signed envelopes plus a
+**deterministic, joiner-local tally** (every peer resolves the same delegation
+graph from the signed delegations + ballots it holds — no central counter). See
+[`Group_Decisions.md`](Group_Decisions.md) for the broader family of decision
+processes and [`Group_Decisions_Demo.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/Group_Decisions_Demo.md)
+for a worked multi-peer walkthrough.
+
+---
+
+## Why not run the `.rho` directly?
+
+rgov uses full RChain Rholang — persistent `contract`s, the RSpace tuplespace with
+`for`/COMM matching, pattern destructuring, the registry, `rho:` system processes
+(`registry`, `deployId`, `deployerId`, RevVault), and signed, phlogiston-metered
+deploys ordered by Casper consensus. quantum-os has none of that machinery (its
+"RhoQu" is a macro transpiler, `/channel` is fire-and-forget, there's no
+tuplespace or global consensus). Literally executing the contracts would mean
+embedding a Rholang interpreter or deploying to a real RNode.
+
+Instead we port the **intent**. rgov's governance behavior maps cleanly onto
+primitives quantum-os already has:
+
+| rgov | quantum-os |
+|---|---|
+| `Group` / `WorkingGroup` / `addMember` / `MemberDirectory` | a group record + membership capabilities; `/gov member` |
+| `Issue` / `newIssue` | an issue record per group (`/gov issue`) |
+| `Ballot` / `castBallot` / `castVote` / `tallyVotes` | `/poll` (approval + ranked-choice IRV), opened via `/gov vote` |
+| **`delegateVote`** | **`/gov delegate`** — standing, revocable, transitive delegation |
+| `RevIssuer` / `makeMint` / `transfer` / `checkBalance` | `/note` (declare/grant/pass/redeem/balance) — Phase 2 |
+| `Kudos` / `awardKudos` | a `/note` "KUDOS" currency — Phase 2 |
+| `Inbox` / `Chat` / `sendMail` | `/channel` (per-group tag) — Phase 2 |
+| `deployerId` identity | `/dyncap` anchor |
+| registry lookup / durable link | `/lemma` + the memory-peer daemon |
+
+---
+
+## Liquid democracy — the governing rule
+
+**Per issue:** if a member casts a ballot, their own vote counts (it **overrides**
+delegation). If they do **not** vote, their vote is cast by their **delegate** —
+transitively: it flows to whoever their delegate's delegate … ultimately voted.
+Each member has one standing delegate; direct voting always overrides for that
+issue. A chain that reaches no direct voter, or loops, **abstains**.
+
+**Resolution** (pure, in `gov.ts` `resolveWeights`, recomputed by every peer):
+- `directVoters` = members who cast a ballot on the issue's poll.
+- Each member's vote walks the delegation chain to the first direct voter reached
+  (its weight flows there); cycles / dead-ends with no direct voter abstain.
+- `weight(d) = 1 + #(members whose chain terminates at d)`.
+- The weighted counts feed the existing approval / IRV poll engine (`tally(poll,
+  weights)`), so votes are *both* ranked-choice *and* delegation-weighted, with
+  the same deterministic tie-breaks.
+
+Example: members A, B, C; B delegates A; C delegates B. If only **A** votes, A
+carries weight **3** (self + B + C transitively). If **C** then votes directly, C
+reclaims weight 1 and A drops to 2 (self + B). A delegation cycle with no direct
+voter abstains.
+
+---
+
+## `/gov` command reference
+
+`/gov` subcommands act on the **focused group** (set by `/gov new`/`show`, by
+clicking it in the Governance sidebar, or implicitly when there's only one group).
+
+| Command | Effect |
+|---|---|
+| `/gov new <name>` | Create a group (you become admin); focus + show its card |
+| `/gov show <name>` · `/gov list` | Focus + render a group / list all groups |
+| `/gov member add <peer> [admin]` · `member remove <peer>` | Manage roster (admin only); membership is capability-backed |
+| `/gov issue <title>` · `/gov issue list` | Record / list issues to decide |
+| `/gov delegate <member>` · `/gov undelegate` | Set / clear your **standing delegate** |
+| `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
+| `/gov status` | Group overview: members, delegations, issue results |
+| `/forget group <name>` | Disband (creator) / hide (others) — tombstoned, dyncap-signed |
+
+The **group card** (sidebar → click) shows members with roles and their delegate,
+a "your vote flows to … unless you vote" note, each issue's **weighted** leader/
+winner, and buttons to delegate, open a vote, vote, add a member / issue, or
+disband.
+
+Wire envelopes (all dyncap-signed, synced on join via `sync-gov`, tombstone-aware):
+`group-open`, `group-member` (admin-gated), `group-issue`, `group-vote`,
+`gov-delegate` (self-signed — only you set your own delegate). Votes themselves are
+plain `/poll` envelopes. The headless memory daemon can persist `group-*` later
+(Phase 2).
+
+---
+
+## Worked exemplar — rgov `delegateVote.rho` + `castVote.rho` + `tallyVotes.rho`
+
+rgov: a member sends `delegateVote` to point their vote at another member; voting
+on an issue casts directly; `tallyVotes` walks delegations to total the result.
+The quantum-os equivalent over a P2P room (cast: A admin, B, C, D):
+
+```
+A> /gov new Stewards
+·  🏛 created group "Stewards" — you are admin.
+A> /gov member add Bob          ·  /gov member add Carol     ·  /gov member add Dave
+A> /gov issue Adopt the new logo
+B> /gov delegate Alice          ·  (B's vote will flow to Alice unless B votes)
+C> /gov delegate Bob            ·  (C → Bob → Alice, transitively)
+A> /gov vote Adopt the new logo | keep, replace ranked
+·  🗳 vote opened on "Adopt the new logo" (ranked)
+A> /poll vote keep              ·  Alice votes directly
+D> /poll vote replace           ·  Dave votes directly; B and C have not voted
+A> /gov status
+·  ▸ Adopt the new logo — leading: keep · 4 weight
+·    (Alice carries 3 = self + Bob + Carol delegated; Dave carries 1)
+C> /poll vote replace            ·  Carol overrides her delegation for this issue
+A> /gov status
+·  ▸ Adopt the new logo — tie/▸ leading reflects Alice 2 (self + Bob), Dave+Carol 2
+```
+
+`tallyVotes` is the deterministic `resolveWeights` + weighted IRV: no contract
+deploy, no consensus round — every peer computes the same result from the signed
+delegations and ballots. Overriding is just voting; delegation is revocable with
+`/gov undelegate`.
+
+---
+
+## Scope
+
+**Phase 1 (shipped):** groups, members, issues, **standing delegation + per-issue
+override + weighted liquid-democracy tally**, the Governance UI, and this doc.
+
+**Phase 2 (planned):** treasury + kudos via `/note`, per-topic (issue-scoped)
+delegation, per-group inbox via `/channel`, hard role/permission enforcement,
+daemon persistence of `group-*`, and more rgov exemplars.

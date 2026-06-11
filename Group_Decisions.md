@@ -44,7 +44,7 @@ via the `sync-*` handshake, so the room self-heals.
 | Quorum / threshold | Bind only if enough vote / a bar is cleared | extend `/poll` | Sketch |
 | Weighted / reputation | Votes weighted by standing | dyncap chain weight | Sketch |
 | Quadratic / budget | Spread voice-credits across options | `/note` conservation | Sketch |
-| Delegation (liquid) | Hand your vote to a delegate | `/pass` a vote cap | Sketch |
+| Delegation (liquid) | Your vote flows to your delegate unless you vote | `/gov` (transitive, weighted) | **Built** — [Governance.md](Governance.md) |
 | Sortition / lottery | Pick fairly at random | `/cap` (ZFA-random) | Sketch |
 | Consent / objection | Passes unless someone objects | poll + veto semantics | Sketch |
 | Conviction voting | Support strengthens the longer it's held | timed ballot weight | Sketch |
@@ -126,9 +126,11 @@ Each maps onto an existing primitive — sketches, not yet built.
   voice-credit notes and let them spend across options; cost-to-influence is the
   natural quadratic lever, with conservation preventing credit inflation.
 
-- **Delegation / liquid democracy.** `/pass` transfers a capability to a named
-  peer. Pass a *vote capability* to a delegate for a given poll (and they can pass
-  it onward), yielding transitive delegation that's revocable by re-issuing.
+- **Delegation / liquid democracy — built.** `/gov` adds groups, members, issues,
+  and **standing, revocable, transitive delegation**: if you don't vote on an
+  issue, your weight flows to your delegate (and onward), feeding a weighted
+  approval/ranked tally. This is the rgov governance model on quantum-os
+  primitives — see **[Governance.md](Governance.md)**.
 
 - **Sortition / fair lottery.** `/cap` mints ZFA-random tokens. Seed a public draw
   from a token every participant can verify, to select a moderator, a sample jury,
