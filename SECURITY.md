@@ -13,7 +13,9 @@ quantum-os is a peer-to-peer browser application. The security boundary is the *
 | SDP/ICE relay forgery | Signaling server binds each `peerId` to its WebSocket; relayed `from` fields are validated server-side |
 | Eavesdropping on peer data | WebRTC DTLS + SRTP encrypt all data channel traffic end-to-end; the signaling server never sees payloads |
 | Capability decoherence | `decoherence_impossibility` (machine-verified in Lean 4): `parallel(peer1, peer2, …)` stays ZFA-balanced by construction |
-| Envelope authorship after TOFU | `/dyncap` ties each signable envelope to its sender's `H(seed)` anchor; once TOFU-pinned, mismatches and forks are detected and surfaced. Covers `name`, `lemma`, `note-declare`, and the outer `sync-*` envelopes. |
+| Envelope authorship after TOFU | `/dyncap` ties each signable envelope to its sender's `H(seed)` anchor; once TOFU-pinned, mismatches and forks are detected and surfaced. Covers `name`, `lemma`, `note-declare`, `note-series`, `retract`, and the outer `sync-*` envelopes. |
+| Owner-gated removal | A `retract` is honored only from the item's owner — `from === poll.creator` for a poll, or the sender's verified anchor matching the lemma's stored author anchor. Anyone else only hides the item locally. Tombstones (`qos-retracted-<room>`) keep a removed gossiped item from healing back via a later `sync-*`. The memory-peer daemon honors author lemma retractions too, so an always-on peer won't resurrect a removed lemma. |
+| Note terms integrity | A terms-stamped note's token commits to a hash of its terms (`cap:note-<base>~<termsHash8>`), so a relayer can't swap the text without changing the note's identity. The issuer's `note-series` declaration (text + hash) is dyncap-signed and honored only from the currency's issuer; a passed terms cache is accepted only if it hashes to the token's stamp. |
 
 ### What the system does NOT defend against
 

@@ -89,13 +89,21 @@ identity.json                 # { peerId, name, dyncap:{seed,anchor,seqByRoom} }
 rooms/<roomhex>/lemmas.json   # { name: { twists, who, cap?, dyncap? } }
 rooms/<roomhex>/currencies.json
 rooms/<roomhex>/chains.json   # dyncap TOFU pins (fork detection survives restart)
+rooms/<roomhex>/retracted.json     # canonical names of author-retracted lemmas (tombstones)
 rooms/<roomhex>/transcript.jsonl   # one JSON line per inbound message
 ```
 
-Ingest rules mirror the browser: lemmas are first-write-wins by name and
-immutable (a different-twists redeclare is rejected); currencies are FWW by
-token; both are ZFA-validated before storing. Held notes/receipts are never
-gossiped, so the daemon never stores private bearer value.
+Ingest rules mirror the browser: lemma names are **canonicalized** (trim +
+collapse inner whitespace, matching `@[multi word]` names); lemmas are
+first-write-wins by canonical name and immutable (a different-twists redeclare is
+rejected); currencies are FWW by token; both are ZFA-validated before storing.
+The daemon also honors a **`retract`** for a lemma from its **author** (the
+sender's dyncap anchor must match the lemma's stored anchor): it drops the lemma,
+tombstones it in `retracted.json`, and stops re-serving it — so an always-on
+memory peer can't resurrect a lemma the author removed. Polls are ephemeral and
+not persisted; note terms-series (`note-series`) are not yet stored by the daemon.
+Held notes/receipts are never gossiped, so the daemon never stores private bearer
+value.
 
 **To reset the room's remembered state**, delete the `--state` directory.
 
