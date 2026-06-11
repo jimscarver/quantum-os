@@ -27,7 +27,18 @@ export interface Group {
   // Optional per-issue delegate that overrides the global one for that issue:
   // issueId -> (delegator peerId -> { delegate, at }).
   topicDelegations?: Record<string, Record<string, Delegation>>;
+  // Optional `/note` currencies the group uses: a treasury (group funds) and a
+  // kudos (reputation) currency. The admin declares them; balances are bearer
+  // notes held privately by each member.
+  treasury?: string;
+  kudos?: string;
   issues: Issue[];
+}
+
+/** A valid `/note` currency derived from the group (treasury / kudos), unique per group. */
+export function govCurrency(g: Group, suffix: string): string {
+  const base = (g.name.replace(/[^A-Za-z0-9]/g, "") || "GRP").slice(0, 16);
+  return `${base}_${g.id.slice(-4)}${suffix}`;
 }
 
 const normalize = (t: string): string => t.trim().toLowerCase().replace(/\s+/g, " ");

@@ -35,9 +35,9 @@ primitives quantum-os already has:
 | `Issue` / `newIssue` | an issue record per group (`/gov issue`) |
 | `Ballot` / `castBallot` / `castVote` / `tallyVotes` | `/poll` (approval + ranked-choice IRV), opened via `/gov vote` |
 | **`delegateVote`** | **`/gov delegate`** — standing, revocable, transitive delegation (global or per-issue) |
-| `RevIssuer` / `makeMint` / `transfer` / `checkBalance` | `/note` (declare/grant/pass/redeem/balance) — Phase 2 |
-| `Kudos` / `awardKudos` | a `/note` "KUDOS" currency — Phase 2 |
-| `Inbox` / `Chat` / `sendMail` | `/channel` (per-group tag) — Phase 2 |
+| `RevIssuer` / `makeMint` / `transfer` / `checkBalance` | **`/gov treasury`** — a per-group `/note` currency (declare/grant/balance) |
+| `Kudos` / `awardKudos` | **`/gov kudos`** — a per-group `/note` reputation currency |
+| `Inbox` / `Chat` / `sendMail` | `/channel` (per-group tag) — Phase 2b |
 | `deployerId` identity | `/dyncap` anchor |
 | registry lookup / durable link | `/lemma` + the memory-peer daemon |
 
@@ -80,6 +80,8 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov issue <title>` · `/gov issue list` | Record / list issues to decide |
 | `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
+| `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
+| `/gov kudos <member> <n> \| balance` | Award reputation — a per-group kudos `/note` currency (admin issues; members re-gift what they hold) |
 | `/gov status` | Group overview: members, delegations, issue results |
 | `/forget group <name>` | Disband (creator) / hide (others) — tombstoned, dyncap-signed |
 
@@ -140,6 +142,12 @@ global map (`gov.ts` `delegationMapFor`); the resolver and weighted tally are
 unchanged. So you can delegate finance decisions to one steward and design
 decisions to another, while still voting directly to override either.
 
-**Phase 2b (planned):** treasury + kudos via `/note`, per-group inbox via
-`/channel`, hard role/permission enforcement, daemon persistence of `group-*`,
-and more rgov exemplars.
+**Phase 2b (shipped):** **treasury + kudos** — each group can declare a `/note`
+treasury currency (`/gov treasury`) and a kudos reputation currency
+(`/gov kudos`); both are thin orchestration over `/note` (declare/grant/pass/
+balance), with the currency names recorded on the group (`group-meta`, synced).
+Because notes are bearer instruments, a balance readout shows *your own* holdings,
+not a global ledger.
+
+**Phase 2c (planned):** per-group inbox via `/channel`, hard role/permission
+enforcement, daemon persistence of `group-*`, and more rgov exemplars.
