@@ -162,6 +162,9 @@ interface RoomContext {
   // Polls: pollId -> Poll (persisted); live card DOM nodes (in-memory only).
   pollStore: Map<string, Poll>;
   pollCards: Map<string, HTMLElement>;
+  // Retraction tombstones: "<kind>:<id>" of removed gossiped items (poll/lemma)
+  // so a peer's later sync-* can't heal them back. Persisted per room.
+  retracted: Set<string>;
   // Chat history for this room (replayed on tab switch)
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
@@ -197,6 +200,7 @@ function createRoom(roomId: string): RoomContext {
     rhoquHandlers: [],
     pollStore: new Map(),
     pollCards: new Map(),
+    retracted: new Set(),
     chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
@@ -251,6 +255,7 @@ let pendingPersistRequests: Map<string, PersistRequest> = new Map();
 let rhoquHandlers: RhoQuOnHandler[] = [];
 let pollStore: Map<string, Poll> = new Map();
 let pollCards: Map<string, HTMLElement> = new Map();
+let retracted: Set<string> = new Set();
 
 function setActiveRoom(ctx: RoomContext): void {
   activeRoom = ctx;
@@ -276,6 +281,7 @@ function setActiveRoom(ctx: RoomContext): void {
   rhoquHandlers = ctx.rhoquHandlers;
   pollStore          = ctx.pollStore;
   pollCards          = ctx.pollCards;
+  retracted          = ctx.retracted;
 }
 
 // Mutate both the active-room's qpeer and the module-level alias in lockstep.
@@ -329,6 +335,22 @@ function loadPolls(): void {
     const data = JSON.parse(raw) as Record<string, Poll>;
     for (const [id, p] of Object.entries(data)) pollStore.set(id, p);
     renderPolls();
+  } catch { /* ignore corrupt data */ }
+}
+
+// Retraction tombstones — "<kind>:<id>" of removed gossiped items.
+function tombKey(kind: string, id: string): string { return `${kind}:${id}`; }
+function isRetracted(kind: string, id: string): boolean { return retracted.has(tombKey(kind, id)); }
+function markRetracted(kind: string, id: string): void { retracted.add(tombKey(kind, id)); saveRetracted(); }
+function saveRetracted(): void {
+  localStorage.setItem(`qos-retracted-${activeRoom.roomId}`, JSON.stringify([...retracted]));
+}
+function loadRetracted(): void {
+  const raw = localStorage.getItem(`qos-retracted-${activeRoom.roomId}`);
+  if (!raw) return;
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) for (const k of arr) retracted.add(String(k));
   } catch { /* ignore corrupt data */ }
 }
 
@@ -821,6 +843,7 @@ function loadRoomState(ctx: RoomContext): void {
   loadLemmas();
   loadNotes();
   loadPolls();
+  loadRetracted();
   if (previousActive) setActiveRoom(previousActive);
 }
 
@@ -902,16 +925,32 @@ function renderPeers(): void {
   renderRoomProcess();
 }
 
+// Append a small ✕ remove control to a sidebar list item. The button stops
+// click-propagation so it never triggers the row's prefill handler.
+function appendRemoveBtn(li: HTMLElement, title: string, onRemove: () => void): void {
+  const x = document.createElement("button");
+  x.className = "row-remove";
+  x.textContent = "✕";
+  x.title = title;
+  x.addEventListener("click", (e) => { e.stopPropagation(); onRemove(); });
+  li.appendChild(x);
+}
+
 function renderLemmas(): void {
   if (!isUiActive()) return;
   lemmaCountEl.textContent = String(lemmaStore.size);
   lemmaListEl.innerHTML = "";
   for (const [name, entry] of lemmaStore) {
     const li = document.createElement("li");
-    li.textContent = lemmaRefStr(name);
+    li.className = "row-item";
+    const label = document.createElement("span");
+    label.textContent = lemmaRefStr(name);
+    label.style.cursor = "pointer";
+    label.style.flex = "1";
+    label.addEventListener("click", () => { msgInput.value = `/qucalc ${lemmaRefStr(name)}`; msgInput.focus(); });
     li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
-    li.style.cursor = "pointer";
-    li.addEventListener("click", () => { msgInput.value = `/qucalc ${lemmaRefStr(name)}`; msgInput.focus(); });
+    li.appendChild(label);
+    appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
     lemmaListEl.appendChild(li);
   }
 }
@@ -950,14 +989,19 @@ function renderNotes(): void {
   noteListEl.innerHTML = "";
   for (const n of noteStore.values()) {
     const li = document.createElement("li");
+    li.className = "row-item";
     const fromTag = n.receivedFrom ? `  (from ${n.receivedFrom})` : "";
-    li.textContent = `${n.currency} ${n.denomination}${fromTag}`;
-    li.title = n.token;
-    li.style.cursor = "pointer";
-    li.addEventListener("click", () => {
+    const label = document.createElement("span");
+    label.textContent = `${n.currency} ${n.denomination}${fromTag}`;
+    label.style.cursor = "pointer";
+    label.style.flex = "1";
+    label.addEventListener("click", () => {
       msgInput.value = `/note pass ${n.currency} ${n.denomination} `;
       msgInput.focus();
     });
+    li.title = n.token;
+    li.appendChild(label);
+    appendRemoveBtn(li, "delete this note (destroys its value)", () => forgetNote(n.token));
     noteListEl.appendChild(li);
   }
 }
@@ -1325,7 +1369,8 @@ function handleCommand(raw: string): string[] {
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
-      sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · list");
+      sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
+      sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · list");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1439,10 +1484,11 @@ function handleCommand(raw: string): string[] {
         sys(`voted in "${poll.question}": ${names.join(poll.method === "ranked" ? " > " : ", ")}`);
         break;
       }
-      if (sub === "status" || sub === "close" || sub === "lock") {
+      if (sub === "status" || sub === "close" || sub === "lock" || sub === "remove" || sub === "delete") {
         const id = parts[2] && pollStore.has(parts[2]) ? parts[2] : undefined;
         const poll = findPoll(id);
         if (!poll) { sys("no poll found"); break; }
+        if (sub === "remove" || sub === "delete") { forgetPoll(poll); break; }
         if (sub === "lock") { lockNominations(poll); sys(`nominations locked for "${poll.question}"`); break; }
         if (sub === "close") {
           closePoll(poll);
@@ -1455,7 +1501,46 @@ function handleCommand(raw: string): string[] {
         if (poll.status === "closed" && poll.result) sys("  " + summarizeWinners(poll, poll.result));
         break;
       }
-      sys("usage: /poll new <q> [| seeds] [ranked] · add <opt> · vote [id] <choices> · status · lock · close · list");
+      sys("usage: /poll new <q> [| seeds] [ranked] · add <opt> · vote [id] <choices> · status · lock · close · remove · list");
+      break;
+    }
+
+    case "forget": {
+      const sub = (parts[1] || "").toLowerCase();
+      const rest = parts.slice(2).join(" ").trim();
+      if (sub === "list") {
+        if (retracted.size === 0) { sys("no retracted items in this room"); break; }
+        sys(`retracted (${retracted.size}):`);
+        for (const k of retracted) sys(`  ${k}`);
+        break;
+      }
+      if (sub === "poll") {
+        const poll = (rest && pollStore.get(rest)) || findPoll(rest || undefined);
+        if (!poll) { sys("no poll found  (usage: /forget poll <id>; see the Polls list)"); break; }
+        forgetPoll(poll);
+        break;
+      }
+      if (sub === "lemma") {
+        const name = parseLemmaNameArg(rest);
+        if (!name) { sys("usage: /forget lemma <name>  (multi-word: /forget lemma [all men are mortal])"); break; }
+        forgetLemma(name);
+        break;
+      }
+      if (sub === "note") {
+        if (!rest) { sys("usage: /forget note <token | currency denomination>"); break; }
+        let token = rest;
+        if (!noteStore.has(token)) {
+          const np = rest.split(/\s+/);
+          const cur = np[0]; const den = parseInt(np[1] ?? "", 10);
+          const found = [...noteStore.values()].find(n => n.currency === cur && (isNaN(den) || n.denomination === den));
+          if (found) token = found.token;
+        }
+        if (!noteStore.has(token)) { sys(`no held note matches '${rest}'`); break; }
+        forgetNote(token);
+        break;
+      }
+      sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | list>");
+      sys("  poll/lemma: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
       break;
     }
 
@@ -2919,6 +3004,7 @@ function connect(): void {
             return;
           }
           const name = canonLemma(String(d.name ?? ""));
+          if (isRetracted("lemma", name)) return;                  // tombstoned — don't heal back
           const twists = String(d.twists ?? "").trim();
           const cap = d.cap ? String(d.cap) : undefined;
           const who = peerLabel(from);
@@ -3093,7 +3179,7 @@ function connect(): void {
             const name   = canonLemma(String(e.name ?? ""));
             const twists = String(e.twists ?? "").trim();
             if (!name || !twists) continue;
-            if (lemmaStore.has(name)) continue;
+            if (lemmaStore.has(name) || isRetracted("lemma", name)) continue;
             const tw = resolveLemmaToBytes(twists);
             if (!tw || !achievesZfa(tw)) continue;
             lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap });
@@ -3402,6 +3488,7 @@ function connect(): void {
           if (status.startsWith("  · refused")) return;
           const id = String(d.id ?? "");
           if (!id || pollStore.has(id)) return;                    // idempotent
+          if (isRetracted("poll", id)) return;                     // tombstoned — don't heal back
           const options: PollOption[] = [];
           if (Array.isArray(d.options)) {
             for (const o of d.options as unknown[]) {
@@ -3432,6 +3519,7 @@ function connect(): void {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           const pollId = String(d.pollId ?? "");
+          if (isRetracted("poll", pollId)) return;                     // tombstoned
           const text = String(d.text ?? "").trim();
           if (!text) return;
           const opt: PollOption = {
@@ -3462,6 +3550,7 @@ function connect(): void {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           const pollId = String(d.pollId ?? "");
+          if (isRetracted("poll", pollId)) return;                     // tombstoned
           const choices = Array.isArray(d.choices)
             ? (d.choices as unknown[]).map(String).filter((x) => x.length > 0) : [];
           const poll = pollStore.get(pollId);
@@ -3501,6 +3590,36 @@ function connect(): void {
             savePolls();
             renderPolls();
             if (added > 0) addMessage("", `  · synced ${added} poll${added === 1 ? "" : "s"} from ${peerLabel(from)}`, "system");
+          }
+          return;
+        }
+        if (d.kind === "retract") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const what = String(d.what ?? "");
+          const id = String(d.id ?? "");
+          if (!id) return;
+          if (what === "poll") {
+            const poll = pollStore.get(id);
+            if (!poll || from !== poll.creator) return;   // only the creator can retract a poll for everyone
+            markRetracted("poll", id);
+            removePollLocal(poll);
+            renderPolls();
+            addMessage("", `🗳 poll retracted by ${peerLabel(from)} — “${poll.question}”`, "system");
+          } else if (what === "lemma") {
+            const name = canonLemma(id);
+            const entry = lemmaStore.get(name);
+            // Honor only the author: the sender's verified anchor must match the
+            // anchor we recorded when the lemma was declared. Unverifiable
+            // retracts (we don't hold it, or it carried no dyncap) are ignored,
+            // so a peer can't tombstone lemmas it doesn't own.
+            const senderAnchor = dyncapChains.get(from)?.anchor;
+            if (!entry || !entry.dyncap || !senderAnchor || entry.dyncap.anchor !== senderAnchor) return;
+            markRetracted("lemma", name);
+            lemmaStore.delete(name);
+            saveLemmas();
+            renderLemmas();
+            addMessage("", `  · ${lemmaRefStr(name)} retracted by ${peerLabel(from)}`, "system");
           }
           return;
         }
@@ -3615,7 +3734,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -3874,6 +3993,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "note",    template: "/note ",      desc: "promissory notes (grant|pass|redeem…)" },
   { name: "rdv",     template: "/rdv ",       desc: "atomic n-party swap (swap|accept…)" },
   { name: "poll",    template: "/poll ",      desc: "group vote (approval / ranked-choice)" },
+  { name: "forget",  template: "/forget ",    desc: "remove a poll / lemma / note" },
   { name: "dyncap",  template: "/dyncap ",    desc: "dynamic capabilities (status|peers)" },
   { name: "probe",   template: "/probe ",     desc: "consensus discrepancy probe" },
   { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
@@ -4113,6 +4233,7 @@ function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
   const r = raw as Record<string, unknown>;
   const id = String(r.id ?? "");
   if (!id) return "none";
+  if (isRetracted("poll", id)) return "none";                    // tombstoned — don't heal back
   const inOpts = Array.isArray(r.options)
     ? (r.options as unknown[]).map(coercePollOption).filter((o): o is PollOption => o !== null)
     : [];
@@ -4229,6 +4350,70 @@ function closePoll(poll: Poll): void {
   renderPolls();
   postPollClosedMessage(poll);
   signedBroadcast({ kind: "poll-close", pollId: poll.id });
+}
+
+// Drop a poll from local state and replace its live card with a "removed" note.
+// The chat marker line is left in place; on reload renderPollCardInto sees the
+// missing-but-tombstoned poll and shows the same placeholder.
+function removePollLocal(poll: Poll): void {
+  pollStore.delete(poll.id);
+  savePolls();
+  const node = pollCards.get(poll.id);
+  if (node && node.isConnected && isUiActive()) {
+    const ph = document.createElement("span");
+    ph.className = "poll-you";
+    ph.textContent = `🗳 poll removed — “${poll.question}”`;
+    node.replaceWith(ph);
+  }
+  pollCards.delete(poll.id);
+  renderPolls();
+}
+
+// Forget a poll. The creator broadcasts a retraction everyone honors (so it
+// can't re-sync back); anyone else removes it from their own view only. Either
+// way it is tombstoned locally so a peer's sync can't heal it back here.
+function forgetPoll(poll: Poll): void {
+  const mine = poll.creator === myPeerId();
+  markRetracted("poll", poll.id);
+  removePollLocal(poll);
+  if (mine) {
+    signedBroadcast({ kind: "retract", what: "poll", id: poll.id });
+    addMessage("", `🗳 poll retracted — “${poll.question}”`, "system");
+  } else {
+    addMessage("", `🗳 poll hidden for you — “${poll.question}” (only the creator can retract it for everyone)`, "system");
+  }
+}
+
+// Forget a lemma. If we authored it (it carries our anchor, or none — locally
+// declared lemmas store no dyncap), broadcast a retraction peers honor; either
+// way tombstone + drop it locally so sync can't heal it back.
+function forgetLemma(name: string): void {
+  const entry = lemmaStore.get(name);
+  if (!entry) { addMessage("", `no lemma ${lemmaRefStr(name)} to forget`, "system"); return; }
+  const myAnchor = dyncapState?.anchor;
+  const mine = !entry.dyncap || (!!myAnchor && entry.dyncap.anchor === myAnchor);
+  markRetracted("lemma", name);
+  lemmaStore.delete(name);
+  saveLemmas();
+  renderLemmas();
+  if (mine) {
+    signedBroadcast({ kind: "retract", what: "lemma", id: name });
+    addMessage("", `· ${lemmaRefStr(name)} retracted`, "system");
+  } else {
+    addMessage("", `· ${lemmaRefStr(name)} hidden for you (only its author can retract it for everyone)`, "system");
+  }
+}
+
+// Forget a held note. Private bearer value — local only, no broadcast, no
+// tombstone (the same token can legitimately be received again later).
+function forgetNote(token: string): void {
+  const n = noteStore.get(token);
+  if (!n) { addMessage("", "no such note to forget", "system"); return; }
+  if (!confirm(`Delete your ${n.currency} ${n.denomination} note? This destroys its value and cannot be undone.`)) return;
+  noteStore.delete(token);
+  saveNotes();
+  renderNotes();
+  addMessage("", `· deleted ${n.currency} ${n.denomination} note (value destroyed)`, "system");
 }
 
 function createPoll(question: string, optionTexts: string[], method: PollMethod): void {
@@ -4362,9 +4547,9 @@ function buildPollCard(poll: Poll): HTMLElement {
     card.appendChild(rd);
   }
 
+  const ctrls = document.createElement("div");
+  ctrls.style.marginTop = "0.4rem";
   if (poll.status === "open") {
-    const ctrls = document.createElement("div");
-    ctrls.style.marginTop = "0.4rem";
     if (poll.method === "ranked" && mine.length > 0) {
       const clear = document.createElement("button");
       clear.className = "poll-ctlbtn"; clear.textContent = "clear ranking";
@@ -4383,8 +4568,18 @@ function buildPollCard(poll: Poll): HTMLElement {
       cl.addEventListener("click", () => closePoll(poll));
       ctrls.appendChild(cl);
     }
-    if (ctrls.childElementCount) card.appendChild(ctrls);
   }
+  // Remove is always available: the creator retracts it for everyone, anyone
+  // else hides it from their own view.
+  const rm = document.createElement("button");
+  rm.className = "poll-ctlbtn poll-remove";
+  rm.textContent = poll.creator === myPeerId() ? "remove" : "hide";
+  rm.title = poll.creator === myPeerId()
+    ? "retract this poll for everyone"
+    : "hide this poll from your view";
+  rm.addEventListener("click", () => forgetPoll(poll));
+  ctrls.appendChild(rm);
+  card.appendChild(ctrls);
   return card;
 }
 
@@ -4392,7 +4587,8 @@ function renderPollCardInto(host: HTMLElement, pollId: string): void {
   const poll = pollStore.get(pollId);
   if (!poll) {
     const ph = document.createElement("span");
-    ph.className = "poll-you"; ph.textContent = "🗳 poll unavailable";
+    ph.className = "poll-you";
+    ph.textContent = isRetracted("poll", pollId) ? "🗳 poll removed" : "🗳 poll unavailable";
     host.appendChild(ph);
     return;
   }
@@ -4439,10 +4635,16 @@ function renderPolls(): void {
   for (const poll of [...pollStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
     const li = document.createElement("li");
     const nb = Object.keys(poll.ballots).length;
-    li.textContent = `${poll.status === "open" ? "●" : "✓"} ${poll.question.slice(0, 24)} (${poll.options.length}◦ ${nb}✓)`;
+    li.className = "row-item";
+    li.style.cssText = "font-size:0.7rem;color:#aaa;padding:0.3rem 0;border-bottom:1px solid #1a1a1a;";
+    const label = document.createElement("span");
+    label.textContent = `${poll.status === "open" ? "●" : "✓"} ${poll.question.slice(0, 24)} (${poll.options.length}◦ ${nb}✓)`;
+    label.style.cursor = "pointer";
+    label.style.flex = "1";
+    label.addEventListener("click", () => { msgInput.value = `/poll vote ${poll.id} `; msgInput.focus(); });
     li.title = `${poll.method} · ${poll.options.map((o) => o.text).join(", ") || "no options yet"}`;
-    li.style.cssText = "font-size:0.7rem;color:#aaa;padding:0.3rem 0;border-bottom:1px solid #1a1a1a;cursor:pointer;";
-    li.addEventListener("click", () => { msgInput.value = `/poll vote ${poll.id} `; msgInput.focus(); });
+    li.appendChild(label);
+    appendRemoveBtn(li, poll.creator === myPeerId() ? "retract this poll for everyone" : "hide this poll from your view", () => forgetPoll(poll));
     pollListEl.appendChild(li);
   }
 }
@@ -4579,6 +4781,7 @@ async function init(): Promise<void> {
   loadLemmas();
   loadNotes();
   loadPolls();
+  loadRetracted();
 
   // Restore any rooms the user had joined in previous sessions (besides the
   // URL-hash one we already initialised). State for each is loaded from

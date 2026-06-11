@@ -236,6 +236,19 @@ Wire kinds (all dyncap-signed, idempotent, out-of-order tolerant): `poll-open` (
 
 For the broader family of group-decision processes this interface supports (approval / ranked-choice / consensus / atomic rendezvous / delegation / sortition / …) — built and sketched, each mapped to its primitive — see [Group_Decisions.md](Group_Decisions.md).
 
+### Removal & retraction (`/forget` — `app.ts`)
+
+Per-item removal of polls, lemmas, and held notes (sidebar ✕ on each row; a `remove` button on poll cards; the `/forget <poll <id> | lemma <name> | note <token|currency denom> | list>` command).
+
+The key problem is that gossiped state (polls, lemmas) *heals back*: a local delete is re-added by the next peer's `sync-*` push. The fix is **tombstones** — a per-room `retracted: Set<"<kind>:<id>">` (persisted `qos-retracted-<roomId>`, checked by `isRetracted`). Inbound `poll-open` / `poll-option` / `poll-ballot` / `mergePollFromSync` and the live `lemma` handler / `sync-lemmas` loop all skip tombstoned ids, so a removed item stays removed locally.
+
+Removal is **authoritative for the owner, local-hide for everyone else**:
+- A dyncap-signed `retract {what, id}` envelope is honored only from the owner — `from === poll.creator` for a poll, or the sender's verified dyncap anchor matching the lemma's stored author anchor (`entry.dyncap.anchor`) for a lemma. So a peer can retract its own item for everyone, but only hides others' items from its own view (still tombstoned locally).
+- `forgetPoll` / `forgetLemma` broadcast the retract only when you're the owner; otherwise they just tombstone + drop locally.
+- **Notes** are private bearer value: `forgetNote` is local-only with a confirm (no broadcast, no tombstone — the same token can legitimately be received again).
+
+Limitation: there is intentionally **no** `sync-retracted` join replay (it would let a joiner push unverified tombstones and wipe a peer's view). So a peer that was *offline* during a retract keeps its own copy until told otherwise; peers that received the retract still ignore that peer's re-sync of it.
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -273,7 +286,8 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
-| `/poll <sub>` | Group decision — `new <q> [\| seeds] [ranked]`, `add <opt>`, `vote [id] <choices>`, `status`, `lock`, `close`, `list`. Collect-then-vote with approval / ranked-choice (IRV); deterministic joiner-local tally |
+| `/poll <sub>` | Group decision — `new <q> [\| seeds] [ranked]`, `add <opt>`, `vote [id] <choices>`, `status`, `lock`, `close`, `remove`, `list`. Collect-then-vote with approval / ranked-choice (IRV); deterministic joiner-local tally |
+| `/forget <sub>` | Remove an item — `poll <id>`, `lemma <name>`, `note <token\|currency denom>`, `list`. Owner retracts for everyone (dyncap-signed `retract`, tombstoned so it can't re-sync back); others hide locally. Notes delete with confirm |
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
 | `/room <sub>` | Multi-room tabs — `list`, `join <cap\|url>`, `leave`, `ref` |
