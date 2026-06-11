@@ -1419,7 +1419,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · vote · treasury · kudos · status");
+      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · vote · treasury · kudos · say · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1715,7 +1715,14 @@ function handleCommand(raw: string): string[] {
         sys(`👏 awarded ${peerLabel(pid)} ${n} kudos`);
         break;
       }
-      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> [on <issue>] · undelegate [on <issue>] · vote <issue> | opts [ranked] · treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · status · list");
+      if (gsub === "say") {
+        if (!isMember(g, meId)) { sys("only members can post to the group"); break; }
+        if (!grest) { sys("usage: /gov say <message>"); break; }
+        signedBroadcast({ kind: "group-msg", groupId: g.id, text: grest });
+        addMessage("", `🏛 ${g.name}: ${grest}`, "self");
+        break;
+      }
+      sys("usage: /gov new <name> · show <name> · member add|remove <peer> · issue <title> · delegate <peer> [on <issue>] · undelegate [on <issue>] · vote <issue> | opts [ranked] · treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · say <msg> · status · list");
       break;
     }
 
@@ -4057,6 +4064,16 @@ function connect(): void {
           if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); }
           return;
         }
+        if (d.kind === "group-msg") {
+          // Per-group inbox: a member's message, surfaced only to fellow members.
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          const text = String(d.text ?? "");
+          if (!g || !isMember(g, from) || !isMember(g, myPeerId()) || !text) return;
+          addMessage(from, `🏛 ${g.name}: ${text}`, "peer", peerLabel(from));
+          return;
+        }
         if (d.kind === "sync-gov") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -5342,6 +5359,9 @@ function buildGroupCard(g: Group): HTMLElement {
   // Admin / member controls
   const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
   if (member) {
+    const s = document.createElement("button"); s.className = "poll-ctlbtn"; s.textContent = "💬 say";
+    s.addEventListener("click", () => { msgInput.value = "/gov say "; msgInput.focus(); });
+    ctrls.appendChild(s);
     const k = document.createElement("button"); k.className = "poll-ctlbtn"; k.textContent = "👏 kudos";
     k.addEventListener("click", () => { msgInput.value = "/gov kudos "; msgInput.focus(); });
     ctrls.appendChild(k);
