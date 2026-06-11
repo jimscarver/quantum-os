@@ -34,7 +34,7 @@ primitives quantum-os already has:
 | `Group` / `WorkingGroup` / `addMember` / `MemberDirectory` | a group record + membership capabilities; `/gov member` |
 | `Issue` / `newIssue` | an issue record per group (`/gov issue`) |
 | `Ballot` / `castBallot` / `castVote` / `tallyVotes` | `/poll` (approval + ranked-choice IRV), opened via `/gov vote` |
-| **`delegateVote`** | **`/gov delegate`** — standing, revocable, transitive delegation |
+| **`delegateVote`** | **`/gov delegate`** — standing, revocable, transitive delegation (global or per-issue) |
 | `RevIssuer` / `makeMint` / `transfer` / `checkBalance` | `/note` (declare/grant/pass/redeem/balance) — Phase 2 |
 | `Kudos` / `awardKudos` | a `/note` "KUDOS" currency — Phase 2 |
 | `Inbox` / `Chat` / `sendMail` | `/channel` (per-group tag) — Phase 2 |
@@ -78,7 +78,7 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov show <name>` · `/gov list` | Focus + render a group / list all groups |
 | `/gov member add <peer> [admin]` · `member remove <peer>` | Manage roster (admin only); membership is capability-backed |
 | `/gov issue <title>` · `/gov issue list` | Record / list issues to decide |
-| `/gov delegate <member>` · `/gov undelegate` | Set / clear your **standing delegate** |
+| `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov status` | Group overview: members, delegations, issue results |
 | `/forget group <name>` | Disband (creator) / hide (others) — tombstoned, dyncap-signed |
@@ -133,6 +133,13 @@ delegations and ballots. Overriding is just voting; delegation is revocable with
 **Phase 1 (shipped):** groups, members, issues, **standing delegation + per-issue
 override + weighted liquid-democracy tally**, the Governance UI, and this doc.
 
-**Phase 2 (planned):** treasury + kudos via `/note`, per-topic (issue-scoped)
-delegation, per-group inbox via `/channel`, hard role/permission enforcement,
-daemon persistence of `group-*`, and more rgov exemplars.
+**Phase 2a (shipped):** **per-topic (issue-scoped) delegation** — `/gov delegate
+<member> on <issue>` sets a delegate that overrides your global one for that issue
+only (revoke with `/gov undelegate on <issue>`). The per-issue map overrides the
+global map (`gov.ts` `delegationMapFor`); the resolver and weighted tally are
+unchanged. So you can delegate finance decisions to one steward and design
+decisions to another, while still voting directly to override either.
+
+**Phase 2b (planned):** treasury + kudos via `/note`, per-group inbox via
+`/channel`, hard role/permission enforcement, daemon persistence of `group-*`,
+and more rgov exemplars.

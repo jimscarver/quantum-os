@@ -23,7 +23,10 @@ export interface Group {
   creatorLabel: string;
   createdAt: number;
   members: Record<string, Member>;          // peerId -> Member
-  delegations: Record<string, Delegation>;  // delegator peerId -> { delegate, at }
+  delegations: Record<string, Delegation>;  // delegator peerId -> { delegate, at } — standing/global
+  // Optional per-issue delegate that overrides the global one for that issue:
+  // issueId -> (delegator peerId -> { delegate, at }).
+  topicDelegations?: Record<string, Record<string, Delegation>>;
   issues: Issue[];
 }
 
@@ -96,4 +99,17 @@ export function resolveWeights(
 /** Members (excluding self) whose vote flowed to `voter`, for a "self + A + B" readout. */
 export function delegatorsOf(res: WeightResolution, voter: string): string[] {
   return Object.entries(res.flow).filter(([m, d]) => d === voter && m !== voter).map(([m]) => m);
+}
+
+// The effective delegation map for one issue: each member's per-issue delegate
+// (topicDelegations[issueId]) overrides their standing/global delegate. Feed the
+// result straight into resolveWeights — the resolver itself is unchanged.
+export function delegationMapFor(g: Group, issueIdStr: string): Record<string, string> {
+  const topic = g.topicDelegations?.[issueIdStr] ?? {};
+  const out: Record<string, string> = {};
+  for (const peerId of Object.keys(g.members)) {
+    const d = topic[peerId]?.delegate ?? g.delegations[peerId]?.delegate;
+    if (d) out[peerId] = d;
+  }
+  return out;
 }
