@@ -111,7 +111,7 @@ interface ProbeWindow {
 type ChatKind = "peer" | "self" | "system";
 type MediaKind = "image" | "audio" | "video" | "file";
 interface MediaAttachment { mediaKind: MediaKind; name: string; mime: string; size: number; url: string }
-interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string }
+interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string; groupId?: string }
 
 // A persist request is an offer from another peer asking us to also store
 // their lemma / currency declaration so the room's public state has more
@@ -690,6 +690,12 @@ function renderChatLine(line: ChatLine): void {
   if (line.pollId) {
     div.className = "msg poll-msg";
     renderPollCardInto(div, line.pollId);
+    messagesEl.appendChild(div);
+    return;
+  }
+  if (line.groupId) {
+    div.className = "msg gov-msg";
+    renderGroupCardInto(div, line.groupId);
     messagesEl.appendChild(div);
     return;
   }
@@ -4005,6 +4011,7 @@ function connect(): void {
           groupStore.set(id, g);
           saveGroups(); renderGroups();
           addMessage(from, `created group “${g.name}”`, "peer", creatorLabel);
+          addGroupCard(g);
           return;
         }
         if (d.kind === "group-member") {
@@ -4015,7 +4022,7 @@ function connect(): void {
           const peerId = String(d.peerId ?? ""); if (!peerId) return;
           if (d.remove === true) { delete g.members[peerId]; delete g.delegations[peerId]; }
           else g.members[peerId] = { peerId, role: d.role === "admin" ? "admin" : "member", label: String(d.label ?? peerLabel(peerId)), at: Date.now() };
-          saveGroups(); renderGroups();
+          saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
         if (d.kind === "group-meta") {
@@ -4045,7 +4052,7 @@ function connect(): void {
             if (Object.keys(m).length === 0) delete g.topicDelegations[issueId2];
           } else if (delegate === null) delete g.delegations[delegator];
           else g.delegations[delegator] = { delegate, at: Date.now() };
-          saveGroups(); renderGroups();
+          saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
         if (d.kind === "group-issue") {
@@ -4059,7 +4066,7 @@ function connect(): void {
           const iid = String(r!.id ?? issueId(title));
           if (!g.issues.find((i) => i.id === iid)) {
             g.issues.push({ id: iid, title, by: String(r!.by ?? peerLabel(from)), at: typeof r!.at === "number" ? r!.at as number : Date.now(), status: "open" });
-            saveGroups(); renderGroups();
+            saveGroups(); renderGroups(); refreshGroupCard(g);
           }
           return;
         }
@@ -4069,7 +4076,7 @@ function connect(): void {
           const g = groupStore.get(String(d.groupId ?? ""));
           if (!g || !isMember(g, from)) return;
           const issue = g.issues.find((i) => i.id === String(d.issueId ?? ""));
-          if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); }
+          if (issue) { issue.pollId = String(d.pollId ?? ""); issue.status = "open"; saveGroups(); renderGroups(); refreshGroupCard(g); }
           return;
         }
         if (d.kind === "group-msg") {
@@ -4087,7 +4094,15 @@ function connect(): void {
           if (status.startsWith("  · refused")) return;
           if (!Array.isArray(d.groups)) return;
           let changed = 0;
-          for (const raw of d.groups as unknown[]) if (mergeGroupFromSync(raw)) changed++;
+          for (const raw of d.groups as unknown[]) {
+            const gid = String((raw as Record<string, unknown>).id ?? "");
+            const had = groupStore.has(gid);
+            if (mergeGroupFromSync(raw)) {
+              changed++;
+              const g = groupStore.get(gid);
+              if (g) { if (!had) addGroupCard(g); else refreshGroupCard(g); }
+            }
+          }
           if (changed) { saveGroups(); renderGroups(); }
           return;
         }
@@ -5392,7 +5407,7 @@ function buildGroupCard(g: Group): HTMLElement {
       row.appendChild(v);
     } else if (member) {
       const o = document.createElement("button"); o.className = "poll-ctlbtn"; o.textContent = "open vote";
-      o.addEventListener("click", () => { msgInput.value = `/gov vote ${g.name} | ${issue.title}  `; msgInput.focus(); });
+      o.addEventListener("click", () => { showGroupCard(g); msgInput.value = `/gov vote ${issue.title} | `; msgInput.focus(); });
       row.appendChild(o);
     }
     card.appendChild(row);
@@ -5447,13 +5462,38 @@ function buildGroupCard(g: Group): HTMLElement {
   return card;
 }
 
+function renderGroupCardInto(host: HTMLElement, groupId: string): void {
+  const g = groupStore.get(groupId);
+  if (!g) {
+    const ph = document.createElement("span");
+    ph.className = "poll-you";
+    ph.textContent = isRetracted("group", groupId) ? "🏛 group disbanded" : "🏛 group unavailable";
+    host.appendChild(ph);
+    return;
+  }
+  const card = buildGroupCard(g);
+  govCards.set(groupId, card);
+  host.appendChild(card);
+}
+
+// Add a persistent group-card marker to the transcript (one per group, like a
+// poll card) so it replays on reload / tab switch instead of vanishing.
+function addGroupCard(g: Group): void {
+  if (activeRoom.chatLog.some((l) => l.groupId === g.id)) { refreshGroupCard(g); return; }
+  const line: ChatLine = { from: g.creator, text: g.name, kind: "peer", groupId: g.id };
+  activeRoom.chatLog.push(line);
+  trimChatLog(activeRoom);
+  saveChat(activeRoom);
+  if (isUiActive()) { renderChatLine(line); messagesEl.scrollTop = messagesEl.scrollHeight; }
+  else markUnread(activeRoom);
+}
+
 function showGroupCard(g: Group): void {
   focusedGroup = g.id;
   if (!isUiActive()) return;
-  const card = buildGroupCard(g);
-  govCards.set(g.id, card);
-  messagesEl.appendChild(card);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  const existing = govCards.get(g.id);
+  if (existing?.isConnected) { refreshGroupCard(g); existing.scrollIntoView?.({ block: "nearest" }); return; }
+  addGroupCard(g);
 }
 function refreshGroupCard(g: Group): void {
   if (!isUiActive()) return;

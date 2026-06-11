@@ -50,8 +50,18 @@ export class QOSPeer {
 
   constructor(config: PeerConfig) {
     this.config = config;
-    // Generate ZFA-balanced peer identity
-    this.peerId = generateCapability("peer");
+    // ZFA-balanced peer identity, kept stable across page reloads via
+    // sessionStorage so peerId-keyed state (group membership, poll creator /
+    // ballots) survives a refresh. sessionStorage is per-tab, so two tabs in the
+    // same browser still get distinct identities (no signaling collision); a
+    // brand-new tab starts fresh.
+    let id: string | null = null;
+    try { id = sessionStorage.getItem("qos-peer-id"); } catch { /* storage unavailable */ }
+    if (!id || !validateCapability(id)) {
+      id = generateCapability("peer");
+      try { sessionStorage.setItem("qos-peer-id", id); } catch { /* ignore */ }
+    }
+    this.peerId = id;
   }
 
   connect(): void {
