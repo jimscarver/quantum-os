@@ -14,6 +14,8 @@ import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
 import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHandler as RhoQuOnHandler } from "./rhoqu.js";
+import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
+         type Poll, type PollMethod, type PollOption } from "./polls.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -59,6 +61,8 @@ const currencyListEl  = document.getElementById("currency-list")!;
 const currencyCountEl = document.getElementById("currency-count")!;
 const noteListEl      = document.getElementById("note-list")!;
 const noteCountEl     = document.getElementById("note-count")!;
+const pollListEl      = document.getElementById("poll-list")!;
+const pollCountEl     = document.getElementById("poll-count")!;
 const tabListEl       = document.getElementById("tab-list")!;
 const tabAddBtn       = document.getElementById("tab-add") as HTMLButtonElement;
 
@@ -99,7 +103,7 @@ interface ProbeWindow {
 type ChatKind = "peer" | "self" | "system";
 type MediaKind = "image" | "audio" | "video" | "file";
 interface MediaAttachment { mediaKind: MediaKind; name: string; mime: string; size: number; url: string }
-interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment }
+interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string }
 
 // A persist request is an offer from another peer asking us to also store
 // their lemma / currency declaration so the room's public state has more
@@ -155,6 +159,9 @@ interface RoomContext {
   // RhoQu `on channel(x) { … }` handlers — fired when channel-msg envelopes
   // arrive on a matching channel name. Persisted in-memory only.
   rhoquHandlers: RhoQuOnHandler[];
+  // Polls: pollId -> Poll (persisted); live card DOM nodes (in-memory only).
+  pollStore: Map<string, Poll>;
+  pollCards: Map<string, HTMLElement>;
   // Chat history for this room (replayed on tab switch)
   chatLog: ChatLine[];
   // Persisted user-set name for this room's signaling connection (UI only)
@@ -188,6 +195,8 @@ function createRoom(roomId: string): RoomContext {
     channelSubscriptions: new Set(),
     pendingPersistRequests: new Map(),
     rhoquHandlers: [],
+    pollStore: new Map(),
+    pollCards: new Map(),
     chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
     hasUnread: false,
@@ -240,6 +249,8 @@ let ignoredForSync: Set<string> = new Set();
 let channelSubscriptions: Set<string> = new Set();
 let pendingPersistRequests: Map<string, PersistRequest> = new Map();
 let rhoquHandlers: RhoQuOnHandler[] = [];
+let pollStore: Map<string, Poll> = new Map();
+let pollCards: Map<string, HTMLElement> = new Map();
 
 function setActiveRoom(ctx: RoomContext): void {
   activeRoom = ctx;
@@ -263,6 +274,8 @@ function setActiveRoom(ctx: RoomContext): void {
   channelSubscriptions = ctx.channelSubscriptions;
   pendingPersistRequests = ctx.pendingPersistRequests;
   rhoquHandlers = ctx.rhoquHandlers;
+  pollStore          = ctx.pollStore;
+  pollCards          = ctx.pollCards;
 }
 
 // Mutate both the active-room's qpeer and the module-level alias in lockstep.
@@ -299,6 +312,21 @@ function loadLemmas(): void {
     const data = JSON.parse(raw) as Record<string, LemmaEntry>;
     for (const [name, entry] of Object.entries(data)) lemmaStore.set(name, entry);
     renderLemmas();
+  } catch { /* ignore corrupt data */ }
+}
+
+function savePolls(): void {
+  localStorage.setItem(`qos-polls-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(pollStore.entries())));
+}
+
+function loadPolls(): void {
+  const raw = localStorage.getItem(`qos-polls-${activeRoom.roomId}`);
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw) as Record<string, Poll>;
+    for (const [id, p] of Object.entries(data)) pollStore.set(id, p);
+    renderPolls();
   } catch { /* ignore corrupt data */ }
 }
 
@@ -592,6 +620,12 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
 function renderChatLine(line: ChatLine): void {
   const div = document.createElement("div");
   div.className = `msg${line.kind === "system" ? " system-line" : ""}`;
+  if (line.pollId) {
+    div.className = "msg poll-msg";
+    renderPollCardInto(div, line.pollId);
+    messagesEl.appendChild(div);
+    return;
+  }
   const fromEl = document.createElement("span");
   fromEl.className = `from ${line.kind}`;
   fromEl.textContent = line.kind === "system" ? "·"
@@ -722,6 +756,7 @@ function applyActiveRoomToUI(): void {
   renderPeers();
   renderLemmas();
   renderNotes();
+  renderPolls();
   // Share link + tab highlight
   updateShareLink();
   renderTabs();
@@ -783,6 +818,7 @@ function loadRoomState(ctx: RoomContext): void {
   setActiveRoom(ctx);
   loadLemmas();
   loadNotes();
+  loadPolls();
   if (previousActive) setActiveRoom(previousActive);
 }
 
@@ -1231,6 +1267,7 @@ function handleCommand(raw: string): string[] {
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
+      sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · list");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1282,6 +1319,84 @@ function handleCommand(raw: string): string[] {
       sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  ZFA-balanced: ✓`);
       sys(`  registered as @${label} — use /pass ${label} <peer> to transfer`);
       if (qpeer) qpeer.broadcast({ kind: "cap-grant", token, label });
+      break;
+    }
+
+    case "poll": {
+      const sub = (parts[1] ?? "").toLowerCase();
+      if (!sub || sub === "list") {
+        if (pollStore.size === 0) {
+          sys("no polls yet");
+          sys("  /poll new <question> [| seed1, seed2] [ranked]   — then /poll add <option> to collect ideas");
+        } else {
+          sys(`polls (${pollStore.size}):`);
+          for (const p of [...pollStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
+            sys(`  ${p.status === "open" ? "●" : "✓"} ${p.id}  "${p.question}"  [${p.method}]  ${p.options.length} options · ${Object.keys(p.ballots).length} ballots`);
+          }
+        }
+        break;
+      }
+      if (sub === "new") {
+        let rest = parts.slice(2).join(" ");
+        let method: PollMethod = "approval";
+        if (/\s(ranked|irv)\s*$/i.test(" " + rest)) { method = "ranked"; rest = rest.replace(/\s*(ranked|irv)\s*$/i, "").trim(); }
+        else if (/\sapproval\s*$/i.test(" " + rest)) { rest = rest.replace(/\s*approval\s*$/i, "").trim(); }
+        const bar = rest.indexOf("|");
+        const question = (bar < 0 ? rest : rest.slice(0, bar)).trim();
+        const options = bar < 0 ? [] : rest.slice(bar + 1).split(",").map((s) => s.trim()).filter(Boolean);
+        if (!question) { sys("a poll needs a question: /poll new <question> [| seed options] [ranked]"); break; }
+        createPoll(question, options, method);
+        sys(`poll created: "${question}" [${method}]${options.length ? ` — ${options.length} seed options` : " — open for nominations (use /poll add … or the card's add box)"}`);
+        break;
+      }
+      if (sub === "add") {
+        const a = parts.slice(2);
+        let id: string | undefined; let text: string;
+        if (a[0] && pollStore.has(a[0])) { id = a[0]; text = a.slice(1).join(" "); }
+        else { text = a.join(" "); }
+        const poll = findPoll(id);
+        if (!poll) { sys("no open poll — start one with /poll new …"); break; }
+        if (!text.trim()) { sys("usage: /poll add <option text>"); break; }
+        addOption(poll, text);
+        sys(`added option "${text.trim()}" to "${poll.question}"`);
+        break;
+      }
+      if (sub === "vote") {
+        const a = parts.slice(2);
+        let id: string | undefined; let choiceStr: string;
+        if (a[0] && pollStore.has(a[0])) { id = a[0]; choiceStr = a.slice(1).join(" "); }
+        else { choiceStr = a.join(" "); }
+        const poll = findPoll(id);
+        if (!poll) { sys("no open poll to vote in — start one with /poll new …"); break; }
+        if (poll.status !== "open") { sys("that poll is already closed"); break; }
+        if (poll.options.length === 0) { sys("no options yet — add some with /poll add <option>"); break; }
+        const choices = resolveChoices(poll, choiceStr);
+        if (choices.length === 0) {
+          sys(`could not match your choice. options: ${sortedOptions(poll).map((o, i) => `${i + 1}. ${o.text}`).join("   ")}`);
+          break;
+        }
+        castVote(poll, choices);
+        const names = choices.map((cid) => poll.options.find((o) => o.id === cid)?.text ?? cid);
+        sys(`voted in "${poll.question}": ${names.join(poll.method === "ranked" ? " > " : ", ")}`);
+        break;
+      }
+      if (sub === "status" || sub === "close" || sub === "lock") {
+        const id = parts[2] && pollStore.has(parts[2]) ? parts[2] : undefined;
+        const poll = findPoll(id);
+        if (!poll) { sys("no poll found"); break; }
+        if (sub === "lock") { lockNominations(poll); sys(`nominations locked for "${poll.question}"`); break; }
+        if (sub === "close") {
+          closePoll(poll);
+          if (poll.status === "closed" && poll.result) sys(`closed "${poll.question}" — ${summarizeWinners(poll, poll.result)}`);
+          break;
+        }
+        const counts = liveCounts(poll);
+        sys(`"${poll.question}" [${poll.method}] — ${poll.status}${poll.nominationsLocked ? " · locked" : ""} (${poll.options.length} options · ${Object.keys(poll.ballots).length} ballots)`);
+        for (const o of sortedOptions(poll)) sys(`  ${o.text}: ${counts[o.id] ?? 0}`);
+        if (poll.status === "closed" && poll.result) sys("  " + summarizeWinners(poll, poll.result));
+        break;
+      }
+      sys("usage: /poll new <q> [| seeds] [ranked] · add <opt> · vote [id] <choices> · status · lock · close · list");
       break;
     }
 
@@ -3225,6 +3340,112 @@ function connect(): void {
           }
           return;
         }
+        if (d.kind === "poll-open") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const id = String(d.id ?? "");
+          if (!id || pollStore.has(id)) return;                    // idempotent
+          const options: PollOption[] = [];
+          if (Array.isArray(d.options)) {
+            for (const o of d.options as unknown[]) {
+              if (o && typeof o === "object") {
+                const r = o as Record<string, unknown>;
+                const text = String(r.text ?? "").trim();
+                if (!text) continue;
+                options.push({ id: String(r.id ?? optionId(text)), text, by: String(r.by ?? "?"), at: typeof r.at === "number" ? r.at : Date.now() });
+              }
+            }
+          }
+          const poll: Poll = {
+            id, question: String(d.question ?? ""), options,
+            method: d.method === "ranked" ? "ranked" : "approval",
+            creator: from, creatorLabel: String(d.creatorLabel ?? peerLabel(from)),
+            createdAt: typeof d.createdAt === "number" ? d.createdAt : Date.now(),
+            status: "open", ballots: {},
+          };
+          flushBufferedOptions(poll);                              // out-of-order options
+          flushBufferedBallots(poll);                              // out-of-order ballots
+          pollStore.set(id, poll);
+          savePolls();
+          renderPolls();
+          addPollCard(poll);
+          return;
+        }
+        if (d.kind === "poll-option") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const pollId = String(d.pollId ?? "");
+          const text = String(d.text ?? "").trim();
+          if (!text) return;
+          const opt: PollOption = {
+            id: String(d.id ?? optionId(text)), text,
+            by: String(d.by ?? peerLabel(from)),
+            at: typeof d.at === "number" ? d.at : Date.now(),
+          };
+          const poll = pollStore.get(pollId);
+          if (!poll) { bufferOption(pollId, opt); return; }            // arrived before poll-open
+          if (poll.nominationsLocked || poll.status === "closed") return;
+          if (!mergeOption(poll, opt)) return;                         // duplicate
+          savePolls();
+          refreshPollCard(poll);
+          renderPolls();
+          return;
+        }
+        if (d.kind === "poll-lock") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const poll = pollStore.get(String(d.pollId ?? ""));
+          if (!poll || from !== poll.creator) return;
+          poll.nominationsLocked = true;
+          savePolls();
+          refreshPollCard(poll);
+          return;
+        }
+        if (d.kind === "poll-ballot") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const pollId = String(d.pollId ?? "");
+          const choices = Array.isArray(d.choices)
+            ? (d.choices as unknown[]).map(String).filter((x) => x.length > 0) : [];
+          const poll = pollStore.get(pollId);
+          if (!poll) { bufferBallot(pollId, from, choices); return; }   // arrived before poll-open
+          if (poll.status === "closed") return;                        // late ballot ignored
+          poll.ballots[from] = choices;                                // latest wins
+          savePolls();
+          refreshPollCard(poll);
+          renderPolls();
+          return;
+        }
+        if (d.kind === "poll-close") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const poll = pollStore.get(String(d.pollId ?? ""));
+          if (!poll || poll.status === "closed") return;               // idempotent
+          if (from !== poll.creator) return;                           // only creator closes
+          poll.status = "closed";
+          poll.result = tally(poll);
+          savePolls();
+          refreshPollCard(poll);
+          renderPolls();
+          return;
+        }
+        if (d.kind === "sync-polls") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (!Array.isArray(d.polls)) return;
+          let added = 0, updated = 0;
+          for (const raw of d.polls as unknown[]) {
+            const r = mergePollFromSync(raw);
+            if (r === "added") { added++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) addPollCard(p); }
+            else if (r === "updated") { updated++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) refreshPollCard(p); }
+          }
+          if (added > 0 || updated > 0) {
+            savePolls();
+            renderPolls();
+            if (added > 0) addMessage("", `  · synced ${added} poll${added === 1 ? "" : "s"} from ${peerLabel(from)}`, "system");
+          }
+          return;
+        }
         if (d.kind === "file-start") { handleFileStart(d); return; }
         if (d.kind === "file-chunk") { handleFileChunk(from, d); return; }
         if (d.kind === "call-start") {
@@ -3259,6 +3480,10 @@ function connect(): void {
         if (knownCurrencies.size > 0) {
           const entries = Array.from(knownCurrencies.values());
           signedSend(peerId, { kind: "sync-currencies", entries });
+        }
+        if (pollStore.size > 0) {
+          const polls = Array.from(pollStore.values());
+          signedSend(peerId, { kind: "sync-polls", polls });
         }
       } finally { setActiveRoom(prev); }
     },
@@ -3590,6 +3815,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "pass",    template: "/pass ",      desc: "transfer a lemma to a named peer" },
   { name: "note",    template: "/note ",      desc: "promissory notes (grant|pass|redeem…)" },
   { name: "rdv",     template: "/rdv ",       desc: "atomic n-party swap (swap|accept…)" },
+  { name: "poll",    template: "/poll ",      desc: "group vote (approval / ranked-choice)" },
   { name: "dyncap",  template: "/dyncap ",    desc: "dynamic capabilities (status|peers)" },
   { name: "probe",   template: "/probe ",     desc: "consensus discrepancy probe" },
   { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
@@ -3604,6 +3830,7 @@ interface QuickAction { label: string; ico: string; fill: string; hint: string }
 const QUICK_ACTIONS: QuickAction[] = [
   { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
   { label: "Call",       ico: "📞", fill: "",                hint: "" },
+  { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
   { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
   { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
@@ -3750,6 +3977,410 @@ function initUx(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Polls: group decisions (approval / ranked-choice), dyncap-signed ballots,
+// deterministic joiner-local tally
+// ---------------------------------------------------------------------------
+
+const RANK_CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
+
+// Out-of-order: ballots / options that arrive before their poll-open are buffered.
+const pollBallotBuffer = new Map<string, Array<{ peer: string; choices: string[] }>>();
+function bufferBallot(pollId: string, peer: string, choices: string[]): void {
+  const arr = pollBallotBuffer.get(pollId) ?? [];
+  arr.push({ peer, choices });
+  pollBallotBuffer.set(pollId, arr);
+}
+function flushBufferedBallots(poll: Poll): void {
+  const arr = pollBallotBuffer.get(poll.id);
+  if (!arr) return;
+  for (const { peer, choices } of arr) poll.ballots[peer] = choices;
+  pollBallotBuffer.delete(poll.id);
+}
+const pollOptionBuffer = new Map<string, PollOption[]>();
+function bufferOption(pollId: string, opt: PollOption): void {
+  const arr = pollOptionBuffer.get(pollId) ?? [];
+  arr.push(opt);
+  pollOptionBuffer.set(pollId, arr);
+}
+function flushBufferedOptions(poll: Poll): void {
+  const arr = pollOptionBuffer.get(poll.id);
+  if (!arr) return;
+  for (const o of arr) mergeOption(poll, o);
+  pollOptionBuffer.delete(poll.id);
+}
+
+function myPeerId(): string { return qpeer?.peerId ?? "self"; }
+
+function defaultOpenPoll(): Poll | null {
+  let best: Poll | null = null;
+  for (const p of pollStore.values()) {
+    if (p.status === "open" && (!best || p.createdAt > best.createdAt)) best = p;
+  }
+  return best;
+}
+function findPoll(id?: string): Poll | null {
+  return id ? (pollStore.get(id) ?? null) : defaultOpenPoll();
+}
+
+// Add/merge an option idempotently (dedupe by content id; keep earliest add-time).
+function mergeOption(poll: Poll, opt: PollOption): boolean {
+  const existing = poll.options.find((o) => o.id === opt.id);
+  if (existing) { if (opt.at < existing.at) existing.at = opt.at; return false; }
+  poll.options.push(opt);
+  return true;
+}
+
+// Sanitize one inbound option object (sync / wire) into a PollOption, or null.
+function coercePollOption(o: unknown): PollOption | null {
+  if (!o || typeof o !== "object") return null;
+  const r = o as Record<string, unknown>;
+  const text = String(r.text ?? "").trim();
+  if (!text) return null;
+  return {
+    id: String(r.id ?? optionId(text)),
+    text,
+    by: String(r.by ?? "?"),
+    at: typeof r.at === "number" ? r.at : 0,
+  };
+}
+
+// Merge a whole poll received in a join handshake (sync-polls) into the store.
+// New poll -> adopt verbatim (options, ballots, status, result, lock). Known
+// poll -> union options (by id), adopt ballots only for peers we have none for
+// (live poll-ballot envelopes reconcile re-votes), OR the lock flag, and adopt
+// a closed result if the sender has closed it and we have not. Returns whether
+// the poll was newly added, merely updated, or unchanged.
+function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
+  if (!raw || typeof raw !== "object") return "none";
+  const r = raw as Record<string, unknown>;
+  const id = String(r.id ?? "");
+  if (!id) return "none";
+  const inOpts = Array.isArray(r.options)
+    ? (r.options as unknown[]).map(coercePollOption).filter((o): o is PollOption => o !== null)
+    : [];
+  const inBallots: Record<string, string[]> =
+    r.ballots && typeof r.ballots === "object"
+      ? Object.fromEntries(
+          Object.entries(r.ballots as Record<string, unknown>).map(([peer, ch]) => [
+            peer,
+            Array.isArray(ch) ? (ch as unknown[]).map(String).filter((x) => x.length > 0) : [],
+          ]),
+        )
+      : {};
+  const inClosed = r.status === "closed";
+
+  const existing = pollStore.get(id);
+  if (!existing) {
+    const poll: Poll = {
+      id,
+      question: String(r.question ?? ""),
+      options: inOpts,
+      method: r.method === "ranked" ? "ranked" : "approval",
+      creator: String(r.creator ?? ""),
+      creatorLabel: String(r.creatorLabel ?? "?"),
+      createdAt: typeof r.createdAt === "number" ? r.createdAt : 0,
+      status: inClosed ? "closed" : "open",
+      nominationsLocked: r.nominationsLocked === true,
+      ballots: inBallots,
+    };
+    flushBufferedOptions(poll);
+    flushBufferedBallots(poll);
+    if (inClosed) poll.result = tally(poll);
+    pollStore.set(id, poll);
+    return "added";
+  }
+
+  let changed = false;
+  for (const opt of inOpts) if (mergeOption(existing, opt)) changed = true;
+  for (const [peer, ch] of Object.entries(inBallots)) {
+    if (!(peer in existing.ballots)) { existing.ballots[peer] = ch; changed = true; }
+  }
+  if (r.nominationsLocked === true && !existing.nominationsLocked) { existing.nominationsLocked = true; changed = true; }
+  if (inClosed && existing.status !== "closed") {
+    existing.status = "closed";
+    existing.result = tally(existing);
+    changed = true;
+  }
+  return changed ? "updated" : "none";
+}
+
+// Resolve a free-text choice list to option ids: option text (exact then prefix)
+// or 1-based number into the displayed order. Ranked uses ">".
+function resolveChoices(poll: Poll, raw: string): string[] {
+  const opts = sortedOptions(poll);
+  const parts = (poll.method === "ranked" ? raw.split(">") : raw.split(/[\s,]+/))
+    .map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const tok of parts) {
+    let opt: PollOption | undefined;
+    if (/^\d+$/.test(tok)) {
+      opt = opts[parseInt(tok, 10) - 1];
+    } else {
+      const low = tok.toLowerCase();
+      opt = opts.find((o) => o.text.toLowerCase() === low) ?? opts.find((o) => o.text.toLowerCase().startsWith(low));
+    }
+    if (opt && !out.includes(opt.id)) out.push(opt.id);
+  }
+  return out;
+}
+
+function addOption(poll: Poll, text: string): void {
+  const t = text.trim();
+  if (!t) return;
+  if (poll.status !== "open" || poll.nominationsLocked) { addMessage("", "nominations are closed for this poll", "system"); return; }
+  const opt: PollOption = { id: optionId(t), text: t, by: myName || shortId(myPeerId()), at: Date.now() };
+  if (!mergeOption(poll, opt)) return;          // duplicate — already present
+  savePolls();
+  refreshPollCard(poll);
+  renderPolls();
+  signedBroadcast({ kind: "poll-option", pollId: poll.id, id: opt.id, text: opt.text, by: opt.by, at: opt.at });
+}
+
+function castVote(poll: Poll, choices: string[]): void {
+  if (poll.status !== "open") return;
+  poll.ballots[myPeerId()] = choices;
+  savePolls();
+  refreshPollCard(poll);
+  renderPolls();
+  signedBroadcast({ kind: "poll-ballot", pollId: poll.id, choices });
+}
+
+function lockNominations(poll: Poll): void {
+  if (poll.creator !== myPeerId() || poll.nominationsLocked) return;
+  poll.nominationsLocked = true;
+  savePolls();
+  refreshPollCard(poll);
+  signedBroadcast({ kind: "poll-lock", pollId: poll.id });
+}
+
+function closePoll(poll: Poll): void {
+  if (poll.status !== "open") return;
+  if (poll.creator !== myPeerId()) { addMessage("", "only the poll creator can close it", "system"); return; }
+  poll.status = "closed";
+  poll.result = tally(poll);
+  savePolls();
+  refreshPollCard(poll);
+  renderPolls();
+  signedBroadcast({ kind: "poll-close", pollId: poll.id });
+}
+
+function createPoll(question: string, optionTexts: string[], method: PollMethod): void {
+  const id = `poll-${myPeerId().slice(-4)}-${Date.now().toString(36)}`;
+  const by = myName || shortId(myPeerId());
+  const options: PollOption[] = optionTexts.map((t, k) => ({ id: optionId(t), text: t, by, at: Date.now() + k }));
+  const poll: Poll = {
+    id, question, options, method,
+    creator: myPeerId(), creatorLabel: by,
+    createdAt: Date.now(), status: "open", ballots: {},
+  };
+  pollStore.set(id, poll);
+  savePolls();
+  renderPolls();
+  addPollCard(poll);
+  signedBroadcast({
+    kind: "poll-open", id, question, method, options,
+    creator: poll.creator, creatorLabel: poll.creatorLabel, createdAt: poll.createdAt,
+  });
+}
+
+function buildPollCard(poll: Poll): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "poll-card";
+  card.dataset.poll = poll.id;
+
+  const q = document.createElement("div");
+  q.className = "poll-q";
+  q.textContent = poll.question + " ";
+  const badge = document.createElement("span");
+  badge.className = "poll-badge";
+  badge.textContent = poll.method === "ranked" ? "ranked-choice" : "approval";
+  q.appendChild(badge);
+  if (poll.status === "closed") {
+    const cl = document.createElement("span"); cl.className = "poll-badge"; cl.textContent = "closed"; q.appendChild(cl);
+  } else if (!poll.nominationsLocked) {
+    const op = document.createElement("span"); op.className = "poll-badge"; op.textContent = "open for ideas"; q.appendChild(op);
+  }
+  card.appendChild(q);
+
+  const opts = sortedOptions(poll);
+  const counts = liveCounts(poll);
+  const maxCount = Math.max(1, ...Object.values(counts));
+  const mine = poll.ballots[myPeerId()] ?? [];
+  const result = poll.status === "closed" ? (poll.result ?? tally(poll)) : null;
+
+  for (const opt of opts) {
+    const row = document.createElement("div");
+    row.className = "poll-opt";
+    if (result && result.winners.includes(opt.id)) row.classList.add("winner");
+    if (mine.includes(opt.id)) row.classList.add("voted");
+
+    const bar = document.createElement("div");
+    bar.className = "poll-bar";
+    bar.style.width = `${Math.round(((counts[opt.id] ?? 0) / maxCount) * 100)}%`;
+    row.appendChild(bar);
+
+    if (poll.method === "ranked") {
+      const rk = document.createElement("span");
+      rk.className = "poll-rank";
+      const pos = mine.indexOf(opt.id);
+      rk.textContent = pos >= 0 ? (RANK_CIRCLED[pos] ?? `#${pos + 1}`) : "";
+      row.appendChild(rk);
+    }
+
+    const label = document.createElement("span");
+    label.style.flex = "1";
+    label.textContent = opt.text;
+    label.title = `suggested by ${opt.by}`;
+    row.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "poll-count";
+    count.textContent = String(counts[opt.id] ?? 0);
+    row.appendChild(count);
+
+    if (poll.status === "open") {
+      const btn = document.createElement("button");
+      const isMine = mine.includes(opt.id);
+      btn.textContent = poll.method === "approval"
+        ? (isMine ? "✓ approved" : "approve")
+        : (isMine ? "ranked" : "rank");
+      btn.addEventListener("click", () => {
+        const next = isMine ? mine.filter((x) => x !== opt.id) : [...mine, opt.id];
+        castVote(poll, next);
+      });
+      row.appendChild(btn);
+    }
+    card.appendChild(row);
+  }
+
+  // "add an option" row — open nominations
+  if (poll.status === "open" && !poll.nominationsLocked) {
+    const addRow = document.createElement("div");
+    addRow.className = "poll-add";
+    const input = document.createElement("input");
+    input.type = "text"; input.placeholder = "add an option…"; input.className = "poll-add-input";
+    const go = document.createElement("button");
+    go.className = "poll-ctlbtn"; go.textContent = "+ add";
+    const submit = () => { if (input.value.trim()) { addOption(poll, input.value); input.value = ""; } };
+    go.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    addRow.appendChild(input);
+    addRow.appendChild(go);
+    card.appendChild(addRow);
+  }
+
+  const foot = document.createElement("div");
+  foot.className = "poll-you";
+  if (poll.status === "closed" && result) {
+    foot.textContent = summarizeWinners(poll, result);
+  } else if (mine.length > 0) {
+    foot.textContent = "you voted: " +
+      mine.map((id) => poll.options.find((o) => o.id === id)?.text ?? id).join(poll.method === "ranked" ? " > " : ", ");
+  } else if (opts.length > 0) {
+    foot.textContent = poll.method === "ranked"
+      ? "click options in your order of preference"
+      : "click every option you'd be happy with";
+  } else {
+    foot.textContent = "no options yet — add the first one above";
+  }
+  card.appendChild(foot);
+
+  if (poll.status === "closed" && result && result.method === "ranked" && result.rounds.length > 1) {
+    const rd = document.createElement("div");
+    rd.className = "poll-rounds";
+    rd.textContent = result.rounds.map((r, k) => {
+      const line = opts.map((o) => (r.counts[o.id] < 0 ? `${o.text}:✗` : `${o.text}:${r.counts[o.id] ?? 0}`)).join("  ");
+      return `round ${k + 1}: ${line}${r.eliminated ? `  — out: ${poll.options.find((o) => o.id === r.eliminated)?.text ?? ""}` : ""}`;
+    }).join("\n");
+    card.appendChild(rd);
+  }
+
+  if (poll.status === "open") {
+    const ctrls = document.createElement("div");
+    ctrls.style.marginTop = "0.4rem";
+    if (poll.method === "ranked" && mine.length > 0) {
+      const clear = document.createElement("button");
+      clear.className = "poll-ctlbtn"; clear.textContent = "clear ranking";
+      clear.addEventListener("click", () => castVote(poll, []));
+      ctrls.appendChild(clear);
+    }
+    if (poll.creator === myPeerId() && !poll.nominationsLocked && opts.length > 0) {
+      const lk = document.createElement("button");
+      lk.className = "poll-ctlbtn"; lk.textContent = "lock nominations";
+      lk.addEventListener("click", () => lockNominations(poll));
+      ctrls.appendChild(lk);
+    }
+    if (poll.creator === myPeerId()) {
+      const cl = document.createElement("button");
+      cl.className = "poll-ctlbtn poll-close"; cl.textContent = "close poll";
+      cl.addEventListener("click", () => closePoll(poll));
+      ctrls.appendChild(cl);
+    }
+    if (ctrls.childElementCount) card.appendChild(ctrls);
+  }
+  return card;
+}
+
+function renderPollCardInto(host: HTMLElement, pollId: string): void {
+  const poll = pollStore.get(pollId);
+  if (!poll) {
+    const ph = document.createElement("span");
+    ph.className = "poll-you"; ph.textContent = "🗳 poll unavailable";
+    host.appendChild(ph);
+    return;
+  }
+  const card = buildPollCard(poll);
+  pollCards.set(pollId, card);
+  host.appendChild(card);
+}
+
+function refreshPollCard(poll: Poll): void {
+  if (!isUiActive()) return;
+  const node = pollCards.get(poll.id);
+  if (!node || !node.isConnected) return;
+  // Preserve a half-typed "add an option" draft + focus across the re-render
+  // that an inbound ballot/option would otherwise wipe out.
+  const active = document.activeElement;
+  const editing = active instanceof HTMLInputElement && node.contains(active) && active.classList.contains("poll-add-input");
+  const draft = editing ? active.value : null;
+  const fresh = buildPollCard(poll);
+  node.replaceWith(fresh);
+  pollCards.set(poll.id, fresh);
+  if (draft !== null) {
+    const inp = fresh.querySelector(".poll-add-input") as HTMLInputElement | null;
+    if (inp) { inp.value = draft; inp.focus(); }
+  }
+}
+
+function addPollCard(poll: Poll): void {
+  const line: ChatLine = { from: poll.creator, text: poll.question, kind: "peer", pollId: poll.id };
+  activeRoom.chatLog.push(line);
+  trimChatLog(activeRoom);
+  saveChat(activeRoom);
+  if (isUiActive()) {
+    renderChatLine(line);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else {
+    markUnread(activeRoom);
+  }
+}
+
+function renderPolls(): void {
+  if (!isUiActive()) return;
+  pollCountEl.textContent = String(pollStore.size);
+  pollListEl.innerHTML = "";
+  for (const poll of [...pollStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
+    const li = document.createElement("li");
+    const nb = Object.keys(poll.ballots).length;
+    li.textContent = `${poll.status === "open" ? "●" : "✓"} ${poll.question.slice(0, 24)} (${poll.options.length}◦ ${nb}✓)`;
+    li.title = `${poll.method} · ${poll.options.map((o) => o.text).join(", ") || "no options yet"}`;
+    li.style.cssText = "font-size:0.7rem;color:#aaa;padding:0.3rem 0;border-bottom:1px solid #1a1a1a;cursor:pointer;";
+    li.addEventListener("click", () => { msgInput.value = `/poll vote ${poll.id} `; msgInput.focus(); });
+    pollListEl.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Live calls: mic / camera over WebRTC media tracks
 // ---------------------------------------------------------------------------
 
@@ -3880,6 +4511,7 @@ async function init(): Promise<void> {
   await loadDyncap();
   loadLemmas();
   loadNotes();
+  loadPolls();
 
   // Restore any rooms the user had joined in previous sessions (besides the
   // URL-hash one we already initialised). State for each is loaded from
