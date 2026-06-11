@@ -3429,6 +3429,23 @@ function connect(): void {
           renderPolls();
           return;
         }
+        if (d.kind === "sync-polls") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (!Array.isArray(d.polls)) return;
+          let added = 0, updated = 0;
+          for (const raw of d.polls as unknown[]) {
+            const r = mergePollFromSync(raw);
+            if (r === "added") { added++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) addPollCard(p); }
+            else if (r === "updated") { updated++; const p = pollStore.get(String((raw as Record<string, unknown>).id)); if (p) refreshPollCard(p); }
+          }
+          if (added > 0 || updated > 0) {
+            savePolls();
+            renderPolls();
+            if (added > 0) addMessage("", `  · synced ${added} poll${added === 1 ? "" : "s"} from ${peerLabel(from)}`, "system");
+          }
+          return;
+        }
         if (d.kind === "file-start") { handleFileStart(d); return; }
         if (d.kind === "file-chunk") { handleFileChunk(from, d); return; }
         if (d.kind === "call-start") {
@@ -3463,6 +3480,10 @@ function connect(): void {
         if (knownCurrencies.size > 0) {
           const entries = Array.from(knownCurrencies.values());
           signedSend(peerId, { kind: "sync-currencies", entries });
+        }
+        if (pollStore.size > 0) {
+          const polls = Array.from(pollStore.values());
+          signedSend(peerId, { kind: "sync-polls", polls });
         }
       } finally { setActiveRoom(prev); }
     },
@@ -4007,6 +4028,80 @@ function mergeOption(poll: Poll, opt: PollOption): boolean {
   if (existing) { if (opt.at < existing.at) existing.at = opt.at; return false; }
   poll.options.push(opt);
   return true;
+}
+
+// Sanitize one inbound option object (sync / wire) into a PollOption, or null.
+function coercePollOption(o: unknown): PollOption | null {
+  if (!o || typeof o !== "object") return null;
+  const r = o as Record<string, unknown>;
+  const text = String(r.text ?? "").trim();
+  if (!text) return null;
+  return {
+    id: String(r.id ?? optionId(text)),
+    text,
+    by: String(r.by ?? "?"),
+    at: typeof r.at === "number" ? r.at : 0,
+  };
+}
+
+// Merge a whole poll received in a join handshake (sync-polls) into the store.
+// New poll -> adopt verbatim (options, ballots, status, result, lock). Known
+// poll -> union options (by id), adopt ballots only for peers we have none for
+// (live poll-ballot envelopes reconcile re-votes), OR the lock flag, and adopt
+// a closed result if the sender has closed it and we have not. Returns whether
+// the poll was newly added, merely updated, or unchanged.
+function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
+  if (!raw || typeof raw !== "object") return "none";
+  const r = raw as Record<string, unknown>;
+  const id = String(r.id ?? "");
+  if (!id) return "none";
+  const inOpts = Array.isArray(r.options)
+    ? (r.options as unknown[]).map(coercePollOption).filter((o): o is PollOption => o !== null)
+    : [];
+  const inBallots: Record<string, string[]> =
+    r.ballots && typeof r.ballots === "object"
+      ? Object.fromEntries(
+          Object.entries(r.ballots as Record<string, unknown>).map(([peer, ch]) => [
+            peer,
+            Array.isArray(ch) ? (ch as unknown[]).map(String).filter((x) => x.length > 0) : [],
+          ]),
+        )
+      : {};
+  const inClosed = r.status === "closed";
+
+  const existing = pollStore.get(id);
+  if (!existing) {
+    const poll: Poll = {
+      id,
+      question: String(r.question ?? ""),
+      options: inOpts,
+      method: r.method === "ranked" ? "ranked" : "approval",
+      creator: String(r.creator ?? ""),
+      creatorLabel: String(r.creatorLabel ?? "?"),
+      createdAt: typeof r.createdAt === "number" ? r.createdAt : 0,
+      status: inClosed ? "closed" : "open",
+      nominationsLocked: r.nominationsLocked === true,
+      ballots: inBallots,
+    };
+    flushBufferedOptions(poll);
+    flushBufferedBallots(poll);
+    if (inClosed) poll.result = tally(poll);
+    pollStore.set(id, poll);
+    return "added";
+  }
+
+  let changed = false;
+  for (const opt of inOpts) if (mergeOption(existing, opt)) changed = true;
+  for (const [peer, ch] of Object.entries(inBallots)) {
+    if (!(peer in existing.ballots)) { existing.ballots[peer] = ch; changed = true; }
+  }
+  if (r.nominationsLocked === true && !existing.nominationsLocked) { existing.nominationsLocked = true; changed = true; }
+  if (inClosed && existing.status !== "closed") {
+    existing.status = "closed";
+    existing.result = tally(existing);
+    changed = true;
+  }
+  return changed ? "updated" : "none";
 }
 
 // Resolve a free-text choice list to option ids: option text (exact then prefix)
