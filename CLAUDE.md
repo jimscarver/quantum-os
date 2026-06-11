@@ -39,6 +39,7 @@ quantum-os/
 │   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
 │   │       ├── dyncap.ts   Hash-only dynamic capabilities (sign/verify envelopes; SHA-256 only)
 │   │       ├── probe.ts    Discrepancy probe — chain-weighted supermajority tally on join
+│   │       ├── polls.ts    Group polls — pure approval + ranked-choice (IRV) tally over content-hash option ids
 │   │       ├── rhoqu.ts    RhoQu macro parser + transpiler (process / new / | / if / on / for → /command strings)
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
@@ -218,6 +219,21 @@ When a new data channel opens (`onChannelOpen(peerId)` in `connect()`), the peer
 
 Inbound handlers validate every entry with the same label/ZFA-balance checks as the live `lemma` / `note-declare` flows. First-write-wins dedupe by lemma name; currency dedupe by token. Held notes / receipts / redemptions are *never* gossiped — they're private bearer state.
 
+Polls are also synced here: a `sync-polls` envelope (full `Poll[]`) is pushed to the new arrival so it sees polls created before it joined (see Group polls below).
+
+### Group polls (`/poll` — `polls.ts` + `app.ts`)
+
+On-demand group decisions (e.g. "pizza vs burgers vs salad for lunch") with **collect-then-vote** open nominations and two methods: **approval** and **ranked-choice (IRV)**.
+
+`polls.ts` is a **pure tally module** (no DOM / storage / app imports — mirrors `probe.ts`). The tally is **deterministic and joiner-local**: every peer recomputes the same result from the ballots it holds — no central counter, echoing the consensus probe.
+
+- **Options are referenced by a stable content-hash id** (`optionId(text)` — djb2 over normalized text), *never* by array position. Options are collected by broadcast and arrive in different orders on different peers, so an index would mean different things on different peers; an id also auto-dedupes identical suggestions ("Pizza" ≡ "pizza "). Ballots are `Record<peerId, string[]>` of option ids.
+- `tallyApproval` — most-approvals-win, ties listed. `tallyRanked` — IRV over ids: win at majority of continuing ballots, exhausted ballots excluded from the denominator, deterministic tie-break = smallest option id (so every peer agrees regardless of ballot arrival order). `tally` dispatches by method; `liveCounts` gives per-option bars; `sortedOptions` is the deterministic display order (add-time then id); `summarizeWinners` is the chat/foot text.
+
+Lifecycle: `/poll new <q>` opens for nominations (no fixed options); `| a, b` seeds some. Anyone adds options (the card's "add an option" box or `/poll add <opt>`); everyone votes/re-votes live (latest ballot per peer wins) until the creator closes. The creator may `/poll lock` to freeze nominations. On close, every peer **logs the result as a permanent transcript message** (`postPollClosedMessage`) so the outcome survives card re-renders and chat scroll-back — not only the interactive card.
+
+Wire kinds (all dyncap-signed, idempotent, out-of-order tolerant): `poll-open` (with `options: PollOption[]`), `poll-option`, `poll-lock`, `poll-ballot` (id list), `poll-close`, and `sync-polls` (join replay). Options/ballots that arrive before their `poll-open` are buffered (`pollOptionBuffer` / `pollBallotBuffer`) and drained on open. Per-room persistence under `qos-polls-<roomId>`; cards rebuild from live `pollStore` on reload/tab-switch via the `pollId` branch in `renderChatLine`. Only the creator can lock/close (`from === poll.creator`).
+
 ### Signaling server trust model
 
 The signaling server is an **untrusted relay**:
@@ -255,6 +271,7 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
 | `/rdv <sub>` | N-party atomic rendezvous — `swap`, `accept`, `reject`, `abort`, `list` |
+| `/poll <sub>` | Group decision — `new <q> [\| seeds] [ranked]`, `add <opt>`, `vote [id] <choices>`, `status`, `lock`, `close`, `list`. Collect-then-vote with approval / ranked-choice (IRV); deterministic joiner-local tally |
 | `/dyncap <sub>` | Hash-only dynamic capabilities — `status`, `peers` |
 | `/probe <sub>` | Joiner-local consensus probe — `status`, `clear` (the probe runs automatically on connect) |
 | `/room <sub>` | Multi-room tabs — `list`, `join <cap\|url>`, `leave`, `ref` |
@@ -267,7 +284,7 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/script`, `/persist`, `/rhoqu`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (or are local-only) so a generic qlf rebroadcast would be redundant or noisy. `/rhoqu` itself doesn't broadcast — only the commands it transpiles to do, per their own rules.
+Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/poll`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/script`, `/persist`, `/rhoqu`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (or are local-only) so a generic qlf rebroadcast would be redundant or noisy. `/rhoqu` itself doesn't broadcast — only the commands it transpiles to do, per their own rules.
 
 ---
 
@@ -337,6 +354,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/rendezvous.ts` | Rendezvous protocol types, conservationCheck, cyclicSwap |
 | `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
 | `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
+| `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage) |
 | `packages/browser/src/rhoqu.ts` | RhoQu tokenizer, parser (`process`/`new`/`if`/`on`/`for`/`\|`), AST, and `transpile(source, ctx?)` that emits a `string[]` of `/commands`. `RhoQuContext` interface + `OnHandler` for `on channel(x) { … }` dispatcher registration. |
 | `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
 | `RhoQuDemo.md` | End-user walkthrough of `/rhoqu` — atomic swap with conditional accept, dining philosophers, multisig with persistence |
