@@ -14,8 +14,8 @@ import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
 import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHandler as RhoQuOnHandler } from "./rhoqu.js";
-import { tally, liveCounts, summarizeWinners,
-         type Poll, type PollMethod } from "./polls.js";
+import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
+         type Poll, type PollMethod, type PollOption } from "./polls.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1267,7 +1267,7 @@ function handleCommand(raw: string): string[] {
       sys("  /pass <n> <peer> — transfer @n directly to a named peer");
       sys("  /note [sub]      — promissory notes (declare|grant|pass|redeem|split|merge|balance)");
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
-      sys("  /poll [sub]      — group vote: new <q> | a, b, c [ranked] · vote · status · close · list");
+      sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · list");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1327,68 +1327,76 @@ function handleCommand(raw: string): string[] {
       if (!sub || sub === "list") {
         if (pollStore.size === 0) {
           sys("no polls yet");
-          sys("  usage: /poll new <question> | opt1, opt2, opt3 [ranked]");
+          sys("  /poll new <question> [| seed1, seed2] [ranked]   — then /poll add <option> to collect ideas");
         } else {
           sys(`polls (${pollStore.size}):`);
           for (const p of [...pollStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
-            sys(`  ${p.status === "open" ? "●" : "✓"} ${p.id}  "${p.question}"  [${p.method}]  ${Object.keys(p.ballots).length} ballots`);
+            sys(`  ${p.status === "open" ? "●" : "✓"} ${p.id}  "${p.question}"  [${p.method}]  ${p.options.length} options · ${Object.keys(p.ballots).length} ballots`);
           }
         }
         break;
       }
       if (sub === "new") {
-        const rest = parts.slice(2).join(" ");
-        const bar = rest.indexOf("|");
-        if (bar < 0) { sys("usage: /poll new <question> | opt1, opt2, opt3 [ranked]"); break; }
-        const question = rest.slice(0, bar).trim();
-        let optStr = rest.slice(bar + 1).trim();
+        let rest = parts.slice(2).join(" ");
         let method: PollMethod = "approval";
-        if (/\s(ranked|irv|rank)\s*$/i.test(" " + optStr)) {
-          method = "ranked"; optStr = optStr.replace(/\s*(ranked|irv|rank)\s*$/i, "").trim();
-        } else if (/\s*approval\s*$/i.test(optStr)) {
-          optStr = optStr.replace(/\s*approval\s*$/i, "").trim();
-        }
-        const options = optStr.split(",").map((s) => s.trim()).filter(Boolean);
-        if (!question) { sys("a poll needs a question before the |"); break; }
-        if (options.length < 2) { sys("a poll needs at least 2 comma-separated options after |"); break; }
+        if (/\s(ranked|irv)\s*$/i.test(" " + rest)) { method = "ranked"; rest = rest.replace(/\s*(ranked|irv)\s*$/i, "").trim(); }
+        else if (/\sapproval\s*$/i.test(" " + rest)) { rest = rest.replace(/\s*approval\s*$/i, "").trim(); }
+        const bar = rest.indexOf("|");
+        const question = (bar < 0 ? rest : rest.slice(0, bar)).trim();
+        const options = bar < 0 ? [] : rest.slice(bar + 1).split(",").map((s) => s.trim()).filter(Boolean);
+        if (!question) { sys("a poll needs a question: /poll new <question> [| seed options] [ranked]"); break; }
         createPoll(question, options, method);
-        sys(`poll created: "${question}" [${method}] — ${options.length} options`);
+        sys(`poll created: "${question}" [${method}]${options.length ? ` — ${options.length} seed options` : " — open for nominations (use /poll add … or the card's add box)"}`);
+        break;
+      }
+      if (sub === "add") {
+        const a = parts.slice(2);
+        let id: string | undefined; let text: string;
+        if (a[0] && pollStore.has(a[0])) { id = a[0]; text = a.slice(1).join(" "); }
+        else { text = a.join(" "); }
+        const poll = findPoll(id);
+        if (!poll) { sys("no open poll — start one with /poll new …"); break; }
+        if (!text.trim()) { sys("usage: /poll add <option text>"); break; }
+        addOption(poll, text);
+        sys(`added option "${text.trim()}" to "${poll.question}"`);
         break;
       }
       if (sub === "vote") {
         const a = parts.slice(2);
-        let id: string | undefined;
-        let choiceStr: string;
+        let id: string | undefined; let choiceStr: string;
         if (a[0] && pollStore.has(a[0])) { id = a[0]; choiceStr = a.slice(1).join(" "); }
         else { choiceStr = a.join(" "); }
         const poll = findPoll(id);
         if (!poll) { sys("no open poll to vote in — start one with /poll new …"); break; }
         if (poll.status !== "open") { sys("that poll is already closed"); break; }
+        if (poll.options.length === 0) { sys("no options yet — add some with /poll add <option>"); break; }
         const choices = resolveChoices(poll, choiceStr);
         if (choices.length === 0) {
-          sys(`could not match your choice. options: ${poll.options.map((o, i) => `${i + 1}. ${o}`).join("   ")}`);
+          sys(`could not match your choice. options: ${sortedOptions(poll).map((o, i) => `${i + 1}. ${o.text}`).join("   ")}`);
           break;
         }
         castVote(poll, choices);
-        sys(`voted in "${poll.question}": ${choices.map((i) => poll.options[i]).join(poll.method === "ranked" ? " > " : ", ")}`);
+        const names = choices.map((cid) => poll.options.find((o) => o.id === cid)?.text ?? cid);
+        sys(`voted in "${poll.question}": ${names.join(poll.method === "ranked" ? " > " : ", ")}`);
         break;
       }
-      if (sub === "status" || sub === "close") {
+      if (sub === "status" || sub === "close" || sub === "lock") {
         const id = parts[2] && pollStore.has(parts[2]) ? parts[2] : undefined;
         const poll = findPoll(id);
         if (!poll) { sys("no poll found"); break; }
+        if (sub === "lock") { lockNominations(poll); sys(`nominations locked for "${poll.question}"`); break; }
         if (sub === "close") {
           closePoll(poll);
           if (poll.status === "closed" && poll.result) sys(`closed "${poll.question}" — ${summarizeWinners(poll, poll.result)}`);
           break;
         }
         const counts = liveCounts(poll);
-        sys(`"${poll.question}" [${poll.method}] — ${poll.status} (${Object.keys(poll.ballots).length} ballots)`);
-        poll.options.forEach((o, i) => sys(`  ${o}: ${counts[i]}`));
+        sys(`"${poll.question}" [${poll.method}] — ${poll.status}${poll.nominationsLocked ? " · locked" : ""} (${poll.options.length} options · ${Object.keys(poll.ballots).length} ballots)`);
+        for (const o of sortedOptions(poll)) sys(`  ${o.text}: ${counts[o.id] ?? 0}`);
         if (poll.status === "closed" && poll.result) sys("  " + summarizeWinners(poll, poll.result));
         break;
       }
-      sys("usage: /poll new <q> | a, b, c [ranked] · /poll vote [id] <choices> · /poll status · /poll close · /poll list");
+      sys("usage: /poll new <q> [| seeds] [ranked] · add <opt> · vote [id] <choices> · status · lock · close · list");
       break;
     }
 
@@ -3337,8 +3345,17 @@ function connect(): void {
           if (status.startsWith("  · refused")) return;
           const id = String(d.id ?? "");
           if (!id || pollStore.has(id)) return;                    // idempotent
-          const options = Array.isArray(d.options) ? (d.options as unknown[]).map(String) : [];
-          if (options.length < 2) return;
+          const options: PollOption[] = [];
+          if (Array.isArray(d.options)) {
+            for (const o of d.options as unknown[]) {
+              if (o && typeof o === "object") {
+                const r = o as Record<string, unknown>;
+                const text = String(r.text ?? "").trim();
+                if (!text) continue;
+                options.push({ id: String(r.id ?? optionId(text)), text, by: String(r.by ?? "?"), at: typeof r.at === "number" ? r.at : Date.now() });
+              }
+            }
+          }
           const poll: Poll = {
             id, question: String(d.question ?? ""), options,
             method: d.method === "ranked" ? "ranked" : "approval",
@@ -3346,6 +3363,7 @@ function connect(): void {
             createdAt: typeof d.createdAt === "number" ? d.createdAt : Date.now(),
             status: "open", ballots: {},
           };
+          flushBufferedOptions(poll);                              // out-of-order options
           flushBufferedBallots(poll);                              // out-of-order ballots
           pollStore.set(id, poll);
           savePolls();
@@ -3353,12 +3371,42 @@ function connect(): void {
           addPollCard(poll);
           return;
         }
+        if (d.kind === "poll-option") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const pollId = String(d.pollId ?? "");
+          const text = String(d.text ?? "").trim();
+          if (!text) return;
+          const opt: PollOption = {
+            id: String(d.id ?? optionId(text)), text,
+            by: String(d.by ?? peerLabel(from)),
+            at: typeof d.at === "number" ? d.at : Date.now(),
+          };
+          const poll = pollStore.get(pollId);
+          if (!poll) { bufferOption(pollId, opt); return; }            // arrived before poll-open
+          if (poll.nominationsLocked || poll.status === "closed") return;
+          if (!mergeOption(poll, opt)) return;                         // duplicate
+          savePolls();
+          refreshPollCard(poll);
+          renderPolls();
+          return;
+        }
+        if (d.kind === "poll-lock") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const poll = pollStore.get(String(d.pollId ?? ""));
+          if (!poll || from !== poll.creator) return;
+          poll.nominationsLocked = true;
+          savePolls();
+          refreshPollCard(poll);
+          return;
+        }
         if (d.kind === "poll-ballot") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           const pollId = String(d.pollId ?? "");
           const choices = Array.isArray(d.choices)
-            ? (d.choices as unknown[]).map(Number).filter((x) => Number.isInteger(x) && x >= 0) : [];
+            ? (d.choices as unknown[]).map(String).filter((x) => x.length > 0) : [];
           const poll = pollStore.get(pollId);
           if (!poll) { bufferBallot(pollId, from, choices); return; }   // arrived before poll-open
           if (poll.status === "closed") return;                        // late ballot ignored
@@ -3761,7 +3809,7 @@ interface QuickAction { label: string; ico: string; fill: string; hint: string }
 const QUICK_ACTIONS: QuickAction[] = [
   { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
   { label: "Call",       ico: "📞", fill: "",                hint: "" },
-  { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch? | pizza, burgers, salad" },
+  { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
   { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality" },
   { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10" },
@@ -3914,9 +3962,9 @@ function initUx(): void {
 
 const RANK_CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
 
-// Ballots that arrive before their poll-open (out-of-order) are buffered here.
-const pollBallotBuffer = new Map<string, Array<{ peer: string; choices: number[] }>>();
-function bufferBallot(pollId: string, peer: string, choices: number[]): void {
+// Out-of-order: ballots / options that arrive before their poll-open are buffered.
+const pollBallotBuffer = new Map<string, Array<{ peer: string; choices: string[] }>>();
+function bufferBallot(pollId: string, peer: string, choices: string[]): void {
   const arr = pollBallotBuffer.get(pollId) ?? [];
   arr.push({ peer, choices });
   pollBallotBuffer.set(pollId, arr);
@@ -3926,6 +3974,18 @@ function flushBufferedBallots(poll: Poll): void {
   if (!arr) return;
   for (const { peer, choices } of arr) poll.ballots[peer] = choices;
   pollBallotBuffer.delete(poll.id);
+}
+const pollOptionBuffer = new Map<string, PollOption[]>();
+function bufferOption(pollId: string, opt: PollOption): void {
+  const arr = pollOptionBuffer.get(pollId) ?? [];
+  arr.push(opt);
+  pollOptionBuffer.set(pollId, arr);
+}
+function flushBufferedOptions(poll: Poll): void {
+  const arr = pollOptionBuffer.get(poll.id);
+  if (!arr) return;
+  for (const o of arr) mergeOption(poll, o);
+  pollOptionBuffer.delete(poll.id);
 }
 
 function myPeerId(): string { return qpeer?.peerId ?? "self"; }
@@ -3941,34 +4001,61 @@ function findPoll(id?: string): Poll | null {
   return id ? (pollStore.get(id) ?? null) : defaultOpenPoll();
 }
 
-// Resolve a free-text choice list to option indices: option names
-// (case-insensitive, exact then prefix) or 1-based numbers. Ranked uses ">".
-function resolveChoices(poll: Poll, raw: string): number[] {
+// Add/merge an option idempotently (dedupe by content id; keep earliest add-time).
+function mergeOption(poll: Poll, opt: PollOption): boolean {
+  const existing = poll.options.find((o) => o.id === opt.id);
+  if (existing) { if (opt.at < existing.at) existing.at = opt.at; return false; }
+  poll.options.push(opt);
+  return true;
+}
+
+// Resolve a free-text choice list to option ids: option text (exact then prefix)
+// or 1-based number into the displayed order. Ranked uses ">".
+function resolveChoices(poll: Poll, raw: string): string[] {
+  const opts = sortedOptions(poll);
   const parts = (poll.method === "ranked" ? raw.split(">") : raw.split(/[\s,]+/))
     .map((s) => s.trim()).filter(Boolean);
-  const out: number[] = [];
+  const out: string[] = [];
   for (const tok of parts) {
-    let idx = -1;
+    let opt: PollOption | undefined;
     if (/^\d+$/.test(tok)) {
-      const n = parseInt(tok, 10) - 1;
-      if (n >= 0 && n < poll.options.length) idx = n;
+      opt = opts[parseInt(tok, 10) - 1];
     } else {
       const low = tok.toLowerCase();
-      idx = poll.options.findIndex((o) => o.toLowerCase() === low);
-      if (idx < 0) idx = poll.options.findIndex((o) => o.toLowerCase().startsWith(low));
+      opt = opts.find((o) => o.text.toLowerCase() === low) ?? opts.find((o) => o.text.toLowerCase().startsWith(low));
     }
-    if (idx >= 0 && !out.includes(idx)) out.push(idx);
+    if (opt && !out.includes(opt.id)) out.push(opt.id);
   }
   return out;
 }
 
-function castVote(poll: Poll, choices: number[]): void {
+function addOption(poll: Poll, text: string): void {
+  const t = text.trim();
+  if (!t) return;
+  if (poll.status !== "open" || poll.nominationsLocked) { addMessage("", "nominations are closed for this poll", "system"); return; }
+  const opt: PollOption = { id: optionId(t), text: t, by: myName || shortId(myPeerId()), at: Date.now() };
+  if (!mergeOption(poll, opt)) return;          // duplicate — already present
+  savePolls();
+  refreshPollCard(poll);
+  renderPolls();
+  signedBroadcast({ kind: "poll-option", pollId: poll.id, id: opt.id, text: opt.text, by: opt.by, at: opt.at });
+}
+
+function castVote(poll: Poll, choices: string[]): void {
   if (poll.status !== "open") return;
   poll.ballots[myPeerId()] = choices;
   savePolls();
   refreshPollCard(poll);
   renderPolls();
   signedBroadcast({ kind: "poll-ballot", pollId: poll.id, choices });
+}
+
+function lockNominations(poll: Poll): void {
+  if (poll.creator !== myPeerId() || poll.nominationsLocked) return;
+  poll.nominationsLocked = true;
+  savePolls();
+  refreshPollCard(poll);
+  signedBroadcast({ kind: "poll-lock", pollId: poll.id });
 }
 
 function closePoll(poll: Poll): void {
@@ -3982,11 +4069,13 @@ function closePoll(poll: Poll): void {
   signedBroadcast({ kind: "poll-close", pollId: poll.id });
 }
 
-function createPoll(question: string, options: string[], method: PollMethod): void {
+function createPoll(question: string, optionTexts: string[], method: PollMethod): void {
   const id = `poll-${myPeerId().slice(-4)}-${Date.now().toString(36)}`;
+  const by = myName || shortId(myPeerId());
+  const options: PollOption[] = optionTexts.map((t, k) => ({ id: optionId(t), text: t, by, at: Date.now() + k }));
   const poll: Poll = {
     id, question, options, method,
-    creator: myPeerId(), creatorLabel: myName || shortId(myPeerId()),
+    creator: myPeerId(), creatorLabel: by,
     createdAt: Date.now(), status: "open", ballots: {},
   };
   pollStore.set(id, poll);
@@ -3994,7 +4083,7 @@ function createPoll(question: string, options: string[], method: PollMethod): vo
   renderPolls();
   addPollCard(poll);
   signedBroadcast({
-    kind: "poll-open", id, question, options, method,
+    kind: "poll-open", id, question, method, options,
     creator: poll.creator, creatorLabel: poll.creatorLabel, createdAt: poll.createdAt,
   });
 }
@@ -4012,60 +4101,78 @@ function buildPollCard(poll: Poll): HTMLElement {
   badge.textContent = poll.method === "ranked" ? "ranked-choice" : "approval";
   q.appendChild(badge);
   if (poll.status === "closed") {
-    const cl = document.createElement("span");
-    cl.className = "poll-badge"; cl.textContent = "closed";
-    q.appendChild(cl);
+    const cl = document.createElement("span"); cl.className = "poll-badge"; cl.textContent = "closed"; q.appendChild(cl);
+  } else if (!poll.nominationsLocked) {
+    const op = document.createElement("span"); op.className = "poll-badge"; op.textContent = "open for ideas"; q.appendChild(op);
   }
   card.appendChild(q);
 
+  const opts = sortedOptions(poll);
   const counts = liveCounts(poll);
-  const maxCount = Math.max(1, ...counts);
+  const maxCount = Math.max(1, ...Object.values(counts));
   const mine = poll.ballots[myPeerId()] ?? [];
   const result = poll.status === "closed" ? (poll.result ?? tally(poll)) : null;
 
-  poll.options.forEach((opt, i) => {
+  for (const opt of opts) {
     const row = document.createElement("div");
     row.className = "poll-opt";
-    if (result && result.winners.includes(i)) row.classList.add("winner");
-    if (mine.includes(i)) row.classList.add("voted");
+    if (result && result.winners.includes(opt.id)) row.classList.add("winner");
+    if (mine.includes(opt.id)) row.classList.add("voted");
 
     const bar = document.createElement("div");
     bar.className = "poll-bar";
-    bar.style.width = `${Math.round((counts[i] / maxCount) * 100)}%`;
+    bar.style.width = `${Math.round(((counts[opt.id] ?? 0) / maxCount) * 100)}%`;
     row.appendChild(bar);
 
     if (poll.method === "ranked") {
       const rk = document.createElement("span");
       rk.className = "poll-rank";
-      const pos = mine.indexOf(i);
+      const pos = mine.indexOf(opt.id);
       rk.textContent = pos >= 0 ? (RANK_CIRCLED[pos] ?? `#${pos + 1}`) : "";
       row.appendChild(rk);
     }
 
     const label = document.createElement("span");
     label.style.flex = "1";
-    label.textContent = opt;
+    label.textContent = opt.text;
+    label.title = `suggested by ${opt.by}`;
     row.appendChild(label);
 
     const count = document.createElement("span");
     count.className = "poll-count";
-    count.textContent = String(counts[i]);
+    count.textContent = String(counts[opt.id] ?? 0);
     row.appendChild(count);
 
     if (poll.status === "open") {
       const btn = document.createElement("button");
-      const isMine = mine.includes(i);
+      const isMine = mine.includes(opt.id);
       btn.textContent = poll.method === "approval"
         ? (isMine ? "✓ approved" : "approve")
         : (isMine ? "ranked" : "rank");
       btn.addEventListener("click", () => {
-        const next = isMine ? mine.filter((x) => x !== i) : [...mine, i];
+        const next = isMine ? mine.filter((x) => x !== opt.id) : [...mine, opt.id];
         castVote(poll, next);
       });
       row.appendChild(btn);
     }
     card.appendChild(row);
-  });
+  }
+
+  // "add an option" row — open nominations
+  if (poll.status === "open" && !poll.nominationsLocked) {
+    const addRow = document.createElement("div");
+    addRow.className = "poll-add";
+    const input = document.createElement("input");
+    input.type = "text"; input.placeholder = "add an option…"; input.className = "poll-add-input";
+    const go = document.createElement("button");
+    go.className = "poll-ctlbtn"; go.textContent = "+ add";
+    const submit = () => { if (input.value.trim()) { addOption(poll, input.value); input.value = ""; } };
+    go.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    addRow.appendChild(input);
+    addRow.appendChild(go);
+    card.appendChild(addRow);
+  }
 
   const foot = document.createElement("div");
   foot.className = "poll-you";
@@ -4073,11 +4180,13 @@ function buildPollCard(poll: Poll): HTMLElement {
     foot.textContent = summarizeWinners(poll, result);
   } else if (mine.length > 0) {
     foot.textContent = "you voted: " +
-      mine.map((i) => poll.options[i] ?? `#${i}`).join(poll.method === "ranked" ? " > " : ", ");
-  } else {
+      mine.map((id) => poll.options.find((o) => o.id === id)?.text ?? id).join(poll.method === "ranked" ? " > " : ", ");
+  } else if (opts.length > 0) {
     foot.textContent = poll.method === "ranked"
       ? "click options in your order of preference"
       : "click every option you'd be happy with";
+  } else {
+    foot.textContent = "no options yet — add the first one above";
   }
   card.appendChild(foot);
 
@@ -4085,8 +4194,8 @@ function buildPollCard(poll: Poll): HTMLElement {
     const rd = document.createElement("div");
     rd.className = "poll-rounds";
     rd.textContent = result.rounds.map((r, k) => {
-      const line = poll.options.map((o, i) => (r.counts[i] < 0 ? `${o}:✗` : `${o}:${r.counts[i]}`)).join("  ");
-      return `round ${k + 1}: ${line}${r.eliminated != null ? `  — out: ${poll.options[r.eliminated]}` : ""}`;
+      const line = opts.map((o) => (r.counts[o.id] < 0 ? `${o.text}:✗` : `${o.text}:${r.counts[o.id] ?? 0}`)).join("  ");
+      return `round ${k + 1}: ${line}${r.eliminated ? `  — out: ${poll.options.find((o) => o.id === r.eliminated)?.text ?? ""}` : ""}`;
     }).join("\n");
     card.appendChild(rd);
   }
@@ -4096,15 +4205,19 @@ function buildPollCard(poll: Poll): HTMLElement {
     ctrls.style.marginTop = "0.4rem";
     if (poll.method === "ranked" && mine.length > 0) {
       const clear = document.createElement("button");
-      clear.className = "poll-ctlbtn";
-      clear.textContent = "clear ranking";
+      clear.className = "poll-ctlbtn"; clear.textContent = "clear ranking";
       clear.addEventListener("click", () => castVote(poll, []));
       ctrls.appendChild(clear);
     }
+    if (poll.creator === myPeerId() && !poll.nominationsLocked && opts.length > 0) {
+      const lk = document.createElement("button");
+      lk.className = "poll-ctlbtn"; lk.textContent = "lock nominations";
+      lk.addEventListener("click", () => lockNominations(poll));
+      ctrls.appendChild(lk);
+    }
     if (poll.creator === myPeerId()) {
       const cl = document.createElement("button");
-      cl.className = "poll-ctlbtn poll-close";
-      cl.textContent = "close poll";
+      cl.className = "poll-ctlbtn poll-close"; cl.textContent = "close poll";
       cl.addEventListener("click", () => closePoll(poll));
       ctrls.appendChild(cl);
     }
@@ -4130,9 +4243,18 @@ function refreshPollCard(poll: Poll): void {
   if (!isUiActive()) return;
   const node = pollCards.get(poll.id);
   if (!node || !node.isConnected) return;
+  // Preserve a half-typed "add an option" draft + focus across the re-render
+  // that an inbound ballot/option would otherwise wipe out.
+  const active = document.activeElement;
+  const editing = active instanceof HTMLInputElement && node.contains(active) && active.classList.contains("poll-add-input");
+  const draft = editing ? active.value : null;
   const fresh = buildPollCard(poll);
   node.replaceWith(fresh);
   pollCards.set(poll.id, fresh);
+  if (draft !== null) {
+    const inp = fresh.querySelector(".poll-add-input") as HTMLInputElement | null;
+    if (inp) { inp.value = draft; inp.focus(); }
+  }
 }
 
 function addPollCard(poll: Poll): void {
@@ -4154,9 +4276,9 @@ function renderPolls(): void {
   pollListEl.innerHTML = "";
   for (const poll of [...pollStore.values()].sort((a, b) => b.createdAt - a.createdAt)) {
     const li = document.createElement("li");
-    const n = Object.keys(poll.ballots).length;
-    li.textContent = `${poll.status === "open" ? "●" : "✓"} ${poll.question.slice(0, 26)} (${n})`;
-    li.title = `${poll.method} · ${poll.options.join(", ")}`;
+    const nb = Object.keys(poll.ballots).length;
+    li.textContent = `${poll.status === "open" ? "●" : "✓"} ${poll.question.slice(0, 24)} (${poll.options.length}◦ ${nb}✓)`;
+    li.title = `${poll.method} · ${poll.options.map((o) => o.text).join(", ") || "no options yet"}`;
     li.style.cssText = "font-size:0.7rem;color:#aaa;padding:0.3rem 0;border-bottom:1px solid #1a1a1a;cursor:pointer;";
     li.addEventListener("click", () => { msgInput.value = `/poll vote ${poll.id} `; msgInput.focus(); });
     pollListEl.appendChild(li);

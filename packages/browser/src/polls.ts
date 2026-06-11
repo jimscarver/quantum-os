@@ -1,128 +1,114 @@
 // Pure poll-tally module — no DOM, no storage, no app imports (mirrors probe.ts).
 //
-// Approval and ranked-choice (IRV) tallies are deterministic functions of
-// (options, ballots): every peer computes the same result from the ballots it
-// holds, regardless of arrival order. That is what lets the tally be
-// joiner-local with no central counter, the same model as the consensus probe.
+// Options are referenced by a stable content-hash **id**, never by array
+// position: options are collected from the group by broadcast and arrive in
+// different orders on different peers, so an index would mean different things
+// on different peers. Hashing the normalized text also auto-dedupes identical
+// suggestions. Given ids, the approval and ranked (IRV) tallies are pure,
+// deterministic functions of (options, ballots): every peer computes the same
+// result from the ballots it holds — joiner-local, no central counter.
 
 export type PollMethod = "approval" | "ranked";
 export type PollStatus = "open" | "closed";
 
+export interface PollOption { id: string; text: string; by: string; at: number }
+
 export interface Poll {
   id: string;
   question: string;
-  options: string[];                 // ballots reference options by index
+  options: PollOption[];               // collected; referenced by stable id
   method: PollMethod;
-  creator: string;                   // creator peerId — authoritative for close
+  creator: string;                     // creator peerId — authoritative for close/lock
   creatorLabel: string;
   createdAt: number;
-  closesAt?: number;
   status: PollStatus;
-  // peerId -> option indices.  approval: a set (order ignored).
-  //                            ranked:   preference order, most-preferred first.
-  ballots: Record<string, number[]>;
-  result?: PollResult;               // cached on close; also recomputable live
+  nominationsLocked?: boolean;         // creator may lock to stop new options
+  ballots: Record<string, string[]>;   // peerId -> option ids (approval set / ranked order)
+  result?: PollResult;
 }
 
-export interface ApprovalResult {
-  method: "approval";
-  counts: number[];                  // approvals per option index
-  winners: number[];                 // option indices tied at the max (empty if no votes)
-  totalBallots: number;
-}
-
-export interface IrvRound {
-  counts: number[];                  // continuing first-choices; -1 = eliminated
-  eliminated: number | null;         // option eliminated this round (null on terminal round)
-  exhausted: number;                 // ballots with no continuing preference
-}
-
-export interface RankedResult {
-  method: "ranked";
-  rounds: IrvRound[];
-  winners: number[];                 // usually 1; >1 only on an unbreakable terminal tie
-  totalBallots: number;
-}
-
+export interface ApprovalResult { method: "approval"; counts: Record<string, number>; winners: string[]; totalBallots: number }
+export interface IrvRound { counts: Record<string, number>; eliminated: string | null; exhausted: number }
+export interface RankedResult { method: "ranked"; rounds: IrvRound[]; winners: string[]; totalBallots: number }
 export type PollResult = ApprovalResult | RankedResult;
 
-/** Drop out-of-range and duplicate indices, preserving order. */
-function dedupeInRange(ballot: number[], n: number): number[] {
-  const seen = new Set<number>();
-  const out: number[] = [];
-  for (const idx of ballot) {
-    if (Number.isInteger(idx) && idx >= 0 && idx < n && !seen.has(idx)) {
-      seen.add(idx);
-      out.push(idx);
-    }
-  }
+const normalize = (t: string): string => t.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Stable content-hash id for an option (djb2 over normalized text). */
+export function optionId(text: string): string {
+  const s = normalize(text);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function validIds(poll: Poll): Set<string> { return new Set(poll.options.map((o) => o.id)); }
+
+function cleanBallot(ballot: string[], valid: Set<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ballot) if (valid.has(id) && !seen.has(id)) { seen.add(id); out.push(id); }
   return out;
 }
 
 export function tallyApproval(poll: Poll): ApprovalResult {
-  const n = poll.options.length;
-  const counts = new Array<number>(n).fill(0);
+  const valid = validIds(poll);
+  const counts: Record<string, number> = {};
+  for (const o of poll.options) counts[o.id] = 0;
   let total = 0;
-  for (const ballot of Object.values(poll.ballots)) {
-    const clean = dedupeInRange(ballot, n);
+  for (const b of Object.values(poll.ballots)) {
+    const clean = cleanBallot(b, valid);
     if (clean.length === 0) continue;
-    for (const idx of clean) counts[idx]++;
+    for (const id of clean) counts[id]++;
     total++;
   }
   let max = 0;
-  for (const c of counts) if (c > max) max = c;
-  const winners: number[] = [];
-  if (max > 0) for (let i = 0; i < n; i++) if (counts[i] === max) winners.push(i);
+  for (const o of poll.options) if (counts[o.id] > max) max = counts[o.id];
+  const winners = max > 0 ? poll.options.filter((o) => counts[o.id] === max).map((o) => o.id) : [];
   return { method: "approval", counts, winners, totalBallots: total };
 }
 
 export function tallyRanked(poll: Poll): RankedResult {
-  const n = poll.options.length;
-  const ballots = Object.values(poll.ballots)
-    .map((b) => dedupeInRange(b, n))
-    .filter((b) => b.length > 0);
+  const valid = validIds(poll);
+  const ids = poll.options.map((o) => o.id);
+  const ballots = Object.values(poll.ballots).map((b) => cleanBallot(b, valid)).filter((b) => b.length > 0);
   const total = ballots.length;
-  const eliminated = new Set<number>();
+  const eliminated = new Set<string>();
   const rounds: IrvRound[] = [];
 
-  // At most n elimination rounds; guard bounds the loop regardless.
-  for (let guard = 0; guard <= n; guard++) {
-    const counts = new Array<number>(n).fill(0);
+  for (let guard = 0; guard <= ids.length; guard++) {
+    const counts: Record<string, number> = {};
+    for (const id of ids) counts[id] = 0;
     let exhausted = 0;
     for (const b of ballots) {
-      const top = b.find((idx) => !eliminated.has(idx));
+      const top = b.find((id) => !eliminated.has(id));
       if (top === undefined) exhausted++;
       else counts[top]++;
     }
     const continuing = total - exhausted;
-    const display = counts.map((c, i) => (eliminated.has(i) ? -1 : c));
+    const display: Record<string, number> = {};
+    for (const id of ids) display[id] = eliminated.has(id) ? -1 : counts[id];
+    const nonElim = ids.filter((id) => !eliminated.has(id));
 
-    let leader = -1, leaderCount = -1;
-    for (let i = 0; i < n; i++) {
-      if (eliminated.has(i)) continue;
-      if (counts[i] > leaderCount) { leaderCount = counts[i]; leader = i; }
-    }
-    const nonElim: number[] = [];
-    for (let i = 0; i < n; i++) if (!eliminated.has(i)) nonElim.push(i);
+    let leaderCount = -1;
+    for (const id of nonElim) if (counts[id] > leaderCount) leaderCount = counts[id];
 
-    if (continuing === 0) {                 // every ballot exhausted — no winner
+    if (continuing === 0) {
       rounds.push({ counts: display, eliminated: null, exhausted });
       return { method: "ranked", rounds, winners: [], totalBallots: total };
     }
-    if (leaderCount * 2 > continuing) {     // majority of continuing ballots
+    if (leaderCount * 2 > continuing) {
       rounds.push({ counts: display, eliminated: null, exhausted });
-      return { method: "ranked", rounds, winners: nonElim.filter((i) => counts[i] === leaderCount), totalBallots: total };
+      return { method: "ranked", rounds, winners: nonElim.filter((id) => counts[id] === leaderCount), totalBallots: total };
     }
-    if (nonElim.length <= 1) {              // cannot reduce further
+    if (nonElim.length <= 1) {
       rounds.push({ counts: display, eliminated: null, exhausted });
       return { method: "ranked", rounds, winners: nonElim, totalBallots: total };
     }
-
-    // eliminate the lowest; deterministic tie-break = lowest option index
+    // eliminate the lowest; deterministic tie-break = smallest option id
     let minCount = Infinity;
-    for (const i of nonElim) if (counts[i] < minCount) minCount = counts[i];
-    let victim = nonElim[0];
-    for (const i of nonElim) if (counts[i] === minCount) { victim = i; break; }
+    for (const id of nonElim) if (counts[id] < minCount) minCount = counts[id];
+    const victim = nonElim.filter((id) => counts[id] === minCount).sort()[0];
     eliminated.add(victim);
     rounds.push({ counts: display, eliminated: victim, exhausted });
   }
@@ -133,17 +119,23 @@ export function tally(poll: Poll): PollResult {
   return poll.method === "ranked" ? tallyRanked(poll) : tallyApproval(poll);
 }
 
-/** Per-option counts for the live card (approval counts, or IRV first-preferences). */
-export function liveCounts(poll: Poll): number[] {
+/** Per-option live counts (approval counts, or IRV first-preferences). */
+export function liveCounts(poll: Poll): Record<string, number> {
   if (poll.method === "approval") return tallyApproval(poll).counts;
-  const r = tallyRanked(poll);
-  return r.rounds[0]?.counts.map((c) => (c < 0 ? 0 : c)) ?? new Array<number>(poll.options.length).fill(0);
+  const first = tallyRanked(poll).rounds[0]?.counts ?? {};
+  const out: Record<string, number> = {};
+  for (const o of poll.options) out[o.id] = Math.max(0, first[o.id] ?? 0);
+  return out;
 }
 
-/** Human-readable winner summary for chat / closed-card text. */
+/** Options in a deterministic display order (add-time, then id) — same on every peer. */
+export function sortedOptions(poll: Poll): PollOption[] {
+  return [...poll.options].sort((a, b) => (a.at - b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 export function summarizeWinners(poll: Poll, result: PollResult): string {
-  const names = (idxs: number[]) => idxs.map((i) => poll.options[i] ?? `#${i}`).join(", ");
+  const text = (ids: string[]) => ids.map((id) => poll.options.find((o) => o.id === id)?.text ?? id).join(", ");
   if (result.winners.length === 0) return "no winner (no votes)";
-  if (result.winners.length === 1) return `winner: ${names(result.winners)}`;
-  return `tie: ${names(result.winners)}`;
+  if (result.winners.length === 1) return `winner: ${text(result.winners)}`;
+  return `tie: ${text(result.winners)}`;
 }
