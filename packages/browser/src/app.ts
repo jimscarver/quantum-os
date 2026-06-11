@@ -5689,11 +5689,29 @@ function addRemoteStream(peerId: string, stream: MediaStream): void {
 async function startCall(): Promise<void> {
   if (!qpeer) { addMessage("", "connect to a room before starting a call", "system"); return; }
   if (inCall) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    addMessage("", `⚠ calls need a secure context — open the site over https:// or localhost${window.isSecureContext ? "" : " (this page is not a secure context)"}`, "system");
+    return;
+  }
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-  } catch {
-    addMessage("", "⚠ could not access camera/microphone (permission denied?)", "system");
-    return;
+  } catch (videoErr) {
+    // Many devices have no camera (desktops), or video is blocked while audio is
+    // allowed — retry audio-only before giving up.
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      addMessage("", "🎙 camera unavailable — starting an audio-only call", "system");
+    } catch (audioErr) {
+      const e = audioErr as DOMException;
+      const why =
+        e?.name === "NotAllowedError"  ? "permission denied — click the camera/🔒 icon in the address bar and Allow mic & camera for this site, then retry"
+      : e?.name === "NotFoundError"    ? "no microphone or camera was found on this device"
+      : e?.name === "NotReadableError" ? "your mic/camera is already in use by another app or tab"
+      : e?.name === "SecurityError"    ? "blocked by the browser's permissions policy (needs https:// or localhost)"
+      : (e?.message || String(audioErr));
+      addMessage("", `⚠ could not start call: ${why}`, "system");
+      return;
+    }
   }
   inCall = true;
   const local = makeTile("__local__", "you");
@@ -5738,8 +5756,10 @@ function updateCallControls(): void {
     callMuteBtn.title = audioOn ? "Mute mic" : "Unmute mic";
   }
   if (callCamBtn) {
-    callCamBtn.textContent = videoOn ? "🎥" : "🚫";
-    callCamBtn.title = videoOn ? "Turn camera off" : "Turn camera on";
+    const hasVideo = (localStream?.getVideoTracks().length ?? 0) > 0;
+    callCamBtn.disabled = !hasVideo;
+    callCamBtn.textContent = !hasVideo ? "🚫" : videoOn ? "🎥" : "🚫";
+    callCamBtn.title = !hasVideo ? "No camera — audio-only call" : videoOn ? "Turn camera off" : "Turn camera on";
   }
 }
 
