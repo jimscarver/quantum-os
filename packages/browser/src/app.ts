@@ -4262,6 +4262,7 @@ function connect(): void {
 function send(): void {
   const text = msgInput.value.trim();
   if (!text || !qpeer) return;
+  pushHistory(text);
   msgInput.value = "";
   if (text.startsWith("//")) {
     const escaped = text.slice(1);
@@ -4650,6 +4651,48 @@ function acceptCmd(): void {
   if (pick) applyCmd(pick);
 }
 
+// Shell-style input history: ArrowUp recalls previous submissions to edit and
+// resend (handy after a command errors), ArrowDown walks forward and restores
+// the in-progress draft at the end.
+const inputHistory: string[] = [];
+let histIdx = -1;     // -1 = editing the live draft; else an index into inputHistory
+let histDraft = "";   // draft stashed when history navigation begins
+
+function pushHistory(text: string): void {
+  if (!text) return;
+  if (inputHistory[inputHistory.length - 1] !== text) inputHistory.push(text);
+  if (inputHistory.length > 200) inputHistory.shift();
+  histIdx = -1;
+  histDraft = "";
+}
+
+function setComposer(v: string): void {
+  msgInput.value = v;
+  const p = v.length;
+  msgInput.setSelectionRange(p, p);
+  hideCmdMenu();      // don't pop the command menu while recalling history
+}
+
+// delta: -1 = older (ArrowUp), +1 = newer (ArrowDown). Returns true if handled.
+function navHistory(delta: number): boolean {
+  if (inputHistory.length === 0) return false;
+  if (histIdx === -1) {
+    if (delta > 0) return false;                 // ArrowDown while editing draft: ignore
+    histDraft = msgInput.value;
+    histIdx = inputHistory.length - 1;
+  } else {
+    const next = histIdx + delta;
+    if (next >= inputHistory.length) {           // moved past newest → restore the draft
+      histIdx = -1;
+      setComposer(histDraft);
+      return true;
+    }
+    histIdx = next < 0 ? 0 : next;               // clamp at oldest
+  }
+  setComposer(inputHistory[histIdx]);
+  return true;
+}
+
 function showWelcome(): void {
   const div = document.createElement("div");
   div.className = "welcome";
@@ -4696,6 +4739,7 @@ function initUx(): void {
 
   // Autocomplete: surface matching commands while the user types the command word.
   msgInput.addEventListener("input", () => {
+    histIdx = -1;   // manual typing exits history recall; the text is now the draft
     const v = msgInput.value;
     if (v.startsWith("/") && !v.startsWith("//") && !v.includes(" ")) {
       cmdSel = -1;
@@ -5851,6 +5895,9 @@ async function init(): Promise<void> {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
       if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
     }
+    // Command menu closed: ArrowUp/Down recall input history (shell-style).
+    if (e.key === "ArrowUp"   && navHistory(-1)) { e.preventDefault(); return; }
+    if (e.key === "ArrowDown" && navHistory(+1)) { e.preventDefault(); return; }
     if (e.key === "Enter") send();
   });
   // Mobile keyboard fallback: when input gains focus, scroll it into view.
