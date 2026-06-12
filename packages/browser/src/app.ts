@@ -980,6 +980,29 @@ function renderRoomProcess(): void {
   roomProcessEl.textContent = lines.join("\n");
 }
 
+// Insert a reference (a lemma @name or a peer/cap id) into the composer. If the box
+// is empty, start a /qucalc with it (quick-eval); otherwise insert it at the cursor
+// so it *composes* with whatever command is being typed (e.g. `/forget lemma <ref>`,
+// `/qucalc @a @b`) instead of clobbering the input. Clobbering was the cause of
+// "clicking a lemma/peer turns my /forget into /qucalc".
+function insertRef(ref: string): void {
+  const cur = msgInput.value;
+  if (cur.trim() === "") {
+    msgInput.value = `/qucalc ${ref}`;
+  } else {
+    const start = msgInput.selectionStart ?? cur.length;
+    const end = msgInput.selectionEnd ?? cur.length;
+    const before = cur.slice(0, start);
+    const after = cur.slice(end);
+    const lead = before === "" || before.endsWith(" ") ? "" : " ";
+    const tail = after === "" || after.startsWith(" ") ? "" : " ";
+    msgInput.value = before + lead + ref + tail + after;
+    const pos = (before + lead + ref).length;
+    msgInput.setSelectionRange(pos, pos);
+  }
+  msgInput.focus();
+}
+
 function renderPeers(): void {
   if (!isUiActive()) return;
   peerCount.textContent = String(peers.size);
@@ -995,10 +1018,7 @@ function renderPeers(): void {
     li.textContent = peerLabel(id);
     li.title = id;
     li.style.cursor = "pointer";
-    li.addEventListener("click", () => {
-      msgInput.value = `/qucalc ${id}`;
-      msgInput.focus();
-    });
+    li.addEventListener("click", () => insertRef(id));
     peerList.appendChild(li);
   }
   renderRoomProcess();
@@ -1026,7 +1046,7 @@ function renderLemmas(): void {
     label.textContent = lemmaRefStr(name);
     label.style.cursor = "pointer";
     label.style.flex = "1";
-    label.addEventListener("click", () => { msgInput.value = `/qucalc ${lemmaRefStr(name)}`; msgInput.focus(); });
+    label.addEventListener("click", () => insertRef(lemmaRefStr(name)));
     li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.appendChild(label);
     appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
@@ -1769,6 +1789,9 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "remove":
+    case "retract":
+    case "rm":
     case "forget": {
       const sub = (parts[1] || "").toLowerCase();
       const rest = parts.slice(2).join(" ").trim();
@@ -1810,6 +1833,7 @@ function handleCommand(raw: string): string[] {
         break;
       }
       sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | group <name> | list>");
+      sys("  aliases: /remove, /retract, /rm  (e.g. /remove lemma <name>; or click the ✕ next to it)");
       sys("  poll/lemma/group: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
       break;
     }
@@ -4256,7 +4280,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
