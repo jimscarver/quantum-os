@@ -980,6 +980,29 @@ function renderRoomProcess(): void {
   roomProcessEl.textContent = lines.join("\n");
 }
 
+// Insert a reference (a lemma @name or a peer/cap id) into the composer. If the box
+// is empty, start a /qucalc with it (quick-eval); otherwise insert it at the cursor
+// so it *composes* with whatever command is being typed (e.g. `/forget lemma <ref>`,
+// `/qucalc @a @b`) instead of clobbering the input. Clobbering was the cause of
+// "clicking a lemma/peer turns my /forget into /qucalc".
+function insertRef(ref: string): void {
+  const cur = msgInput.value;
+  if (cur.trim() === "") {
+    msgInput.value = `/qucalc ${ref}`;
+  } else {
+    const start = msgInput.selectionStart ?? cur.length;
+    const end = msgInput.selectionEnd ?? cur.length;
+    const before = cur.slice(0, start);
+    const after = cur.slice(end);
+    const lead = before === "" || before.endsWith(" ") ? "" : " ";
+    const tail = after === "" || after.startsWith(" ") ? "" : " ";
+    msgInput.value = before + lead + ref + tail + after;
+    const pos = (before + lead + ref).length;
+    msgInput.setSelectionRange(pos, pos);
+  }
+  msgInput.focus();
+}
+
 function renderPeers(): void {
   if (!isUiActive()) return;
   peerCount.textContent = String(peers.size);
@@ -995,10 +1018,7 @@ function renderPeers(): void {
     li.textContent = peerLabel(id);
     li.title = id;
     li.style.cursor = "pointer";
-    li.addEventListener("click", () => {
-      msgInput.value = `/qucalc ${id}`;
-      msgInput.focus();
-    });
+    li.addEventListener("click", () => insertRef(id));
     peerList.appendChild(li);
   }
   renderRoomProcess();
@@ -1024,10 +1044,9 @@ function renderLemmas(): void {
     li.className = "row-item";
     const label = document.createElement("span");
     label.textContent = lemmaRefStr(name);
-    label.style.cursor = "pointer";
-    label.style.flex = "1";
-    label.addEventListener("click", () => { msgInput.value = `/qucalc ${lemmaRefStr(name)}`; msgInput.focus(); });
-    li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
+    label.className = "row-label";
+    label.addEventListener("click", () => insertRef(lemmaRefStr(name)));
+    li.title = `${lemmaRefStr(name)}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.appendChild(label);
     appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
     lemmaListEl.appendChild(li);
@@ -1074,8 +1093,7 @@ function renderNotes(): void {
     const stamp = n.currency.includes("~") ? "  📜" : "";
     const label = document.createElement("span");
     label.textContent = `${n.currency} ${n.denomination}${stamp}${fromTag}`;
-    label.style.cursor = "pointer";
-    label.style.flex = "1";
+    label.className = "row-label";
     label.addEventListener("click", () => {
       msgInput.value = `/note pass ${n.currency} ${n.denomination} `;
       msgInput.focus();
@@ -1769,6 +1787,9 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "remove":
+    case "retract":
+    case "rm":
     case "forget": {
       const sub = (parts[1] || "").toLowerCase();
       const rest = parts.slice(2).join(" ").trim();
@@ -1810,6 +1831,7 @@ function handleCommand(raw: string): string[] {
         break;
       }
       sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | group <name> | list>");
+      sys("  aliases: /remove, /retract, /rm  (e.g. /remove lemma <name>; or click the ✕ next to it)");
       sys("  poll/lemma/group: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
       break;
     }
@@ -4240,6 +4262,7 @@ function connect(): void {
 function send(): void {
   const text = msgInput.value.trim();
   if (!text || !qpeer) return;
+  pushHistory(text);
   msgInput.value = "";
   if (text.startsWith("//")) {
     const escaped = text.slice(1);
@@ -4256,7 +4279,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -4628,6 +4651,48 @@ function acceptCmd(): void {
   if (pick) applyCmd(pick);
 }
 
+// Shell-style input history: ArrowUp recalls previous submissions to edit and
+// resend (handy after a command errors), ArrowDown walks forward and restores
+// the in-progress draft at the end.
+const inputHistory: string[] = [];
+let histIdx = -1;     // -1 = editing the live draft; else an index into inputHistory
+let histDraft = "";   // draft stashed when history navigation begins
+
+function pushHistory(text: string): void {
+  if (!text) return;
+  if (inputHistory[inputHistory.length - 1] !== text) inputHistory.push(text);
+  if (inputHistory.length > 200) inputHistory.shift();
+  histIdx = -1;
+  histDraft = "";
+}
+
+function setComposer(v: string): void {
+  msgInput.value = v;
+  const p = v.length;
+  msgInput.setSelectionRange(p, p);
+  hideCmdMenu();      // don't pop the command menu while recalling history
+}
+
+// delta: -1 = older (ArrowUp), +1 = newer (ArrowDown). Returns true if handled.
+function navHistory(delta: number): boolean {
+  if (inputHistory.length === 0) return false;
+  if (histIdx === -1) {
+    if (delta > 0) return false;                 // ArrowDown while editing draft: ignore
+    histDraft = msgInput.value;
+    histIdx = inputHistory.length - 1;
+  } else {
+    const next = histIdx + delta;
+    if (next >= inputHistory.length) {           // moved past newest → restore the draft
+      histIdx = -1;
+      setComposer(histDraft);
+      return true;
+    }
+    histIdx = next < 0 ? 0 : next;               // clamp at oldest
+  }
+  setComposer(inputHistory[histIdx]);
+  return true;
+}
+
 function showWelcome(): void {
   const div = document.createElement("div");
   div.className = "welcome";
@@ -4674,6 +4739,7 @@ function initUx(): void {
 
   // Autocomplete: surface matching commands while the user types the command word.
   msgInput.addEventListener("input", () => {
+    histIdx = -1;   // manual typing exits history recall; the text is now the draft
     const v = msgInput.value;
     if (v.startsWith("/") && !v.startsWith("//") && !v.includes(" ")) {
       cmdSel = -1;
@@ -5829,6 +5895,9 @@ async function init(): Promise<void> {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
       if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
     }
+    // Command menu closed: ArrowUp/Down recall input history (shell-style).
+    if (e.key === "ArrowUp"   && navHistory(-1)) { e.preventDefault(); return; }
+    if (e.key === "ArrowDown" && navHistory(+1)) { e.preventDefault(); return; }
     if (e.key === "Enter") send();
   });
   // Mobile keyboard fallback: when input gains focus, scroll it into view.
