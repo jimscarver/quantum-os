@@ -1044,10 +1044,9 @@ function renderLemmas(): void {
     li.className = "row-item";
     const label = document.createElement("span");
     label.textContent = lemmaRefStr(name);
-    label.style.cursor = "pointer";
-    label.style.flex = "1";
+    label.className = "row-label";
     label.addEventListener("click", () => insertRef(lemmaRefStr(name)));
-    li.title = `${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
+    li.title = `${lemmaRefStr(name)}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.appendChild(label);
     appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
     lemmaListEl.appendChild(li);
@@ -1094,8 +1093,7 @@ function renderNotes(): void {
     const stamp = n.currency.includes("~") ? "  📜" : "";
     const label = document.createElement("span");
     label.textContent = `${n.currency} ${n.denomination}${stamp}${fromTag}`;
-    label.style.cursor = "pointer";
-    label.style.flex = "1";
+    label.className = "row-label";
     label.addEventListener("click", () => {
       msgInput.value = `/note pass ${n.currency} ${n.denomination} `;
       msgInput.focus();
