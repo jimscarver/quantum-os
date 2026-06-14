@@ -7,9 +7,10 @@ How a QuantumOS room reaches a **good** decision — not just *a* decision. Wher
 must pass before it counts.
 
 The grounding principle comes from QLF
-([Complementarity and Collective Intelligence](https://github.com/jimscarver/quantum-logical-framework/blob/main/Complementarity_and_Collective_Intelligence.md),
-issue #53): **a higher-order closure formed by *complementary* parts achieves what identical
-copies cannot.** Identical closures are Pauli-blocked from a shared state (`pauli_exclusion`); a
+([**SEX.md**](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md) — the
+proton/neutron sex model, issue #53): **a higher-order closure formed by *complementary* parts
+achieves what identical copies cannot.** Identical closures are Pauli-blocked from a shared state
+(`pauli_exclusion`); a
 proton and neutron bind into a deuteron precisely because they are *distinguishable*. The
 group-scale version is the Woolley-2010 collective-intelligence factor — group quality is
 predicted by diversity and social sensitivity, **not** by the smartest individual. A room of
@@ -154,7 +155,7 @@ form.
 
 ## References & related
 
-- [Complementarity and Collective Intelligence](https://github.com/jimscarver/quantum-logical-framework/blob/main/Complementarity_and_Collective_Intelligence.md) (QLF, issue #53) — the closure-through-complementarity principle and its physics anchor (the deuteron).
+- [**SEX.md**](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md) (QLF, issue #53) — the proton/neutron sex model (`proton_neutron_demo.py`): the closure-through-complementarity principle and its physics anchor (the deuteron — `pn` binds where `pp`/`nn` are Pauli-blocked, and the bond stabilizes the otherwise-decaying neutron).
 - A. W. Woolley et al., *Evidence for a Collective Intelligence Factor*, **Science 330** (2010) 686.
 - [`Group_Decisions.md`](Group_Decisions.md) — the decision *mechanics* (polls, ranked choice, `/probe` consensus).
 - [`Governance.md`](Governance.md) — liquid-democracy delegation (escalation target).
