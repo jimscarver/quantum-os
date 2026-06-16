@@ -1,6 +1,6 @@
 # Solving a Syllogism Together
 
-A step-by-step walkthrough of two peers — **Alice** and **Bob** — using quantum-os to collaboratively verify the Aristotelian syllogism:
+A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [quantum-os](README.md) to collaboratively verify the Aristotelian syllogism:
 
 > All Men are Mortal. Socrates is a Man. Therefore, Socrates is Mortal.
 

@@ -1,6 +1,6 @@
 # Room Best Practices — reaching high-quality group closure
 
-How a QuantumOS room reaches a **good** decision — not just *a* decision. Where
+How a [QuantumOS](README.md) room reaches a **good** decision — not just *a* decision. Where
 [`Group_Decisions.md`](Group_Decisions.md) covers the *mechanics* (polls, ranked choice,
 `/probe` consensus, liquid democracy in [`Governance.md`](Governance.md)), this doc covers the
 *composition and process* — who is in the room, what roles they play, and the checklist a closure

@@ -1,6 +1,6 @@
 # RhoQu: A Macro Layer
 
-A demo of **RhoQu** — the rho-calculus-flavored macro language that compiles to quantum-os `/commands`. The parser ships in [`packages/browser/src/rhoqu.ts`](packages/browser/src/rhoqu.ts) and is invoked via `/rhoqu <source>`. Every RhoQu fragment below is followed by the actual command-list it transpiles to today.
+A demo of **RhoQu** — the rho-calculus-flavored macro language that compiles to [quantum-os](README.md) `/commands`. The parser ships in [`packages/browser/src/rhoqu.ts`](packages/browser/src/rhoqu.ts) and is invoked via `/rhoqu <source>`. Every RhoQu fragment below is followed by the actual command-list it transpiles to today.
 
 Two layers, with a shipped parser between them:
 

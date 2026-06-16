@@ -1,4 +1,4 @@
-# Consensus in quantum-os
+# Consensus in [quantum-os](README.md)
 
 A reference document for the joiner-local discrepancy probe — the partial consensus mechanism that runs when a peer joins a room. It is **not** classical Byzantine fault tolerance. It is a deliberate, hash-only, room-scoped raise of the attacker cost layered on top of dyncap identity and the existing sync gossip.
 

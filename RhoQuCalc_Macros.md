@@ -3,7 +3,7 @@
 **Status:** Design spec + three worked case studies. Grounds the macro layer in the machine-verified
 ρ-process algebra ([`RhoQuCalc.lean`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean), [`BraKetRhoQuCalc.lean`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)) rather than the ad-hoc `/rhoqu` parser alone.
 
-A quantum-os room already has a rich primitive set (`/poll`, `/probe`, `/rdv`, `/gov`, `/lemma`+`/persist`,
+A [quantum-os](README.md) room already has a rich primitive set (`/poll`, `/probe`, `/rdv`, `/gov`, `/lemma`+`/persist`,
 `/channel`, `/note`, `/grant`, `/cap`, `/conj`, `/script`, `/rhoqu`). The hard parts are built; what's
 missing is a way to **compose them into named, guided, shareable protocols**. That composition layer is
 **macros** — and a macro is best expressed as a **`RhoProcess`** (a quoted ρ-calculus term), because then

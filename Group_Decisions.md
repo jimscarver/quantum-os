@@ -1,4 +1,4 @@
-# Group Decisions in QuantumOS
+# Group Decisions in [QuantumOS](README.md)
 
 How a group decides things — vote on lunch, agree a fact, swap resources, pick a
 moderator — using QuantumOS's existing peer-to-peer primitives, plus a sketch of

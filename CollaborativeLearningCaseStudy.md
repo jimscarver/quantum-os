@@ -23,7 +23,7 @@ room of clones re-derives the same answer (see [`Room_Best_Practices.md`](Room_B
 The original (gemini) draft invented `qlf-action`, `zfa-check`, and `colab-tally`. The real kernel already
 does the physics; these become **thin room-broadcast verbs** over it:
 
-| Step | Real quantum-os mechanism |
+| Step | Real [quantum-os](README.md) mechanism |
 |---|---|
 | Join a study channel | `/channel "qlf-zfa-study"` — a shared, signed deliberation context |
 | Propose a history string | **`/qlf-action "<string>"`** — broadcast + evaluate on the local kernel *(built: a thin verb over `zfa-core-wasm`, `is_zfa = is_count_balanced ∧ is_pauli_closed`)* |

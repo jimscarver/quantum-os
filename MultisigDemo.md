@@ -2,7 +2,7 @@
 
 A step-by-step walkthrough of **Alice** and **Bob** jointly co-signing an attestation — using **`/dyncap`** for hash-anchored identity and **`/rdv`** for atomic two-party agreement. Possessing a single bearer-token is not enough; both parties' chains must converge on the commit.
 
-> Traditional multisig binds K signatures to one artifact. quantum-os assembles the same property from two existing pieces — a TOFU-anchored chain that identifies each participant, and a rendezvous that fires only if every party accepts. The "multisig" is the *conjunction*: the rendezvous commits if and only if both dyncap-anchored peers agreed to it.
+> Traditional multisig binds K signatures to one artifact. [quantum-os](README.md) assembles the same property from two existing pieces — a TOFU-anchored chain that identifies each participant, and a rendezvous that fires only if every party accepts. The "multisig" is the *conjunction*: the rendezvous commits if and only if both dyncap-anchored peers agreed to it.
 
 This demo uses **2-of-2** because that's what the current `/rdv swap` command exposes. The rendezvous protocol in [`packages/browser/src/rendezvous.ts`](packages/browser/src/rendezvous.ts) generalizes to n-party; a future `/rdv ceremony N` command would lift this story to N-of-N. K-of-N *threshold* multisig needs either a threshold conservation predicate or real signatures — see [What's not shown](#what-is-not-shown).
 

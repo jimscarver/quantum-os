@@ -20,7 +20,7 @@ Every architectural change or budget decision walks a **9-stage decision loop**:
 ## Grounded in the real commands
 
 The original (gemini) draft invented a `/sys/gov` panel, sentiment sliders, and a "memory-demon" loop.
-quantum-os already has the substance — the case study maps onto it:
+[quantum-os](README.md) already has the substance — the case study maps onto it:
 
 | Stage | Real quantum-os mechanism |
 |---|---|

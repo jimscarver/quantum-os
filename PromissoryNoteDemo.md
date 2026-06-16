@@ -1,6 +1,6 @@
 # Issuing and Redeeming a Promissory Note
 
-A step-by-step walkthrough of two peers — **Alice** and **Bob** — using quantum-os to declare a currency, mint a bearer note, transfer part of it, and close the loop with a redemption receipt.
+A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [quantum-os](README.md) to declare a currency, mint a bearer note, transfer part of it, and close the loop with a redemption receipt.
 
 > All bearer state stays private. The note token itself never appears in a broadcast — only Alice and the holders of derived pieces ever see the bytes. Currency declarations and grant announcements *are* public, so the room knows what currencies exist and who issues them.
 

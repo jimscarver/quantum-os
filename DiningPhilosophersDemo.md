@@ -1,6 +1,6 @@
 # Dining Philosophers: Five Peers at the Table
 
-A step-by-step walkthrough of five peers — **Aristotle**, **Plato**, **Descartes**, **Kant**, and **Nietzsche** — using quantum-os to solve the classic Dining Philosophers concurrency problem. Each philosopher is a live browser peer. Forks are ZFA capability tokens. The room guarantees no deadlock by construction.
+A step-by-step walkthrough of five peers — **Aristotle**, **Plato**, **Descartes**, **Kant**, and **Nietzsche** — using [quantum-os](README.md) to solve the classic Dining Philosophers concurrency problem. Each philosopher is a live browser peer. Forks are ZFA capability tokens. The room guarantees no deadlock by construction.
 
 > Five philosophers are seated around a table. Each needs two adjacent forks to eat. There are exactly five forks — one between each pair. Can all five eat without deadlock?
 

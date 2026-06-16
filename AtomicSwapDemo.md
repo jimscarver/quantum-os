@@ -1,6 +1,6 @@
 # Atomic Swap by Rendezvous
 
-A step-by-step walkthrough of two peers — **Alice** and **Bob** — using quantum-os to swap currencies atomically with **`/rdv swap`**. Neither party fronts value, no escrow exists, no third party mediates. The exchange commits as a single composite event or not at all.
+A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [quantum-os](README.md) to swap currencies atomically with **`/rdv swap`**. Neither party fronts value, no escrow exists, no third party mediates. The exchange commits as a single composite event or not at all.
 
 > Standard `/note pass` moves a token in one direction. To trade — Alice gives USD, Bob gives EUR, at the same moment — the system needs an event that succeeds or fails as a whole. That's what rendezvous is.
 

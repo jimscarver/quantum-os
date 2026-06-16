@@ -1,4 +1,4 @@
-# CLAUDE.md — QuantumOS
+# CLAUDE.md — [QuantumOS](README.md)
 
 Project context for Claude Code sessions. Read this before making any changes.
 

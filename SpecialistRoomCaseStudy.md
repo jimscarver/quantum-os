@@ -33,7 +33,7 @@ closure the clones could not form.
 
 ## Grounded in the real commands
 
-| Role / step | Real quantum-os mechanism |
+| Role / step | Real [quantum-os](README.md) mechanism |
 |---|---|
 | Open the proposal | `/channel proposal` — the claim (a ket / open obligation) |
 | **Skeptic (required)** | `/probe proposal@skeptic` — a discharge (bra) that **must precede closure** ◄ the closure gate |

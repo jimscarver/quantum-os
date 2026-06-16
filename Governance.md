@@ -1,4 +1,4 @@
-# Governance — liquid democracy on quantum-os
+# Governance — liquid democracy on [quantum-os](README.md)
 
 A governance layer that exposes the functionality of RChain's
 [rgov](https://github.com/rchain-community/rgov) — groups, members, issues,

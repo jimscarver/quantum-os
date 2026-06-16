@@ -1,4 +1,4 @@
-# Philosophy of Quantum-OS
+# Philosophy of [Quantum-OS](README.md)
 
 ## Quantum-OS — The Executable Substrate of the Network Nation 2.0
 ### A Consent-Based, Cooperative, Computable Society
