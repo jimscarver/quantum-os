@@ -67,6 +67,11 @@ representation**, so a macro is a Lean-checkable term whose *name* is shared and
 
 # Three case studies (as RhoQuCalc macros)
 
+> Each macro below also has a **standalone case-study doc** with the full scenario:
+> [`GovernanceCaseStudy.md`](GovernanceCaseStudy.md) (#26),
+> [`SpecialistRoomCaseStudy.md`](SpecialistRoomCaseStudy.md) (#24),
+> [`CollaborativeLearningCaseStudy.md`](CollaborativeLearningCaseStudy.md) (#25).
+
 Each grounds a gemini-generated case study in the **real** quantum-os commands (the gemini drafts invented
 commands like `qlf-action`, `/sys/gov`, `colab-tally` — here those become real verbs or are flagged as the
 small new primitives needed). Read each as: the `RhoProcess` structure, lowered to the commands.
