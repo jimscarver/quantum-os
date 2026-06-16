@@ -172,9 +172,11 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/forget group <name>` | Disband (creator) / hide (others) — tombstoned, dyncap-signed |
 
 The **group card** (sidebar → click) shows members with roles and their delegate,
-a "your vote flows to … unless you vote" note, each issue's **weighted** leader/
-winner, and buttons to delegate, open a vote, vote, add a member / issue, or
-disband.
+each member's **trust weight** `[wt N]` and a `⚠` on any discredited member, a
+"your vote flows to … unless you vote" note, each issue's **weighted** leader/
+winner, and per-member controls — **delegate**, a **trust** dropdown (confer a
+level 0…*below your own*), and a **censure** toggle — plus buttons to open a vote,
+vote, add a member / issue, set up treasury, or disband.
 
 Wire envelopes (all dyncap-signed, synced on join via `sync-gov`, tombstone-aware):
 `group-open`, `group-member` (admin-gated), `group-issue`, `group-vote`,
@@ -254,5 +256,9 @@ acts alone, and a disagreeing admin can't block a real quorum. Opt-in and
 backward-compatible — no ratings ⇒ flat one-person-one-vote. `/gov status` shows
 each member's `[wt N]` and any `⚠ discredited` flags.
 
-**Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars;
-trust + censure UI affordances on the group card.
+**Phase 2d UI (shipped):** the group card carries the **trust dropdown** (confer a
+level below your own), the **censure** toggle, and per-member `[wt N]` / `⚠
+discredited` readouts — so liquid trust and accountability are usable without
+typing `/gov trust` / `/gov censure`.
+
+**Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars.

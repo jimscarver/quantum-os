@@ -5752,12 +5752,20 @@ function buildGroupCard(g: Group): HTMLElement {
   if (admin) { const a = document.createElement("span"); a.className = "poll-badge"; a.textContent = "you: admin"; h.appendChild(a); }
   card.appendChild(h);
 
-  // Members + delegation
+  // Members + delegation + liquid trust
   const myDelegate = g.delegations[me]?.delegate;
+  const tw = trustWeightsFor(g);
+  const levels = trustLevels(g);
+  const discredited = new Set(discreditedMembers(g));
+  const anyTrust = Object.values(tw).some((w) => w !== 1);
+  const myLevel = levels[me] ?? 0;
+  const maxAssign = myLevel - 1;                 // highest trust level I may confer (strictly below my own)
   for (const m of Object.values(g.members).sort((a, b) => a.at - b.at)) {
     const row = document.createElement("div"); row.className = "gov-row";
     const del = g.delegations[m.peerId]?.delegate;
-    const tag = `${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${m.peerId === me ? "  (you)" : ""}`;
+    const wt = anyTrust ? `  [wt ${tw[m.peerId] ?? 1}]` : "";
+    const flag = discredited.has(m.peerId) ? "  ⚠" : "";
+    const tag = `${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${m.peerId === me ? "  (you)" : ""}${wt}${flag}`;
     const lab = document.createElement("span"); lab.style.flex = "1"; lab.textContent = tag; row.appendChild(lab);
     // delegate-to-this-member control (members only; not yourself)
     if (member && m.peerId !== me) {
@@ -5766,6 +5774,30 @@ function buildGroupCard(g: Group): HTMLElement {
       b.addEventListener("click", () => govSetDelegate(g, myDelegate === m.peerId ? null : m.peerId));
       row.appendChild(b);
     }
+    // trust-level selector — confer a level strictly below your own (members with standing)
+    if (member && m.peerId !== me && maxAssign >= 0) {
+      const sel = document.createElement("select"); sel.className = "poll-ctlbtn";
+      sel.title = `confer a trust level below your own (you are level ${myLevel})`;
+      const cur = Math.min(g.trustRatings?.[me]?.[m.peerId] ?? 0, maxAssign);
+      for (let lvl = 0; lvl <= maxAssign; lvl++) {
+        const opt = document.createElement("option"); opt.value = String(lvl);
+        opt.textContent = lvl === 0 ? "trust ·" : `trust ${lvl}`;
+        if (lvl === cur) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", () => govSetTrust(g, m.peerId, Number(sel.value)));
+      row.appendChild(sel);
+    }
+    // censure toggle — flag undeserved trust (needs standing; a ⅔ quorum discredits)
+    if (member && m.peerId !== me && myLevel >= 1) {
+      const censured = !!g.censures?.[me]?.[m.peerId];
+      const c = document.createElement("button");
+      c.className = censured ? "poll-ctlbtn poll-remove" : "poll-ctlbtn";
+      c.textContent = censured ? "✓ censured" : "censure";
+      c.title = "flag undeserved trust — a ⅔ quorum of eligible peers discredits them and slashes their vouchers";
+      c.addEventListener("click", () => govSetCensure(g, m.peerId, !censured));
+      row.appendChild(c);
+    }
     if (admin && m.peerId !== g.creator) appendRemoveBtn(row, "remove member", () => govRemoveMember(g, m.peerId));
     card.appendChild(row);
   }
@@ -5773,6 +5805,11 @@ function buildGroupCard(g: Group): HTMLElement {
     const note = document.createElement("div"); note.className = "poll-you";
     note.textContent = myDelegate ? `your vote flows to ${memberLabel(g, myDelegate)} unless you vote` : "you vote directly (no delegate set)";
     card.appendChild(note);
+  }
+  if (member && anyTrust) {
+    const tn = document.createElement("div"); tn.className = "poll-you";
+    tn.textContent = `liquid trust: vote weight = 1 + level (admins root at ${TRUST_MAX}); ⚠ = discredited by a ⅔ censure quorum`;
+    card.appendChild(tn);
   }
 
   // Issues
