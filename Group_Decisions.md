@@ -146,6 +146,15 @@ Each maps onto an existing primitive — sketches, not yet built.
   steady long-term support outweighs a last-minute swing. Builds on the same
   timed/weighted-ballot machinery as reputation voting.
 
+- **Composing them into protocols (macros).** These primitives are the building
+  blocks; a *guided multi-phase protocol* (a 9-stage governance loop, a
+  required-dissent closure room, a collaborative study session) is a **macro** that
+  sequences them. A macro is best expressed as a verified ρ-process
+  (`action`/`lift`/`sequence`/`parallel`/`dagger`), so it inherits ZFA
+  well-formedness, reflection, and capability security by construction — see
+  **[RhoQuCalc_Macros.md](RhoQuCalc_Macros.md)** for the `/command`↔constructor
+  mapping and three worked protocols.
+
 ---
 
 ## Trust & decentralization notes
