@@ -16,6 +16,11 @@ group-scale version is the Woolley-2010 collective-intelligence factor — group
 predicted by diversity and social sensitivity, **not** by the smartest individual. A room of
 clones re-derives the same closure; a room of complementary specialists explores the space.
 
+**Plain-language version (the part that survives contact outside the QLF model):** *identical agents
+tend to produce redundant closure; complementary specialists can produce higher-order closure.* The
+"Pauli-blocked identical copies" phrasing above is the QLF *model* of this — accurate inside the
+framework, but use the plain version in general settings so it doesn't read as physics cosplay.
+
 > **A QuantumOS room is a structured closure environment, not a generic chat room.**
 
 ---
