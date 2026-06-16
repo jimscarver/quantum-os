@@ -1,5 +1,5 @@
 import { loadZfa, generateCapability, validateCapability,
-         spectralGap, achievesZfa } from "./zfa.js";
+         spectralGap, achievesZfa, isPauliClosed } from "./zfa.js";
 import { QOSPeer } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
          mintCurrencyToken, mintNote, mintNoteSeries, mintReceipt,
@@ -1470,6 +1470,9 @@ function handleCommand(raw: string): string[] {
       sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
       sys("  /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint");
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
+      sys("  /qlf-action <tw> — propose a history string for the room to verify");
+      sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
+      sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
       sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
@@ -2025,6 +2028,53 @@ function handleCommand(raw: string): string[] {
         sys("  process: UNBALANCED  → pruned by full_zeno_prune");
         sys(`  achieves_ZFA: ✗  gap=${gap}  (not a physical process)`);
       }
+      break;
+    }
+
+    case "qlf-action": {
+      // Propose a QuCalc history string to the room; the local kernel evaluates
+      // it (the eval is broadcast as a `qlf` envelope). The collaborative-study
+      // surface over the ZFA kernel (CollaborativeLearningCaseStudy.md).
+      const src = arg.trim();
+      if (!src) {
+        sys("usage: /qlf-action <twists>   (symbolic ^v<>/\\+- or hex 0-7)");
+        sys("  proposes a history string for the room to verify; e.g. /qlf-action ^v<>/\\+-");
+        break;
+      }
+      const tw = parseSymbolicTwists(src);
+      if (!tw || tw.length === 0) { sys(`not a twist string: ${src}`); break; }
+      const sym = twistsToSymbolic(tw);
+      const cb = (() => { const s = twistStats(tw); return s.pos === s.neg; })();
+      const pc = isPauliClosed(tw);
+      sys(`/qlf-action: ${sym}  (${tw.length} twists)  proposed by ${myName || "you"}`);
+      sys(`  count-balanced: ${cb ? "✓" : "✗"}   pauli-closed: ${pc ? "✓" : "✗"}   ZFA: ${cb && pc ? "✓" : "✗"}`);
+      sys("  RhoProcess: action(history)  → broadcast for /zfa-check (rho_process_always_zfa)");
+      break;
+    }
+
+    case "zfa-check": {
+      // Verify a history string locally against the kernel's two conjuncts
+      // (is_zfa = is_count_balanced ∧ is_pauli_closed). Each peer runs its own.
+      const src = arg.trim();
+      if (!src) {
+        sys("usage: /zfa-check <twists>   (verify ZFA closure locally)");
+        sys("  is_zfa = is_count_balanced ∧ is_pauli_closed  (mirrors zfa-core-wasm)");
+        break;
+      }
+      const tw = parseSymbolicTwists(src);
+      if (!tw || tw.length === 0) { sys(`not a twist string: ${src}`); break; }
+      const s = twistStats(tw);
+      const cb = s.pos === s.neg;
+      const pc = isPauliClosed(tw);
+      sys(`/zfa-check: ${twistsToSymbolic(tw)}  verified by ${myName || "you"}`);
+      sys(`  is_count_balanced: ${cb ? "✓" : "✗"}  (${s.pos} pos / ${s.neg} neg)`);
+      sys(`  is_pauli_closed:   ${pc ? "✓" : "✗"}  (folds to {±I, ±iI})`);
+      sys(`  is_zfa = ${cb} ∧ ${pc} = ${cb && pc ? "✓ closed" : "✗ not closed"}   gap=${s.gap}`);
+      break;
+    }
+
+    case "estimate": {
+      handleEstimate(arg, sys);
       break;
     }
 
@@ -3990,6 +4040,37 @@ function connect(): void {
           postPollClosedMessage(poll);
           return;
         }
+        if (d.kind === "estimate-open") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const id = String(d.id ?? "");
+          if (!id || estimateRound?.id === id) return;                 // idempotent
+          estimateRound = {
+            id, question: String(d.question ?? ""), creator: from,
+            values: new Map(), open: true,
+            tally: d.tally === "mean" ? "mean" : "median",
+          };
+          addMessage("", `📊 estimate round opened by ${peerLabel(from)} — “${estimateRound.question}” (submit with /estimate <number>)`, "system");
+          return;
+        }
+        if (d.kind === "estimate-value") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (!estimateRound || estimateRound.id !== String(d.id ?? "") || !estimateRound.open) return;
+          const v = Number(d.value);
+          if (isNaN(v)) return;
+          estimateRound.values.set(from, v);                           // latest wins
+          return;
+        }
+        if (d.kind === "estimate-close") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (!estimateRound || estimateRound.id !== String(d.id ?? "")) return;
+          if (from !== estimateRound.creator) return;                  // only opener closes
+          estimateRound.open = false;
+          addMessage("", `📊 estimate round closed by ${peerLabel(from)} — “${estimateRound.question}” (type /estimate status)`, "system");
+          return;
+        }
         if (d.kind === "sync-polls") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -4279,7 +4360,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -4532,6 +4613,11 @@ const CMD_HELP: Record<string, string[]> = {
   qucalc: ["/qucalc [twists | @name | cap:token] — evaluate a RhoQuCalc twist sequence's ZFA balance.", "twists: symbolic ^v<>/\\+- or hex 0-7; compose lemmas with @name (or @[multi word]).", "e.g. /qucalc +-+-   ·   /qucalc @major @minor"],
   conj: ["/conj <twists> — Hermitian adjoint (reverse + parity-flip); flags self-adjoint inputs.", "Identity: E + E† ≡ ZFA. Accepts @name and cap:token too."],
   freq: ["/freq [n | twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n (the 2:1 harmonic ladder)."],
+  "qlf-action": ["/qlf-action <twists> — propose a QuCalc history string for the room to verify.", "The collaborative-study surface over the ZFA kernel; broadcast for /zfa-check.", "e.g. /qlf-action ^v<>/\\+-"],
+  "zfa-check": ["/zfa-check <twists> — verify ZFA closure locally: is_zfa = is_count_balanced ∧ is_pauli_closed.", "Each peer runs its own kernel; no trusted evaluator. e.g. /zfa-check ^v^v"],
+  estimate: ["/estimate new <question> — open a robust group numeric estimate (median by default).",
+             "/estimate <number> — submit your estimate · /estimate status — median + IQR · /estimate close.",
+             "--mean for the mean tally; median is whale/outlier-resistant. Used by gov-9stage & colab-study."],
   dump: ["/dump — summary of all logic shared this session."],
   lemma: ["/lemma — list named lemmas.", "/lemma <name> [twists] — register @name; omit twists to auto-allocate from the name.", "twists: symbolic / hex / cap:token / @ref1 @ref2.", "multi-word: /lemma [all men are mortal] ^v  →  reference as @[all men are mortal]"],
   request: ["/request <name> — broadcast that you need @name; whoever holds it sees a /pass prompt."],
@@ -4998,6 +5084,89 @@ function resolveChoices(poll: Poll, raw: string): string[] {
     if (opt && !out.includes(opt.id)) out.push(opt.id);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// /estimate — robust group numeric estimate (median by default, whale-resistant)
+// One round at a time (like the probe window). Each peer submits one value;
+// the round computes a median + quartiles. Used by gov-9stage (Evaluate & size)
+// and colab-study (group impact). See RhoQuCalc_Macros.md.
+// ---------------------------------------------------------------------------
+
+interface EstimateRound {
+  id: string;
+  question: string;
+  creator: string;        // peer id of the opener
+  values: Map<string, number>;   // peerId → latest value
+  open: boolean;
+  tally: "median" | "mean";
+}
+let estimateRound: EstimateRound | null = null;
+
+function quantileOf(sorted: number[], q: number): number {
+  if (sorted.length === 0) return NaN;
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos), hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+function estimateSummary(round: EstimateRound, sys: (t: string) => void): void {
+  const xs = [...round.values.values()].sort((a, b) => a - b);
+  const n = xs.length;
+  sys(`/estimate "${round.question}"  [${round.open ? "open" : "closed"}]  — ${n} estimate${n === 1 ? "" : "s"}`);
+  if (n === 0) { sys("  no estimates yet — submit one with /estimate <number>"); return; }
+  const med = quantileOf(xs, 0.5);
+  const mean = xs.reduce((a, b) => a + b, 0) / n;
+  const headline = round.tally === "mean" ? mean : med;
+  sys(`  ${round.tally}: ${headline.toLocaleString(undefined, { maximumFractionDigits: 4 })}   (whale/outlier-resistant: median)`);
+  sys(`  median: ${med.toLocaleString(undefined, { maximumFractionDigits: 4 })}   mean: ${mean.toLocaleString(undefined, { maximumFractionDigits: 4 })}`);
+  sys(`  range: [${xs[0]}, ${xs[n - 1]}]   IQR: [${quantileOf(xs, 0.25).toLocaleString(undefined, { maximumFractionDigits: 4 })}, ${quantileOf(xs, 0.75).toLocaleString(undefined, { maximumFractionDigits: 4 })}]`);
+}
+
+function handleEstimate(arg: string, sys: (t: string) => void): void {
+  // Strip a leading/trailing --median | --mean flag (median is the default).
+  let tally: "median" | "mean" = "median";
+  let rest = arg.replace(/--mean\b/g, () => { tally = "mean"; return ""; })
+                .replace(/--median\b/g, "").trim();
+  const parts = rest.length ? rest.split(/\s+/) : [];
+  const sub = (parts[0] ?? "").toLowerCase();
+
+  if (sub === "status" || (sub === "" && estimateRound)) {
+    if (!estimateRound) { sys("no estimate round open — start one with /estimate new <question>"); return; }
+    estimateSummary(estimateRound, sys);
+    return;
+  }
+  if (sub === "close") {
+    if (!estimateRound) { sys("no estimate round to close"); return; }
+    if (estimateRound.creator !== myPeerId()) { sys("only the round's opener can close it"); return; }
+    estimateRound.open = false;
+    estimateSummary(estimateRound, sys);
+    signedBroadcast({ kind: "estimate-close", id: estimateRound.id });
+    return;
+  }
+  if (sub === "new" || (sub !== "" && isNaN(Number(parts[0])))) {
+    // Open a new round. "/estimate new <q>" or "/estimate <non-numeric question>".
+    const question = (sub === "new" ? parts.slice(1).join(" ") : rest).trim();
+    if (!question) { sys("usage: /estimate new <question>   then /estimate <number>"); return; }
+    const id = `est-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
+    estimateRound = { id, question, creator: myPeerId(), values: new Map(), open: true, tally };
+    sys(`estimate round open: "${question}"  [${tally}]  — submit with /estimate <number>`);
+    signedBroadcast({ kind: "estimate-open", id, question, tally });
+    return;
+  }
+  // A bare number = submit your estimate into the open round.
+  const v = Number(parts[0]);
+  if (isNaN(v)) {
+    sys("usage: /estimate new <question> · <number> · status · close   (--median default, --mean opt)");
+    return;
+  }
+  if (!estimateRound || !estimateRound.open) { sys("no open estimate round — start one with /estimate new <question>"); return; }
+  estimateRound.values.set(myPeerId(), v);
+  sys(`estimate recorded: ${v}  ("${estimateRound.question}")`);
+  estimateSummary(estimateRound, sys);
+  signedBroadcast({ kind: "estimate-value", id: estimateRound.id, value: v });
 }
 
 function addOption(poll: Poll, text: string): void {

@@ -73,8 +73,8 @@ representation**, so a macro is a Lean-checkable term whose *name* is shared and
 > [`CollaborativeLearningCaseStudy.md`](CollaborativeLearningCaseStudy.md) (#25).
 
 Each grounds a gemini-generated case study in the **real** quantum-os commands (the gemini drafts invented
-commands like `qlf-action`, `/sys/gov`, `colab-tally` — here those become real verbs or are flagged as the
-small new primitives needed). Read each as: the `RhoProcess` structure, lowered to the commands.
+commands like `qlf-action`, `/sys/gov`, `colab-tally` — here those are real verbs: `/qlf-action`,
+`/zfa-check`, and `/estimate` are now built). Read each as: the `RhoProcess` structure, lowered to the commands.
 
 ## 1. `gov-9stage` — multi-stakeholder governance (was: blockchain governance case study)
 
@@ -87,7 +87,7 @@ gov-9stage(issue) :=
   sequence (action  /lemma  issue@identify)          ── 1 Identify     : assert the problem of record (ket)
   sequence (action  /lemma  issue@goal)              ── 2 Define goal
   sequence (action  /channel issue "solutions")      ── 3 Source       : open deliberation (ket)
-  sequence (lift    /estimate issue --median)        ── 4 Evaluate&size: median group estimate  [NEW /estimate]
+  sequence (lift    /estimate issue --median)        ── 4 Evaluate&size: median group estimate  [/estimate ✅]
   sequence (lift    /gov vote issue)                 ── 5 Select       : weighted liquid-democracy tally (bra)
   sequence (action  /lemma  issue@deploy)            ── 6 Deploy       : assert the chosen artifact
   sequence (lift    /probe  issue@monitor)           ── 7 Monitor      : consensus snapshot on live metrics
@@ -96,7 +96,7 @@ gov-9stage(issue) :=
 ```
 - **Liquid democracy is already built** (`/gov delegate` / `undelegate`, standing/transitive — see
   [`Governance.md`](Governance.md)); `dagger` is the `undelegate`/amend dual.
-- **Median tally** is the one new primitive (`/estimate --median`), robust to whale/outlier — the
+- **Median tally** is `/estimate --median` (built — `new`/`<number>`/`status`/`close`, mesh-synced), robust to whale/outlier — the
   gemini "Group Estimate median."
 - The gemini "sentiment sliders / pros-cons" UI is an optional surface over `/estimate` + `/channel`.
 
@@ -126,36 +126,37 @@ tally.
 
 ```
 colab-study(history-string) :=
-  sequence (action /qlf-action history-string)   ── Peer A proposes; kernel evaluates the string  [NEW thin verb]
+  sequence (action /qlf-action history-string)   ── Peer A proposes; kernel evaluates the string  [/qlf-action ✅]
   sequence (parallel (lift /zfa-check --peer=B)   ── all peers verify locally, concurrently  [parallel + lift]
-                     (lift /zfa-check --peer=C))                                              [NEW thin verb]
-  sequence (lift   /estimate --median)            ── group tallies impact (median)  [NEW /estimate]
+                     (lift /zfa-check --peer=C))                                              [/zfa-check ✅]
+  sequence (lift   /estimate --median)            ── group tallies impact (median)  [/estimate ✅]
            (action /lemma history-string) /persist ── record the verified closure (receipt)
 ```
 - `/qlf-action` and `/zfa-check` are **thin room-broadcast wrappers** over the existing
-  `zfa-core-wasm` ZFA kernel (`is_zfa = is_count_balanced ∧ is_pauli_closed`) — not new physics, just the
+  `zfa-core-wasm` ZFA kernel (`is_zfa = is_count_balanced ∧ is_pauli_closed`) — the physics is unchanged, just the
   collaborative surface. `/conj` already exposes the adjoint for probing `H = H†` histories.
 
-## What runs today vs. the small new primitives
+## What runs today vs. what is still open
 
 | Needed by the macros | Status |
 |---|---|
 | `/poll`, `/probe`, `/gov` (+ liquid delegation), `/lemma`+`/persist`, `/channel`, `/note`, `/conj`, `/script`, `/rhoqu` | ✅ built |
+| **`/estimate`** (median/IQR group estimate, whale-resistant; `--mean` opt) | ✅ built — `new <q>` · `<number>` · `status` · `close`, mesh-synced (reused by gov-9stage + colab-study) |
+| **`/qlf-action` / `/zfa-check`** (thin wrappers over `zfa-core-wasm`) | ✅ built — propose a history string + verify `is_count_balanced ∧ is_pauli_closed` locally (colab-study) |
 | `RhoProcess` as the macro IR + `RhoQu → RhoProcess` lowering | 🔵 the spec's one formal piece (the verb→`Form` table + lowering) |
 | **Shareable / persistent macro *names*** across the mesh (`/rhoqu` macros are per-tab today) | 🔵 the PFEM "adopt a protocol once" layer |
 | **RhoQu variable binding** (`let id = /rdv …`, `$LAST_ID`) | 🔵 already flagged in [`RhoQuDemo.md`](RhoQuDemo.md) ("commit 5 candidate") |
-| **`/estimate`** (median/quantile group estimate, whale-resistant) | 🔵 small new primitive (reused by gov-9stage + colab-study) |
-| **closure-gate** (enforce required-dissent at runtime) | 🔵 small new primitive (specialist-closure) |
-| **`/qlf-action` / `/zfa-check`** (thin wrappers over `zfa-core-wasm`) | 🔵 small new verbs (colab-study) |
+| **closure-gate** (enforce required-dissent at runtime) | 🔵 a room-closing *policy* over `/lemma` (specialist-closure) — by convention today |
 
 ## Honest scope
 
 This spec + the three macros capture the **design** of the protocols as verified ρ-terms, grounded in real
-commands (replacing the gemini drafts' invented commands). The **runtime** pieces — the macro IR/lowering,
-mesh-shared macro names, `/estimate`, the closure-gate, and the `/qlf` verbs — are small, named build items,
-and the **live Room-A-vs-Room-B demonstration** (saving comparable closure ledgers) remains the
-PFEM-room-demo deliverable. The verification (a macro is ZFA-balanced, reflective, capability-bearing) is
-inherited from RhoQuCalc; the *effect* of each command stays a runtime concern.
+commands (replacing the gemini drafts' invented commands). The thin verbs the macros need — `/estimate`
+(median/IQR, mesh-synced), `/qlf-action`, and `/zfa-check` — are built. The remaining open pieces are the
+macro IR/lowering, mesh-shared macro names, and the closure-gate *policy* over `/lemma`; the **live
+Room-A-vs-Room-B demonstration** (saving comparable closure ledgers) remains the PFEM-room-demo deliverable.
+The verification (a macro is ZFA-balanced, reflective, capability-bearing) is inherited from RhoQuCalc; the
+*effect* of each command stays a runtime concern.
 
 See [`Room_Best_Practices.md`](Room_Best_Practices.md), [`Group_Decisions.md`](Group_Decisions.md),
 [`Governance.md`](Governance.md), [`RhoQuDemo.md`](RhoQuDemo.md), and QLF's

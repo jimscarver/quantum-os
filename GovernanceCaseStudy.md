@@ -26,7 +26,7 @@ quantum-os already has the substance — the case study maps onto it:
 |---|---|
 | 1–2 Identify / Goal | `/lemma issue@identify`, `/lemma issue@goal` — assert the problem/goal of record |
 | 3 Source solutions | `/channel` — open deliberation; `Developer`-cap peers point to a git branch |
-| 4 Evaluate & size | **`/estimate --median`** — each peer enters a numeric impact; the **median** is whale/outlier-resistant *(new primitive)* |
+| 4 Evaluate & size | **`/estimate --median`** — each peer enters a numeric impact; the **median** is whale/outlier-resistant *(built, mesh-synced)* |
 | 5 Select | **`/gov vote`** — liquid-democracy weighted tally; non-voters' weight flows to their delegate, transitively ([`Governance.md`](Governance.md)) |
 | 6 Deploy | `/lemma issue@deploy` — assert the chosen artifact |
 | 7 Monitor | `/probe issue@monitor` — chain-weighted consensus snapshot on live metrics |
@@ -42,7 +42,7 @@ direct vote always overrides). The **sentiment-slider / pros-cons** UI is option
 ```
 gov-9stage(issue) :=
   sequence (action /lemma issue@identify)      (action /lemma issue@goal)
-  ▸ sequence (action /channel issue)           (lift   /estimate issue --median)   ◄ new /estimate
+  ▸ sequence (action /channel issue)           (lift   /estimate issue --median)   ◄ /estimate ✅
   ▸ sequence (lift   /gov vote issue)          (action /lemma issue@deploy)
   ▸ sequence (lift   /probe issue@monitor)     (dagger (/lemma issue@deploy))
   ▸          (action /lemma issue@lesson) /persist
@@ -55,7 +55,7 @@ mapping.
 ## Runs today vs. open
 
 - ✅ **Runs today:** `/gov` (liquid delegation + weighted tally), `/poll`/`/probe`, `/lemma`+`/persist`,
-  `/channel`, capability-token stakeholder roles.
-- 🔵 **Open (small):** the **`/estimate` median** primitive; the **`RhoProcess` macro IR + mesh-shared macro
-  names** so a community adopts `gov-9stage` once and every peer has it; the sentiment-slider UI.
+  `/channel`, capability-token stakeholder roles, and the **`/estimate` median** round (mesh-synced).
+- 🔵 **Open:** the **`RhoProcess` macro IR + mesh-shared macro names** so a community adopts `gov-9stage`
+  once and every peer has it; the sentiment-slider UI.
   Tracked in [#24](https://github.com/jimscarver/quantum-os/issues/24).
