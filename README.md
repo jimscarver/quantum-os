@@ -47,6 +47,8 @@ QLF slash commands:
   /qucalc [twists] — evaluate RhoQuCalc twist sequence
   /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint
   /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
+  /qlf-action <tw> — propose a history string for the room to verify
+  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
@@ -54,7 +56,9 @@ QLF slash commands:
   /pass <n> <peer> — transfer @n directly to a named peer
   /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)
   /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add · vote · status · lock · close · remove · list
-  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · list
+  /estimate [sub]  — robust group numeric estimate: new <q> · <number> · status · close (median)
+  /gov [sub]       — liquid-democracy + liquid-trust groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · say · status
+  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list
   /rdv [sub]       — n-party atomic rendezvous (swap|counter|accept|reject|abort|list)
   /dyncap [sub]    — hash-only dynamic capabilities (status|peers)
   /probe [sub]     — joiner-local consensus probe (status|clear)
@@ -70,9 +74,20 @@ QLF slash commands:
 
 **Group decisions** — `/poll` brings approval and ranked-choice (IRV) voting with open
 nominations to a room: `/poll new What's for lunch?`, then everyone adds options and votes,
-and the creator closes it for a deterministic, joiner-local tally. See
-[Group_Decisions.md](Group_Decisions.md) for the full family of decision processes the
+and the creator closes it for a deterministic, joiner-local tally. `/estimate` adds a
+whale-resistant **median** group estimate (`new <q>` · `<number>` · `status` · `close`).
+See [Group_Decisions.md](Group_Decisions.md) for the full family of decision processes the
 interface supports.
+
+**Group governance** — `/gov` ports RChain's rgov onto quantum-os primitives:
+capability-scoped groups, issues, and **liquid democracy** (`/gov delegate` — standing,
+transitive, revocable) with a deterministic joiner-local tally. It extends to **liquid
+*trust***: `/gov trust <member> <0–5>` confers a trust level *strictly below your own* in
+an admin-rooted hierarchy (vote weight = `1 + level`), and `/gov censure` makes vouching a
+**stake** — a ⅔ quorum of eligible peers (even over an admin) discredits a member who holds
+undeserved trust and *slashes everyone who vouched for them*. With no ratings it is exactly
+one-person-one-vote. See [Governance.md](Governance.md), and [Room_Best_Practices.md](Room_Best_Practices.md)
+for the collective-intelligence practices behind it.
 
 **Notes with terms** — `/note grant USD 5 | redeemable for one coffee` mints a
 **terms-stamped** note (`cap:note-USD~<hash>`); the issuer's terms are dyncap-signed and

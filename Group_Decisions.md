@@ -39,14 +39,16 @@ via the `sync-*` handshake, so the room self-heals.
 | Approval vote | "Which of these are acceptable?" | `/poll` | **Built** |
 | Ranked-choice (IRV) | Pick one winner without vote-splitting | `/poll … ranked` | **Built** |
 | Collect-then-decide | Crowd the options, then vote | `/poll new` (open nominations) | **Built** |
+| Robust group estimate | A whale-resistant median of numeric estimates | `/estimate` (median/IQR) | **Built** |
 | Consensus reconciliation | Agree shared state by ⅔ supermajority | `/probe` | **Built** |
 | Atomic multiparty agreement | All-or-nothing commit across N peers | `/rdv` | **Built** |
 | Deliberation threads | Discuss a topic before deciding | `/channel` | **Built** |
 | Decision of record | Mint the agreed outcome as a shareable token | `/lemma` (+ `/persist`) | **Built** |
+| Delegation (liquid) | Your vote flows to your delegate unless you vote | `/gov delegate` (transitive, weighted) | **Built** — [Governance.md](Governance.md) |
+| Weighted / liquid trust | Votes weighted by earned trust, in an admin-rooted hierarchy | `/gov trust` (level = `1+`weight) | **Built** — [Governance.md](Governance.md) |
+| Accountability / censure | A ⅔ quorum discredits undeserved trust + slashes vouchers | `/gov censure` | **Built** — [Governance.md](Governance.md) |
 | Quorum / threshold | Bind only if enough vote / a bar is cleared | extend `/poll` | Sketch |
-| Weighted / reputation | Votes weighted by standing | dyncap chain weight | Sketch |
 | Quadratic / budget | Spread voice-credits across options | `/note` conservation | Sketch |
-| Delegation (liquid) | Your vote flows to your delegate unless you vote | `/gov` (transitive, weighted) | **Built** — [Governance.md](Governance.md) |
 | Sortition / lottery | Pick fairly at random | `/cap` (ZFA-random) | Sketch |
 | Consent / objection | Passes unless someone objects | poll + veto semantics | Sketch |
 | Conviction voting | Support strengthens the longer it's held | timed ballot weight | Sketch |
@@ -84,6 +86,13 @@ auto-merge and ballots never get scrambled by broadcast ordering.
 /poll new What should we name it?      # then the group adds + votes
 ```
 
+### Robust group estimate — `/estimate`
+Open a numeric estimate round (`/estimate new How many story points?`); each peer
+submits a number (`/estimate 8`) and the round reports a **median** (whale- and
+outlier-resistant) with the inter-quartile range — `--mean` for the mean. Mesh-
+synced one round at a time, the same deterministic joiner-local pattern as polls.
+Used inside the governance and collaborative-study macros (`RhoQuCalc_Macros.md`).
+
 ### Consensus reconciliation — `/probe`
 When a peer joins, it samples what others hold for shared state (lemmas,
 currencies) and adopts the **dyncap-weighted ⅔ supermajority** value, ignoring
@@ -119,9 +128,13 @@ Each maps onto an existing primitive — sketches, not yet built.
   ballots" or "passes at a ⅔ bar." Reuse the probe's supermajority constants
   (`SUPERMAJORITY_NUM/DEN`) so the threshold semantics match the rest of the system.
 
-- **Weighted / reputation voting.** The probe already weights peers by dyncap
-  chain length (`lastSeq`). The same weight can scale ballots, so longer-standing
-  participants carry more — without any registry or central scorekeeper.
+- **Weighted / liquid-trust voting — built.** `/gov trust <member> <0–5>` confers
+  a trust level *strictly below the rater's own* in an admin-rooted web of trust;
+  a member's vote weight becomes `1 + level`, flowing through the same delegation
+  tally. **`/gov censure`** adds accountability — a ⅔ quorum of eligible peers
+  (even over an admin) discredits a member holding undeserved trust and slashes
+  everyone who vouched for them. With no ratings it stays one-person-one-vote. See
+  **[Governance.md](Governance.md)**.
 
 - **Quadratic / budget voting.** `/note` already enforces conservation
   (`count_pos == count_neg`) on split/merge. Issue each voter a fixed budget of
