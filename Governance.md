@@ -36,12 +36,15 @@ stakeholders through interlinked autonomous teams.
 | **User-programmed — save and share actions** | the [RhoQuCalc macros](RhoQuCalc_Macros.md): name = quoted process = shareable capability |
 | **Purposeful transparency + privacy** | public signed decisions of record; bearer-private balances; pseudonymous peers |
 
-**Liquid *trust*, not only liquid democracy (a principled extension).** The RGOV
-vision weights alternatives by **voter trust ratings** alongside delegation —
-affirmative trust, not just vote-flow. Today's `resolveWeights` is the equal-weight
-(`weight = 1 + delegators`) liquid-democracy case; trust-rating weights are the
-named next step (Phase 2d), slotting into the same deterministic tally. The
-room-side complement — *who* should be in the room and how it closes well — is
+**Liquid *trust*, not only liquid democracy (shipped).** The RGOV vision weights
+alternatives by **voter trust ratings** alongside delegation — affirmative trust,
+not just vote-flow. `/gov trust <member> <0–5>` lets each member rate others'
+trustworthiness; a member's **base voting weight** becomes `1 + Σ(affirmative
+trust others give them)` instead of a flat `1`, and that weighted vote then flows
+through the *same* delegation resolver. With no ratings the base is `1` for
+everyone, reproducing equal-weight liquid democracy exactly — so trust weighting
+is opt-in and backward-compatible. The room-side complement — *who* should be in
+the room and how it closes well — is
 [`Room_Best_Practices.md`](Room_Best_Practices.md), grounded in the same talk's
 collective-intelligence findings.
 
@@ -86,10 +89,21 @@ issue. A chain that reaches no direct voter, or loops, **abstains**.
 - `directVoters` = members who cast a ballot on the issue's poll.
 - Each member's vote walks the delegation chain to the first direct voter reached
   (its weight flows there); cycles / dead-ends with no direct voter abstain.
-- `weight(d) = 1 + #(members whose chain terminates at d)`.
+- `weight(d) = Σ baseWeight(m)` over members `m` whose chain terminates at `d`,
+  where `baseWeight(m) = 1 + Σ(affirmative trust other members rate m)`
+  (`gov.ts` `trustWeightsFor`; flat `1` when there are no ratings, so this reduces
+  to `1 + #delegators`).
 - The weighted counts feed the existing approval / IRV poll engine (`tally(poll,
-  weights)`), so votes are *both* ranked-choice *and* delegation-weighted, with
-  the same deterministic tie-breaks.
+  weights)`), so votes are *ranked-choice*, *delegation-weighted*, **and
+  trust-weighted**, with the same deterministic tie-breaks.
+
+**Trust ratings** are non-negative integers `0–5`, self-signed (you set only your
+own outgoing ratings, like delegation), aggregated deterministically by every
+peer from the signed `gov-trust` envelopes it holds. Self-ratings and ratings of
+non-members are ignored; each rating is capped at `5` — so a member cannot trust
+*themselves* into power, only earn weight from others (affirmative trust). A
+colluding clique can still amplify each other; admin-gated membership is the
+Sybil boundary, not the trust math.
 
 Example: members A, B, C; B delegates A; C delegates B. If only **A** votes, A
 carries weight **3** (self + B + C transitively). If **C** then votes directly, C
@@ -110,6 +124,7 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov member add <peer> [admin]` · `member remove <peer>` | Manage roster (admin only); membership is capability-backed |
 | `/gov issue <title>` · `/gov issue list` | Record / list issues to decide. Each issue gets its own **issue card** (title, group, weighted result, open-vote/vote) that persists in the transcript and replays on reload, like a poll card |
 | `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
+| `/gov trust <member> <0–5>` | Set / clear (`0`) your **affirmative trust rating** of a member; raises their base voting weight by that amount (liquid *trust*). Self-signed |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
 | `/gov kudos <member> <n> \| balance` | Award reputation — a per-group kudos `/note` currency (admin issues; members re-gift what they hold) |
@@ -124,9 +139,9 @@ disband.
 
 Wire envelopes (all dyncap-signed, synced on join via `sync-gov`, tombstone-aware):
 `group-open`, `group-member` (admin-gated), `group-issue`, `group-vote`,
-`gov-delegate` (self-signed — only you set your own delegate). Votes themselves are
-plain `/poll` envelopes. The headless memory daemon can persist `group-*` later
-(Phase 2).
+`gov-delegate` and `gov-trust` (both self-signed — only you set your own delegate /
+trust ratings). Votes themselves are plain `/poll` envelopes. The headless memory
+daemon can persist `group-*` later (Phase 2).
 
 ---
 
@@ -188,7 +203,12 @@ group's members, delegations, issues, and treasury/kudos currencies survive when
 every browser leaves; it also honors a creator's group disband (`retract` /
 tombstone) and won't resurrect it.
 
-**Phase 2d (planned):** hard role/permission enforcement; more rgov exemplars; and
-**trust-rating weights** — the RGOV liquid-*trust* extension (affirmative voter trust
-ratings weighting alternatives alongside delegation), slotting into the same
-deterministic `resolveWeights` tally.
+**Phase 2d (shipped):** **trust-rating weights** — the RGOV liquid-*trust*
+extension. `/gov trust <member> <0–5>` (self-signed `gov-trust` envelope) sets an
+affirmative trust rating; `trustWeightsFor` aggregates them into per-member base
+weights (`1 + earned trust`) that feed the same deterministic `resolveWeights`
+tally. Opt-in and backward-compatible — no ratings ⇒ flat one-person-one-vote.
+`/gov status` shows each member's `[wt N]` when ratings are present.
+
+**Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars;
+trust-rating UI affordances on the group card.

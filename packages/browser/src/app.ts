@@ -18,7 +18,8 @@ import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHand
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
-         delegationMapFor, govCurrency, type Group, type Issue, type Role } from "./gov.js";
+         delegationMapFor, trustWeightsFor, TRUST_MAX, govCurrency,
+         type Group, type Issue, type Role } from "./gov.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1482,7 +1483,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · vote · treasury · kudos · say · status");
+      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · vote · treasury · kudos · say · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1655,10 +1656,14 @@ function handleCommand(raw: string): string[] {
 
       if (gsub === "status") {
         sys(`🏛 ${g.name} — ${Object.keys(g.members).length} members, ${g.issues.length} issues`);
+        const tw = trustWeightsFor(g);
+        const trusted = Object.values(tw).some((w) => w !== 1);   // any ratings present?
         for (const m of Object.values(g.members)) {
           const del = g.delegations[m.peerId]?.delegate;
-          sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}`);
+          const wt = trusted ? `  [wt ${tw[m.peerId] ?? 1}]` : "";
+          sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${wt}`);
         }
+        if (trusted) sys("  (wt = base voting weight = 1 + affirmative trust from other members)");
         for (const i of g.issues) sys(`  ▸ ${i.title} — ${issueResultText(g, i)}`);
         showGroupCard(g);
         break;
@@ -1711,6 +1716,20 @@ function handleCommand(raw: string): string[] {
           if (!iss) { sys(`no issue matching “${title}”`); break; }
           govSetDelegate(g, null, iss.id); sys(`per-issue delegation cleared for “${iss.title}” (your global delegate applies again)`);
         } else { govSetDelegate(g, null); sys("global delegation cleared — you vote directly"); }
+        break;
+      }
+      if (gsub === "trust") {
+        // /gov trust <member> <0-5>   — affirmative trust rating (0 clears)
+        if (!isMember(g, meId)) { sys("only members can rate trust"); break; }
+        const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
+        if (!pid || !isMember(g, pid)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>   (0 clears; trust weights their vote)`); break; }
+        if (pid === meId) { sys("can't rate your own trust — trust is given by others"); break; }
+        const rating = Number(gParts[2]);
+        if (gParts[2] === undefined || isNaN(rating)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>`); break; }
+        govSetTrust(g, pid, rating);
+        const r = Math.max(0, Math.min(TRUST_MAX, Math.round(rating)));
+        sys(r === 0 ? `cleared your trust rating for ${peerLabel(pid)}`
+                    : `you rate ${peerLabel(pid)} trust ${r}/${TRUST_MAX} — adds ${r} to their voting weight`);
         break;
       }
       if (gsub === "vote") {
@@ -4187,6 +4206,23 @@ function connect(): void {
           saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
+        if (d.kind === "gov-trust") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          const rater = String(d.rater ?? from);
+          const ratee = String(d.ratee ?? "");
+          if (!g || from !== rater || !isMember(g, rater)) return;   // self-signed only
+          if (!ratee || ratee === rater || !isMember(g, ratee)) return;
+          const rating = Math.max(0, Math.min(TRUST_MAX, Math.round(Number(d.rating))));
+          if (isNaN(rating)) return;
+          g.trustRatings ??= {};
+          const row = (g.trustRatings[rater] ??= {});
+          if (rating === 0) delete row[ratee]; else row[ratee] = rating;
+          if (Object.keys(row).length === 0) delete g.trustRatings[rater];
+          saveGroups(); renderGroups(); refreshGroupCard(g);
+          return;
+        }
         if (d.kind === "group-issue") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -4640,7 +4676,8 @@ const CMD_HELP: Record<string, string[]> = {
   gov: ["/gov new <name> · show <name> · list — liquid-democracy groups.",
         "/gov member add|remove <peer> [admin] · issue <title>",
         "/gov delegate <member> [on <issue>] · undelegate [on <issue>] — your vote flows to your delegate unless you vote (per-issue overrides global).",
-        "/gov vote <issue> | opt1, opt2 [ranked] — opens a delegation-weighted poll bound to the issue.",
+        "/gov trust <member> <0-5> — affirmative trust rating (0 clears); a member's vote weight = 1 + trust others give them (liquid trust).",
+        "/gov vote <issue> | opt1, opt2 [ranked] — opens a delegation- and trust-weighted poll bound to the issue.",
         "/gov treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · say <msg> · status",
         "full reference: Governance.md"],
   rdv: ["/rdv swap <giveCur> <giveN> <getCur> <getN> <peer> — propose an atomic N-party swap (all-or-nothing).",
@@ -5551,7 +5588,9 @@ function govWeights(g: Group, issue: Issue, poll: Poll): Record<string, number> 
   const members = Object.keys(g.members);
   const deleg = delegationMapFor(g, issue.id);
   const direct = new Set(members.filter((p) => (poll.ballots[p]?.length ?? 0) > 0));
-  return resolveWeights(members, deleg, direct).weightByVoter;
+  // Trust-weighted liquid democracy: a member carries 1 + the affirmative trust
+  // others place in them (flat 1 each when no ratings exist → plain one-vote).
+  return resolveWeights(members, deleg, direct, trustWeightsFor(g)).weightByVoter;
 }
 
 function createGroup(name: string): Group {
@@ -5589,6 +5628,18 @@ function govSetDelegate(g: Group, delegate: string | null, issueId?: string): vo
   }
   saveGroups(); renderGroups(); refreshGroupCard(g);
   signedBroadcast({ kind: "gov-delegate", groupId: g.id, delegator: me, delegate, ...(issueId ? { issueId } : {}) });
+}
+// Set/clear your affirmative-trust rating for another member (the RGOV liquid-
+// trust extension). rating 0 clears. Self-signed — you set only your own row.
+function govSetTrust(g: Group, ratee: string, rating: number): void {
+  const me = myPeerId();
+  const r = Math.max(0, Math.min(TRUST_MAX, Math.round(rating)));
+  g.trustRatings ??= {};
+  const row = (g.trustRatings[me] ??= {});
+  if (r === 0) delete row[ratee]; else row[ratee] = r;
+  if (Object.keys(row).length === 0) delete g.trustRatings[me];
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "gov-trust", groupId: g.id, rater: me, ratee, rating: r });
 }
 function govNewIssue(g: Group, title: string): Issue {
   const iid = issueId(title);

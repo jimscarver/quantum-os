@@ -27,6 +27,12 @@ export interface Group {
   // Optional per-issue delegate that overrides the global one for that issue:
   // issueId -> (delegator peerId -> { delegate, at }).
   topicDelegations?: Record<string, Record<string, Delegation>>;
+  // Optional affirmative-trust ratings (the RGOV liquid-*trust* extension): each
+  // member rates the trustworthiness of others, rater peerId -> ratee peerId ->
+  // non-negative integer (0–TRUST_MAX). Self-signed (you set only your own row).
+  // A member's base voting weight grows with the trust others place in them, so
+  // delegation flow is weighted by earned trust — not one-person-one-vote.
+  trustRatings?: Record<string, Record<string, number>>;
   // Optional `/note` currencies the group uses: a treasury (group funds) and a
   // kudos (reputation) currency. The admin declares them; balances are bearer
   // notes held privately by each member.
@@ -72,18 +78,28 @@ export interface WeightResolution {
 //  - `members`: the electorate (peerIds). Only members carry weight.
 //  - `delegations`: delegator -> delegate (delegate must be a member to count).
 //  - `directVoters`: members who cast a ballot on this issue (override delegation).
-// Each member's single vote flows along delegation edges to the first direct
-// voter reached; weight(d) = 1 + #(members flowing to d). Cycles / dead-ends
-// with no direct voter abstain.
+//  - `trustWeights` (optional): member -> base weight. Default 1 per member, which
+//    reproduces one-person-one-vote liquid democracy exactly. With trust ratings
+//    (trustWeightsFor) a member carries the trust others place in them, so the
+//    delegation flow is trust-weighted (the RGOV liquid-*trust* extension).
+// Each member's vote flows along delegation edges to the first direct voter
+// reached; weight(d) = Σ baseWeight(m) over members m flowing to d. Cycles /
+// dead-ends with no direct voter abstain.
 export function resolveWeights(
   members: string[],
   delegations: Record<string, string>,
   directVoters: Set<string>,
+  trustWeights: Record<string, number> = {},
 ): WeightResolution {
   const memberSet = new Set(members);
   const weightByVoter: Record<string, number> = {};
   const flow: Record<string, string> = {};
   const abstained: string[] = [];
+
+  const baseWeight = (m: string): number => {
+    const w = trustWeights[m];
+    return typeof w === "number" && w >= 0 ? w : 1;   // default / guard
+  };
 
   for (const m of members) {
     const seen = new Set<string>();
@@ -99,12 +115,42 @@ export function resolveWeights(
     }
     if (landed) {
       flow[m] = landed;
-      weightByVoter[landed] = (weightByVoter[landed] ?? 0) + 1;
+      weightByVoter[landed] = (weightByVoter[landed] ?? 0) + baseWeight(m);
     } else {
       abstained.push(m);
     }
   }
   return { weightByVoter, flow, abstained };
+}
+
+/** Max affirmative-trust rating one member can assign another (0 clears). */
+export const TRUST_MAX = 5;
+
+// Aggregate the group's affirmative-trust ratings into per-member base weights:
+//   baseWeight(m) = 1 + Σ over members r≠m of clamp(trustRatings[r][m], 0..TRUST_MAX).
+// The leading 1 is the member's own vote (so an untrusted member still counts as
+// 1, and a group with NO ratings reproduces flat liquid democracy exactly).
+// Only member↔member ratings count; self-ratings are ignored (you can't trust
+// yourself into power — trust is affirmative and given by others). Deterministic:
+// every peer computes the same map from the signed trust graph it holds.
+export function trustWeightsFor(g: Group): Record<string, number> {
+  const memberIds = Object.keys(g.members);
+  const out: Record<string, number> = {};
+  for (const m of memberIds) out[m] = 1;
+  const ratings = g.trustRatings;
+  if (!ratings) return out;
+  const memberSet = new Set(memberIds);
+  for (const rater of memberIds) {
+    const row = ratings[rater];
+    if (!row) continue;
+    for (const ratee of Object.keys(row)) {
+      if (ratee === rater || !memberSet.has(ratee)) continue;   // no self / non-member
+      const v = row[ratee];
+      if (typeof v !== "number" || !(v > 0)) continue;
+      out[ratee] += Math.min(v, TRUST_MAX);
+    }
+  }
+  return out;
 }
 
 /** Members (excluding self) whose vote flowed to `voter`, for a "self + A + B" readout. */
