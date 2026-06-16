@@ -18,7 +18,7 @@ import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHand
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
-         delegationMapFor, trustWeightsFor, TRUST_MAX, govCurrency,
+         delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          type Group, type Issue, type Role } from "./gov.js";
 
 // ---------------------------------------------------------------------------
@@ -1483,7 +1483,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · vote · treasury · kudos · say · status");
+      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · say · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -1658,12 +1658,15 @@ function handleCommand(raw: string): string[] {
         sys(`🏛 ${g.name} — ${Object.keys(g.members).length} members, ${g.issues.length} issues`);
         const tw = trustWeightsFor(g);
         const trusted = Object.values(tw).some((w) => w !== 1);   // any ratings present?
+        const discredited = new Set(discreditedMembers(g));
         for (const m of Object.values(g.members)) {
           const del = g.delegations[m.peerId]?.delegate;
           const wt = trusted ? `  [wt ${tw[m.peerId] ?? 1}]` : "";
-          sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${wt}`);
+          const flag = discredited.has(m.peerId) ? "  ⚠ discredited" : "";
+          sys(`  ${m.role === "admin" ? "★" : "·"} ${m.label}${del ? `  → ${memberLabel(g, del)}` : ""}${wt}${flag}`);
         }
-        if (trusted) sys("  (wt = base voting weight = 1 + affirmative trust from other members)");
+        if (trusted) sys(`  (wt = 1 + trust level; admins are the root at ${TRUST_MAX}, each rating confers a level below the rater's own)`);
+        if (discredited.size) sys("  (⚠ discredited = censured for undeserved trust; their vouchers were slashed)");
         for (const i of g.issues) sys(`  ▸ ${i.title} — ${issueResultText(g, i)}`);
         showGroupCard(g);
         break;
@@ -1719,17 +1722,41 @@ function handleCommand(raw: string): string[] {
         break;
       }
       if (gsub === "trust") {
-        // /gov trust <member> <0-5>   — affirmative trust rating (0 clears)
+        // /gov trust <member> <level>  — confer a trust level STRICTLY BELOW your
+        // own (0 clears). Admins are the root (level TRUST_MAX); trust descends.
         if (!isMember(g, meId)) { sys("only members can rate trust"); break; }
         const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
-        if (!pid || !isMember(g, pid)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>   (0 clears; trust weights their vote)`); break; }
+        if (!pid || !isMember(g, pid)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>   (0 clears; confers a level below your own)`); break; }
         if (pid === meId) { sys("can't rate your own trust — trust is given by others"); break; }
-        const rating = Number(gParts[2]);
-        if (gParts[2] === undefined || isNaN(rating)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>`); break; }
-        govSetTrust(g, pid, rating);
-        const r = Math.max(0, Math.min(TRUST_MAX, Math.round(rating)));
+        const requested = Number(gParts[2]);
+        if (gParts[2] === undefined || isNaN(requested)) { sys(`usage: /gov trust <member> <0-${TRUST_MAX}>`); break; }
+        const myLevel = trustLevels(g)[meId] ?? 0;
+        const maxAssign = myLevel - 1;                 // strictly below your own level
+        if (maxAssign < 0) { sys(`you have no trust to confer yet (your level is ${myLevel}); only members trusted above level 0 can rate others`); break; }
+        const r = Math.max(0, Math.min(maxAssign, Math.round(requested)));
+        if (requested > maxAssign) sys(`capped to ${maxAssign}: you can only confer a level below your own (${myLevel})`);
+        govSetTrust(g, pid, r);
         sys(r === 0 ? `cleared your trust rating for ${peerLabel(pid)}`
-                    : `you rate ${peerLabel(pid)} trust ${r}/${TRUST_MAX} — adds ${r} to their voting weight`);
+                    : `you confer trust level ${r} on ${peerLabel(pid)} (below your level ${myLevel}) — their voting weight becomes 1+level`);
+        break;
+      }
+      if (gsub === "censure" || gsub === "uncensure") {
+        // /gov censure <member> — flag a member as holding undeserved trust.
+        // Credible only from equal-or-higher standing; discredits the target and
+        // slashes everyone who vouched for them (accountability).
+        if (!isMember(g, meId)) { sys("only members can censure"); break; }
+        const pid = gParts[1] ? findPeerByName(gParts[1]) : null;
+        if (!pid || !isMember(g, pid)) { sys(`usage: /gov ${gsub} <member>`); break; }
+        if (pid === meId) { sys("can't censure yourself"); break; }
+        const on = gsub === "censure";
+        if (on) {
+          const levels = trustLevels(g); const meLvl = levels[meId] ?? 0;
+          if (meLvl <= 0) { sys("you have no standing to censure (your trust level is 0)"); break; }
+          if (meLvl < (levels[pid] ?? 0)) sys(`note: your level (${meLvl}) is below ${peerLabel(pid)}'s — your censure only counts once enough equal-or-higher members agree`);
+        }
+        govSetCensure(g, pid, on);
+        sys(on ? `you censure ${peerLabel(pid)} for undeserved trust — if upheld, they are discredited and their vouchers are slashed`
+               : `you withdraw your censure of ${peerLabel(pid)}`);
         break;
       }
       if (gsub === "vote") {
@@ -4223,6 +4250,21 @@ function connect(): void {
           saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
+        if (d.kind === "gov-censure") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          const censurer = String(d.censurer ?? from);
+          const target = String(d.target ?? "");
+          if (!g || from !== censurer || !isMember(g, censurer)) return;   // self-signed only
+          if (!target || target === censurer || !isMember(g, target)) return;
+          g.censures ??= {};
+          const row = (g.censures[censurer] ??= {});
+          if (d.on === false) delete row[target]; else row[target] = 1;
+          if (Object.keys(row).length === 0) delete g.censures[censurer];
+          saveGroups(); renderGroups(); refreshGroupCard(g);
+          return;
+        }
         if (d.kind === "group-issue") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -4676,7 +4718,8 @@ const CMD_HELP: Record<string, string[]> = {
   gov: ["/gov new <name> · show <name> · list — liquid-democracy groups.",
         "/gov member add|remove <peer> [admin] · issue <title>",
         "/gov delegate <member> [on <issue>] · undelegate [on <issue>] — your vote flows to your delegate unless you vote (per-issue overrides global).",
-        "/gov trust <member> <0-5> — affirmative trust rating (0 clears); a member's vote weight = 1 + trust others give them (liquid trust).",
+        "/gov trust <member> <0-5> — confer a trust level BELOW your own (0 clears); admins are the root (5), vote weight = 1 + level (liquid trust).",
+        "/gov censure <member> · uncensure <member> — flag undeserved trust; if upheld the target is discredited and their vouchers are slashed (accountability).",
         "/gov vote <issue> | opt1, opt2 [ranked] — opens a delegation- and trust-weighted poll bound to the issue.",
         "/gov treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · say <msg> · status",
         "full reference: Governance.md"],
@@ -5640,6 +5683,16 @@ function govSetTrust(g: Group, ratee: string, rating: number): void {
   if (Object.keys(row).length === 0) delete g.trustRatings[me];
   saveGroups(); renderGroups(); refreshGroupCard(g);
   signedBroadcast({ kind: "gov-trust", groupId: g.id, rater: me, ratee, rating: r });
+}
+// Set/clear your accountability censure of another member. Self-signed.
+function govSetCensure(g: Group, target: string, on: boolean): void {
+  const me = myPeerId();
+  g.censures ??= {};
+  const row = (g.censures[me] ??= {});
+  if (on) row[target] = 1; else delete row[target];
+  if (Object.keys(row).length === 0) delete g.censures[me];
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "gov-censure", groupId: g.id, censurer: me, target, on });
 }
 function govNewIssue(g: Group, title: string): Issue {
   const iid = issueId(title);

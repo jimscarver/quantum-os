@@ -38,13 +38,19 @@ stakeholders through interlinked autonomous teams.
 
 **Liquid *trust*, not only liquid democracy (shipped).** The RGOV vision weights
 alternatives by **voter trust ratings** alongside delegation — affirmative trust,
-not just vote-flow. `/gov trust <member> <0–5>` lets each member rate others'
-trustworthiness; a member's **base voting weight** becomes `1 + Σ(affirmative
-trust others give them)` instead of a flat `1`, and that weighted vote then flows
-through the *same* delegation resolver. With no ratings the base is `1` for
-everyone, reproducing equal-weight liquid democracy exactly — so trust weighting
-is opt-in and backward-compatible. The room-side complement — *who* should be in
-the room and how it closes well — is
+not just vote-flow. `/gov trust <member> <0–5>` lets each member confer a trust
+**level** on another, and a member's **base voting weight** becomes `1 + their
+trust level` instead of a flat `1`; that weighted vote then flows through the
+*same* delegation resolver. The defining rule (per Jim): **you can only confer a
+level strictly below your own.** Admins are the trust root (level `5`); trust
+descends hop-by-hop, strictly decreasing, so two untrusted members cannot bootstrap
+each other — the hierarchy, not just admin gating, is the Sybil boundary. And
+because **vouching is a stake** (`/gov censure` discredits a member who holds
+undeserved trust and *slashes everyone who vouched for them*), the web
+self-corrects — there is accountability for conferring trust carelessly. With no
+ratings the base is `1` for everyone, reproducing equal-weight liquid democracy
+exactly — so trust weighting is opt-in and backward-compatible. The room-side
+complement — *who* should be in the room and how it closes well — is
 [`Room_Best_Practices.md`](Room_Best_Practices.md), grounded in the same talk's
 collective-intelligence findings.
 
@@ -90,20 +96,43 @@ issue. A chain that reaches no direct voter, or loops, **abstains**.
 - Each member's vote walks the delegation chain to the first direct voter reached
   (its weight flows there); cycles / dead-ends with no direct voter abstain.
 - `weight(d) = Σ baseWeight(m)` over members `m` whose chain terminates at `d`,
-  where `baseWeight(m) = 1 + Σ(affirmative trust other members rate m)`
-  (`gov.ts` `trustWeightsFor`; flat `1` when there are no ratings, so this reduces
-  to `1 + #delegators`).
+  where `baseWeight(m) = 1 + trustLevel(m)` (`gov.ts` `trustWeightsFor`; flat `1`
+  when there are no ratings, so this reduces to `1 + #delegators`).
 - The weighted counts feed the existing approval / IRV poll engine (`tally(poll,
   weights)`), so votes are *ranked-choice*, *delegation-weighted*, **and
   trust-weighted**, with the same deterministic tie-breaks.
 
-**Trust ratings** are non-negative integers `0–5`, self-signed (you set only your
-own outgoing ratings, like delegation), aggregated deterministically by every
-peer from the signed `gov-trust` envelopes it holds. Self-ratings and ratings of
-non-members are ignored; each rating is capped at `5` — so a member cannot trust
-*themselves* into power, only earn weight from others (affirmative trust). A
-colluding clique can still amplify each other; admin-gated membership is the
-Sybil boundary, not the trust math.
+**Trust levels** (`gov.ts` `trustLevels`) are a **hierarchical web of trust rooted
+at the admins** (`level = 5`). A rating `v` from rater `r` confers
+`min(v, level(r) − 1)` on the ratee — **strictly below the rater's own level** —
+and a member's level is the highest conferred on them, computed as a deterministic
+least fixed point (a monotone relaxation every peer reproduces from the signed
+`gov-trust` envelopes it holds). Ratings are self-signed (you set only your own
+outgoing ratings, like delegation); self-ratings and non-member ratings are ignored.
+
+Because each hop *strictly decreases*, **two untrusted members cannot bootstrap
+each other** — a level-0 member can confer nothing, and a colluding clique can
+never lift itself above the level an admin actually conferred on it. Trust must
+descend from an admin; the hierarchy itself is the Sybil boundary, not merely
+admin-gated membership. Enforcement lives in the aggregation (the conferral cap is
+re-applied on every recompute), so a forged high rating from a low-level peer is
+automatically capped — the `/gov trust` command's cap is only the UX hint.
+
+### Accountability — vouching is a stake
+
+Conferring trust is not free: **you are accountable for assigning undeserved
+trust.** `/gov censure <member>` flags a member as holding trust they don't
+deserve. A censure from `c` against `m` is **credible** only when `c`'s current
+standing ≥ `m`'s (you can call out a peer or subordinate, not someone above you —
+symmetric to "confer only below your own level"). When credible censure weight
+(Σ of the censurers' levels) reaches `m`'s level, `m` is **discredited**
+(level → 0) **and every member who vouched for `m` is slashed by the level they
+staked** on them (`gov.ts` `trustLevels`, phase 2 — a decreasing fixed point, so
+slashing a voucher can cascade and still converge). So a steward who hands out
+trust carelessly loses their own standing when those endorsements go bad — the
+web of trust self-corrects. Censures are self-signed (`gov-censure`); a lone
+low-standing censure does nothing until enough equal-or-higher members concur,
+and an admin (level `5`) can always uphold one.
 
 Example: members A, B, C; B delegates A; C delegates B. If only **A** votes, A
 carries weight **3** (self + B + C transitively). If **C** then votes directly, C
@@ -124,7 +153,8 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov member add <peer> [admin]` · `member remove <peer>` | Manage roster (admin only); membership is capability-backed |
 | `/gov issue <title>` · `/gov issue list` | Record / list issues to decide. Each issue gets its own **issue card** (title, group, weighted result, open-vote/vote) that persists in the transcript and replays on reload, like a poll card |
 | `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
-| `/gov trust <member> <0–5>` | Set / clear (`0`) your **affirmative trust rating** of a member; raises their base voting weight by that amount (liquid *trust*). Self-signed |
+| `/gov trust <member> <0–5>` | Set / clear (`0`) your **affirmative trust rating** of a member; confers a level **below your own**, raising their base voting weight (liquid *trust*). Self-signed |
+| `/gov censure <member>` · `/gov uncensure <member>` | Flag / unflag a member for **undeserved trust**; if upheld they are discredited and their vouchers are **slashed** (accountability). Self-signed |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
 | `/gov kudos <member> <n> \| balance` | Award reputation — a per-group kudos `/note` currency (admin issues; members re-gift what they hold) |
@@ -139,9 +169,9 @@ disband.
 
 Wire envelopes (all dyncap-signed, synced on join via `sync-gov`, tombstone-aware):
 `group-open`, `group-member` (admin-gated), `group-issue`, `group-vote`,
-`gov-delegate` and `gov-trust` (both self-signed — only you set your own delegate /
-trust ratings). Votes themselves are plain `/poll` envelopes. The headless memory
-daemon can persist `group-*` later (Phase 2).
+`gov-delegate`, `gov-trust`, and `gov-censure` (all self-signed — only you set
+your own delegate / trust ratings / censures). Votes themselves are plain `/poll`
+envelopes. The headless memory daemon can persist `group-*` later (Phase 2).
 
 ---
 
@@ -203,12 +233,16 @@ group's members, delegations, issues, and treasury/kudos currencies survive when
 every browser leaves; it also honors a creator's group disband (`retract` /
 tombstone) and won't resurrect it.
 
-**Phase 2d (shipped):** **trust-rating weights** — the RGOV liquid-*trust*
-extension. `/gov trust <member> <0–5>` (self-signed `gov-trust` envelope) sets an
-affirmative trust rating; `trustWeightsFor` aggregates them into per-member base
-weights (`1 + earned trust`) that feed the same deterministic `resolveWeights`
-tally. Opt-in and backward-compatible — no ratings ⇒ flat one-person-one-vote.
-`/gov status` shows each member's `[wt N]` when ratings are present.
+**Phase 2d (shipped):** **trust-rating weights + accountability** — the RGOV
+liquid-*trust* extension. `/gov trust <member> <0–5>` (self-signed `gov-trust`)
+confers a trust level **below the rater's own** in an admin-rooted hierarchy
+(`trustLevels`); base voting weight is `1 + level`, fed into the same
+deterministic `resolveWeights` tally. **Accountability:** `/gov censure <member>`
+(self-signed `gov-censure`) flags undeserved trust — credible from equal-or-higher
+standing — and when upheld discredits the target and **slashes their vouchers** by
+the level they staked (phase 2 of `trustLevels`). Opt-in and backward-compatible —
+no ratings ⇒ flat one-person-one-vote. `/gov status` shows each member's `[wt N]`
+and any `⚠ discredited` flags.
 
 **Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars;
-trust-rating UI affordances on the group card.
+trust + censure UI affordances on the group card.

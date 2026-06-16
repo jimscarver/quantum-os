@@ -33,6 +33,13 @@ export interface Group {
   // A member's base voting weight grows with the trust others place in them, so
   // delegation flow is weighted by earned trust — not one-person-one-vote.
   trustRatings?: Record<string, Record<string, number>>;
+  // Optional accountability censures: censurer peerId -> target peerId -> 1. A
+  // member of equal-or-higher standing flags a target as holding *undeserved*
+  // trust; when credible censure outweighs the target's level they are
+  // discredited (level→0) AND everyone who vouched for them is slashed by the
+  // level they staked. Self-signed. This makes conferring trust a stake, not a
+  // free action — accountability for assigning undeserved trust.
+  censures?: Record<string, Record<string, number>>;
   // Optional `/note` currencies the group uses: a treasury (group funds) and a
   // kudos (reputation) currency. The admin declares them; balances are bearer
   // notes held privately by each member.
@@ -123,33 +130,111 @@ export function resolveWeights(
   return { weightByVoter, flow, abstained };
 }
 
-/** Max affirmative-trust rating one member can assign another (0 clears). */
+/** Trust levels: admins are the root (TRUST_MAX); each rating confers a level
+ *  strictly below the rater's own. So 0..TRUST_MAX is the full rank ladder. */
 export const TRUST_MAX = 5;
 
-// Aggregate the group's affirmative-trust ratings into per-member base weights:
-//   baseWeight(m) = 1 + Σ over members r≠m of clamp(trustRatings[r][m], 0..TRUST_MAX).
-// The leading 1 is the member's own vote (so an untrusted member still counts as
-// 1, and a group with NO ratings reproduces flat liquid democracy exactly).
-// Only member↔member ratings count; self-ratings are ignored (you can't trust
-// yourself into power — trust is affirmative and given by others). Deterministic:
-// every peer computes the same map from the signed trust graph it holds.
-export function trustWeightsFor(g: Group): Record<string, number> {
-  const memberIds = Object.keys(g.members);
-  const out: Record<string, number> = {};
-  for (const m of memberIds) out[m] = 1;
+// Affirmative trust as a HIERARCHICAL web of trust rooted at the group's admins:
+// a member may only confer a trust level **strictly below their own**. Admins are
+// the trust root (level TRUST_MAX); a rating `v` from rater `r` confers
+// `min(v, level(r) − 1)` on the ratee; a member's level is the highest level
+// conferred on them. This is a monotone relaxation toward the least fixed point
+// ≥ the admin seed, so it is deterministic (order-independent) and two untrusted
+// members CANNOT bootstrap each other — trust must descend from an admin, and it
+// strictly decreases at each hop. Returns peerId -> level (0..TRUST_MAX).
+export function trustLevels(g: Group): Record<string, number> {
+  const ids = Object.keys(g.members);
+  const memberSet = new Set(ids);
   const ratings = g.trustRatings;
-  if (!ratings) return out;
-  const memberSet = new Set(memberIds);
-  for (const rater of memberIds) {
-    const row = ratings[rater];
-    if (!row) continue;
-    for (const ratee of Object.keys(row)) {
-      if (ratee === rater || !memberSet.has(ratee)) continue;   // no self / non-member
-      const v = row[ratee];
-      if (typeof v !== "number" || !(v > 0)) continue;
-      out[ratee] += Math.min(v, TRUST_MAX);
+
+  // Phase 1 — positive trust: admin-rooted increasing least fixed point. A rating
+  // v from r confers min(v, level(r)−1) — strictly below the rater's own level.
+  const pos: Record<string, number> = {};
+  for (const m of ids) pos[m] = isAdmin(g, m) ? TRUST_MAX : 0;     // admins seed the root
+  if (ratings) {
+    const maxRounds = ids.length * (TRUST_MAX + 1) + 1;            // LFP converges well within this
+    for (let round = 0; round < maxRounds; round++) {
+      let changed = false;
+      for (const rater of ids) {
+        const cap = pos[rater] - 1;                                // strictly below the rater's own level
+        if (cap < 0) continue;                                     // level-0 members can confer nothing
+        const row = ratings[rater];
+        if (!row) continue;
+        for (const ratee of Object.keys(row)) {
+          if (ratee === rater || !memberSet.has(ratee)) continue;  // no self / non-member
+          const v = row[ratee];
+          if (typeof v !== "number" || !(v > 0)) continue;
+          const conferred = Math.min(v, cap);
+          if (conferred > pos[ratee]) { pos[ratee] = conferred; changed = true; }
+        }
+      }
+      if (!changed) break;
     }
   }
+
+  const censures = g.censures;
+  if (!censures) return pos;
+
+  // Phase 2 — accountability: a decreasing fixed point. A censure from c against m
+  // is credible when c's *current* standing ≥ m's; when credible censure weight
+  // (Σ of censurers' levels) ≥ m's level, m is discredited (level→0) and every
+  // member who conferred trust on m is slashed by the level they staked. Slashing
+  // a voucher can in turn discredit them — the loop converges because levels only
+  // fall (bounded by the phase-1 ceiling).
+  const eff: Record<string, number> = { ...pos };
+  const maxRounds = ids.length + 2;
+  for (let round = 0; round < maxRounds; round++) {
+    const against: Record<string, number> = {};
+    for (const c of ids) {
+      if (eff[c] <= 0) continue;
+      const row = censures[c];
+      if (!row) continue;
+      for (const t of Object.keys(row)) {
+        if (t === c || !memberSet.has(t) || !row[t]) continue;
+        if (eff[c] >= eff[t]) against[t] = (against[t] ?? 0) + eff[c];   // credible: censurer outranks-or-ties target
+      }
+    }
+    let changed = false;
+    for (const m of ids) {
+      if (eff[m] > 0 && (against[m] ?? 0) >= eff[m]) {              // discredited
+        eff[m] = 0;
+        changed = true;
+        for (const v of ids) {                                     // slash everyone who vouched for m
+          const stake = ratings?.[v]?.[m];
+          if (typeof stake === "number" && stake > 0 && eff[v] > 0) {
+            eff[v] = Math.max(0, eff[v] - Math.min(stake, pos[v]));
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return eff;
+}
+
+/** Members discredited by accountability censure (level driven to 0 despite a
+ *  positive phase-1 standing). Useful for status readouts. */
+export function discreditedMembers(g: Group): string[] {
+  if (!g.censures) return [];
+  const eff = trustLevels(g);
+  return Object.keys(g.members).filter(
+    (m) => !isAdmin(g, m) && eff[m] === 0 &&
+      Object.values(g.trustRatings ?? {}).some((row) => row && (row[m] ?? 0) > 0),
+  );
+}
+
+// Per-member base voting weight for resolveWeights: `1 + trustLevel(m)`. With NO
+// ratings anywhere the group is flat (weight 1 each) — trust weighting is opt-in
+// and backward-compatible; once any rating exists the admin-rooted hierarchy
+// (trustLevels) applies and admins carry the root weight `1 + TRUST_MAX`.
+export function trustWeightsFor(g: Group): Record<string, number> {
+  const ids = Object.keys(g.members);
+  const out: Record<string, number> = {};
+  const hasRatings = !!g.trustRatings &&
+    Object.values(g.trustRatings).some((row) => row && Object.keys(row).length > 0);
+  if (!hasRatings) { for (const m of ids) out[m] = 1; return out; }
+  const level = trustLevels(g);
+  for (const m of ids) out[m] = 1 + (level[m] ?? 0);
   return out;
 }
 
