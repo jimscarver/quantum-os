@@ -45,9 +45,11 @@ trust level` instead of a flat `1`; that weighted vote then flows through the
 level strictly below your own.** Admins are the trust root (level `5`); trust
 descends hop-by-hop, strictly decreasing, so two untrusted members cannot bootstrap
 each other — the hierarchy, not just admin gating, is the Sybil boundary. And
-because **vouching is a stake** (`/gov censure` discredits a member who holds
-undeserved trust and *slashes everyone who vouched for them*), the web
-self-corrects — there is accountability for conferring trust carelessly. With no
+because **vouching is a stake** (a **⅔ quorum** of eligible peers can `/gov
+censure` a member who holds undeserved trust, discrediting them and *slashing
+everyone who vouched for them* — no single member, admin included, acts alone),
+the web self-corrects — there is accountability for conferring trust carelessly.
+With no
 ratings the base is `1` for everyone, reproducing equal-weight liquid democracy
 exactly — so trust weighting is opt-in and backward-compatible. The room-side
 complement — *who* should be in the room and how it closes well — is
@@ -122,17 +124,24 @@ automatically capped — the `/gov trust` command's cap is only the UX hint.
 
 Conferring trust is not free: **you are accountable for assigning undeserved
 trust.** `/gov censure <member>` flags a member as holding trust they don't
-deserve. A censure from `c` against `m` is **credible** only when `c`'s current
-standing ≥ `m`'s (you can call out a peer or subordinate, not someone above you —
-symmetric to "confer only below your own level"). When credible censure weight
-(Σ of the censurers' levels) reaches `m`'s level, `m` is **discredited**
-(level → 0) **and every member who vouched for `m` is slashed by the level they
-staked** on them (`gov.ts` `trustLevels`, phase 2 — a decreasing fixed point, so
-slashing a voucher can cascade and still converge). So a steward who hands out
-trust carelessly loses their own standing when those endorsements go bad — the
-web of trust self-corrects. Censures are self-signed (`gov-censure`); a lone
-low-standing censure does nothing until enough equal-or-higher members concur,
-and an admin (level `5`) can always uphold one.
+deserve. The **eligible censurers** of `m` are the members whose current standing
+≥ `m`'s (you can call out a peer or subordinate, not someone above you — symmetric
+to "confer only below your own level"). `m` is **discredited** when a **quorum of
+that eligible body — a ⅔ supermajority, floored at 2 — has censured them**
+(reusing the ⅔-supermajority precedent of [`Consensus.md`](Consensus.md)). On
+discredit, `m`'s level → 0 **and every member who vouched for `m` is slashed by
+the level they staked** on them (`gov.ts` `trustLevels`, phase 2 — a decreasing
+fixed point, so slashing a voucher can cascade and still converge). So a steward
+who hands out trust carelessly loses their own standing when those endorsements go
+bad — the web of trust self-corrects.
+
+The quorum is the point: **no single member can discredit anyone — not even an
+admin.** A lone admin's censure is one vote short of the floor of 2; and because a
+disagreeing admin is counted in the eligible *body* (the quorum denominator) but
+not in the censuring *set*, **a quorum of the others discredits over that admin's
+objection** — admin opinion carries no veto and no unilateral power here. Censures
+are self-signed (`gov-censure`), so a member below `m`'s standing can record one
+but it is not counted toward the quorum.
 
 Example: members A, B, C; B delegates A; C delegates B. If only **A** votes, A
 carries weight **3** (self + B + C transitively). If **C** then votes directly, C
@@ -154,7 +163,7 @@ clicking it in the Governance sidebar, or implicitly when there's only one group
 | `/gov issue <title>` · `/gov issue list` | Record / list issues to decide. Each issue gets its own **issue card** (title, group, weighted result, open-vote/vote) that persists in the transcript and replays on reload, like a poll card |
 | `/gov delegate <member> [on <issue>]` · `/gov undelegate [on <issue>]` | Set / clear your **standing delegate**, or a **per-issue** delegate that overrides it for one issue |
 | `/gov trust <member> <0–5>` | Set / clear (`0`) your **affirmative trust rating** of a member; confers a level **below your own**, raising their base voting weight (liquid *trust*). Self-signed |
-| `/gov censure <member>` · `/gov uncensure <member>` | Flag / unflag a member for **undeserved trust**; if upheld they are discredited and their vouchers are **slashed** (accountability). Self-signed |
+| `/gov censure <member>` · `/gov uncensure <member>` | Flag / unflag a member for **undeserved trust**; a **⅔ quorum** of eligible censurers (min 2, even over an admin) discredits them and **slashes their vouchers** (accountability). Self-signed |
 | `/gov vote <issue> \| opt1, opt2 [ranked]` | Open a poll bound to the issue (find-or-create the issue) |
 | `/gov treasury declare \| grant <member> <n> \| balance` | Group funds — a per-group `/note` currency (admin declares + funds; balances are bearer-private) |
 | `/gov kudos <member> <n> \| balance` | Award reputation — a per-group kudos `/note` currency (admin issues; members re-gift what they hold) |
@@ -238,11 +247,12 @@ liquid-*trust* extension. `/gov trust <member> <0–5>` (self-signed `gov-trust`
 confers a trust level **below the rater's own** in an admin-rooted hierarchy
 (`trustLevels`); base voting weight is `1 + level`, fed into the same
 deterministic `resolveWeights` tally. **Accountability:** `/gov censure <member>`
-(self-signed `gov-censure`) flags undeserved trust — credible from equal-or-higher
-standing — and when upheld discredits the target and **slashes their vouchers** by
-the level they staked (phase 2 of `trustLevels`). Opt-in and backward-compatible —
-no ratings ⇒ flat one-person-one-vote. `/gov status` shows each member's `[wt N]`
-and any `⚠ discredited` flags.
+(self-signed `gov-censure`) flags undeserved trust; a **⅔ quorum of eligible
+censurers (min 2)** discredits the target and **slashes their vouchers** by the
+level they staked (phase 2 of `trustLevels`) — no single member, admin included,
+acts alone, and a disagreeing admin can't block a real quorum. Opt-in and
+backward-compatible — no ratings ⇒ flat one-person-one-vote. `/gov status` shows
+each member's `[wt N]` and any `⚠ discredited` flags.
 
 **Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars;
 trust + censure UI affordances on the group card.

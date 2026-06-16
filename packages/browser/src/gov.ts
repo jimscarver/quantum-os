@@ -175,39 +175,42 @@ export function trustLevels(g: Group): Record<string, number> {
   const censures = g.censures;
   if (!censures) return pos;
 
-  // Phase 2 — accountability: a decreasing fixed point. A censure from c against m
-  // is credible when c's *current* standing ≥ m's; when credible censure weight
-  // (Σ of censurers' levels) ≥ m's level, m is discredited (level→0) and every
-  // member who conferred trust on m is slashed by the level they staked. Slashing
-  // a voucher can in turn discredit them — the loop converges because levels only
-  // fall (bounded by the phase-1 ceiling).
+  // Phase 2 — accountability: a decreasing fixed point. The *eligible censurers*
+  // of a target t are the members whose current standing ≥ t's (you can call out
+  // a peer or subordinate, not someone above you). t is discredited when a QUORUM
+  // of that eligible body has censured t — a ⅔ supermajority, floored at 2 — so
+  // **no single member, admin included, acts alone, and a disagreeing admin
+  // (counted in the eligible body but not the censuring set) cannot block a real
+  // quorum.** On discredit, t→0 and every member who conferred trust on t is
+  // slashed by the level they staked. Slashing a voucher can in turn discredit
+  // them; the loop converges because levels only fall (bounded by phase 1).
   const eff: Record<string, number> = { ...pos };
   const maxRounds = ids.length + 2;
   for (let round = 0; round < maxRounds; round++) {
-    const against: Record<string, number> = {};
-    for (const c of ids) {
-      if (eff[c] <= 0) continue;
-      const row = censures[c];
-      if (!row) continue;
-      for (const t of Object.keys(row)) {
-        if (t === c || !memberSet.has(t) || !row[t]) continue;
-        if (eff[c] >= eff[t]) against[t] = (against[t] ?? 0) + eff[c];   // credible: censurer outranks-or-ties target
+    // Decide all discredits from a consistent snapshot of `eff` BEFORE mutating,
+    // so the round is order-independent (deterministic).
+    const toDiscredit: string[] = [];
+    for (const t of ids) {
+      if (eff[t] <= 0) continue;
+      let eligible = 0, censured = 0;
+      for (const c of ids) {
+        if (c === t || eff[c] < eff[t]) continue;                  // eligible: standing ≥ target
+        eligible++;
+        if (censures[c]?.[t] && memberSet.has(t)) censured++;       // … and actually censured t
       }
+      const quorum = Math.max(2, Math.ceil((2 * eligible) / 3));    // ⅔ supermajority, min 2
+      if (censured >= quorum) toDiscredit.push(t);
     }
-    let changed = false;
-    for (const m of ids) {
-      if (eff[m] > 0 && (against[m] ?? 0) >= eff[m]) {              // discredited
-        eff[m] = 0;
-        changed = true;
-        for (const v of ids) {                                     // slash everyone who vouched for m
-          const stake = ratings?.[v]?.[m];
-          if (typeof stake === "number" && stake > 0 && eff[v] > 0) {
-            eff[v] = Math.max(0, eff[v] - Math.min(stake, pos[v]));
-          }
+    if (toDiscredit.length === 0) break;
+    for (const t of toDiscredit) {
+      eff[t] = 0;
+      for (const v of ids) {                                       // slash everyone who vouched for t
+        const stake = ratings?.[v]?.[t];
+        if (typeof stake === "number" && stake > 0 && eff[v] > 0) {
+          eff[v] = Math.max(0, eff[v] - Math.min(stake, pos[v]));
         }
       }
     }
-    if (!changed) break;
   }
   return eff;
 }

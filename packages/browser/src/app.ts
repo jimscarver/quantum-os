@@ -1752,10 +1752,10 @@ function handleCommand(raw: string): string[] {
         if (on) {
           const levels = trustLevels(g); const meLvl = levels[meId] ?? 0;
           if (meLvl <= 0) { sys("you have no standing to censure (your trust level is 0)"); break; }
-          if (meLvl < (levels[pid] ?? 0)) sys(`note: your level (${meLvl}) is below ${peerLabel(pid)}'s — your censure only counts once enough equal-or-higher members agree`);
+          if (meLvl < (levels[pid] ?? 0)) sys(`your standing (${meLvl}) is below ${peerLabel(pid)}'s (${levels[pid] ?? 0}) — only equal-or-higher members are eligible to censure them; recorded but not counted`);
         }
         govSetCensure(g, pid, on);
-        sys(on ? `you censure ${peerLabel(pid)} for undeserved trust — if upheld, they are discredited and their vouchers are slashed`
+        sys(on ? `you censure ${peerLabel(pid)} for undeserved trust — discredit needs a ⅔ quorum of eligible censurers (min 2); no single member, admin included, can do it alone`
                : `you withdraw your censure of ${peerLabel(pid)}`);
         break;
       }
@@ -4719,7 +4719,7 @@ const CMD_HELP: Record<string, string[]> = {
         "/gov member add|remove <peer> [admin] · issue <title>",
         "/gov delegate <member> [on <issue>] · undelegate [on <issue>] — your vote flows to your delegate unless you vote (per-issue overrides global).",
         "/gov trust <member> <0-5> — confer a trust level BELOW your own (0 clears); admins are the root (5), vote weight = 1 + level (liquid trust).",
-        "/gov censure <member> · uncensure <member> — flag undeserved trust; if upheld the target is discredited and their vouchers are slashed (accountability).",
+        "/gov censure <member> · uncensure <member> — flag undeserved trust; a ⅔ quorum of eligible censurers (min 2, even over an admin) discredits the target and slashes their vouchers.",
         "/gov vote <issue> | opt1, opt2 [ranked] — opens a delegation- and trust-weighted poll bound to the issue.",
         "/gov treasury declare|grant <m> <n>|balance · kudos <m> <n>|balance · say <msg> · status",
         "full reference: Governance.md"],
