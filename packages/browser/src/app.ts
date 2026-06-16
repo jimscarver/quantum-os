@@ -4307,6 +4307,10 @@ function connect(): void {
       } finally { setActiveRoom(prev); }
     },
     onPeerLeft(id) {
+      // Idempotent: the data-channel close, a connection "failed"/"closed", and
+      // the signaling "left" broadcast can all report the same departure. Don't
+      // stack grace timers — one pending leave per peer.
+      if (pendingLeaves.has(id)) return;
       // The setTimeout fires later — capture ctx in the closure so the
       // delayed work runs against the right room even if activeRoom has
       // changed in the meantime.

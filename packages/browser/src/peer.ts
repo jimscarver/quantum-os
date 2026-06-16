@@ -47,6 +47,12 @@ export class QOSPeer {
   // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
   private localStream: MediaStream | null = null;
   private makingOffer = new Map<string, boolean>();
+  // Per-peer grace timer for a transient ICE "disconnected": WebRTC can briefly
+  // flap to "disconnected" and recover to "connected". We only declare the peer
+  // gone if it has not recovered within this window — preventing a ghost from
+  // lingering (handled) AND a healthy peer from being evicted on a blip.
+  private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly DISCONNECT_GRACE_MS = 8000;
 
   constructor(config: PeerConfig) {
     this.config = config;
@@ -85,6 +91,8 @@ export class QOSPeer {
     this.ws?.close();
     this.connections.clear();
     this.channels.clear();
+    for (const t of this.disconnectTimers.values()) clearTimeout(t);
+    this.disconnectTimers.clear();
   }
 
   /// Send data to a specific peer via their data channel.
@@ -335,10 +343,30 @@ export class QOSPeer {
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       console.log(`[qos-peer] connection to ${remotePeerId.slice(-8)} → ${state}`);
-      if (state === "failed") {
-        // Clean up — the signaling reconnect will re-establish via joined/offer flow
-        this.cleanup(remotePeerId);
-        this.config.onPeerLeft?.(remotePeerId);
+      if (state === "connected") {
+        // Recovered (or first connected) — cancel any pending disconnect grace.
+        this.clearDisconnectTimer(remotePeerId);
+        return;
+      }
+      if (state === "failed" || state === "closed") {
+        // Hard failure — the peer is gone now. (Signaling reconnect will
+        // re-establish via the joined/offer flow if they come back.)
+        this.clearDisconnectTimer(remotePeerId);
+        this.declarePeerGone(remotePeerId);
+        return;
+      }
+      if (state === "disconnected") {
+        // Possibly transient: start a grace timer, evict only if it does not
+        // recover. Don't stack timers if one is already running.
+        if (!this.disconnectTimers.has(remotePeerId)) {
+          const t = setTimeout(() => {
+            this.disconnectTimers.delete(remotePeerId);
+            const cur = this.connections.get(remotePeerId)?.connectionState;
+            if (cur === "connected") return;   // recovered
+            this.declarePeerGone(remotePeerId);
+          }, QOSPeer.DISCONNECT_GRACE_MS);
+          this.disconnectTimers.set(remotePeerId, t);
+        }
       }
     };
 
@@ -365,6 +393,11 @@ export class QOSPeer {
     ch.onclose = () => {
       this.channels.delete(peerId);
       console.log(`[qos-peer] data channel closed with ${peerId}`);
+      // A closed data channel is the most reliable "peer is gone" signal for a
+      // clean tab-close — the underlying connection may never reach "failed".
+      // Declare the peer gone (the app debounces with its own short grace, and
+      // re-establishment fires onPeerJoined / onChannelOpen again).
+      this.declarePeerGone(peerId);
     };
     ch.onmessage = (event) => {
       try {
@@ -380,6 +413,21 @@ export class QOSPeer {
     this.connections.get(peerId)?.close();
     this.connections.delete(peerId);
     this.channels.delete(peerId);
+  }
+
+  private clearDisconnectTimer(peerId: string): void {
+    const t = this.disconnectTimers.get(peerId);
+    if (t !== undefined) { clearTimeout(t); this.disconnectTimers.delete(peerId); }
+  }
+
+  /// Tear down a peer's connection and notify the app it left. Idempotent: a
+  /// data-channel close and a connection-state "failed" for the same peer both
+  /// land here, but the second call is a no-op (nothing left to clean up).
+  private declarePeerGone(peerId: string): void {
+    this.clearDisconnectTimer(peerId);
+    const had = this.connections.has(peerId) || this.channels.has(peerId);
+    this.cleanup(peerId);
+    if (had) this.config.onPeerLeft?.(peerId);
   }
 
   private signal(msg: unknown): void {
