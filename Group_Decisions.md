@@ -204,3 +204,10 @@ private bearer value, so `/forget note` deletes locally with a confirm.
 (Transfer-as-removal still applies too: `/pass`, `/note` ops, `/probe clear`, the
 chat-log cap.) The headless **memory-peer daemon** honors author lemma retractions
 as well, so an always-on peer won't resurrect a removed lemma.
+
+---
+
+## See also
+
+- **[QuantumOS README](README.md)** — the runtime these decision processes run on: rooms, peers, capability tokens, slash commands, and the ZFA substrate.
+- **[Quantum Logical Framework (QLF) README](https://github.com/jimscarver/quantum-logical-framework/blob/main/README.md)** — the physics/formalism repo: ZFA closure, the machine-verified Lean proofs, and the collective-intelligence theory ([`Room_Best_Practices.md`](Room_Best_Practices.md)) behind reaching good group closure.

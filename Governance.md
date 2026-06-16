@@ -262,3 +262,10 @@ discredited` readouts — so liquid trust and accountability are usable without
 typing `/gov trust` / `/gov censure`.
 
 **Phase 2e (planned):** hard role/permission enforcement; more rgov exemplars.
+
+---
+
+## See also
+
+- **[QuantumOS README](README.md)** — the runtime this governance layer is built on: rooms, peers, capability tokens, slash commands, and the ZFA substrate.
+- **[Quantum Logical Framework (QLF) README](https://github.com/jimscarver/quantum-logical-framework/blob/main/README.md)** — the physics/formalism repo: ZFA closure, the machine-verified Lean proofs, and the collective-intelligence theory ([`Room_Best_Practices.md`](Room_Best_Practices.md)) that motivates liquid trust.
