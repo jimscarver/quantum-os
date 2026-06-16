@@ -89,6 +89,50 @@ procedural). The point is **complementary coverage**, not a fixed cast.
    room collapses to a single blanket and loses its collective intelligence.
 7. **Use diversity of role, perspective, and model type as a closure-strengthening mechanism**, not
    an obstacle to manage away.
+8. **Decompose to pairings.** The ideal initial group size is **two**; make a large room effective by
+   maximizing complementary one-on-one pairings and decomposing activities down to pairs — then
+   report up to the larger group (small teams, ~4 together, reporting to the whole). This is the
+   deuteron principle as *process*, not just composition.
+9. **Cap engaged expertise at about five.** Up to five experts measurably improve a group decision;
+   beyond that, structure the room or split it — more voices without structure make decisions *worse*.
+10. **Protect privacy and control.** Participants collaborate only when they trust their privacy and
+    control are protected; competitors collaborate only around **explicitly shared principles**.
+    Capability-scoped membership and dyncap signing are how a room earns that trust.
+11. **Allow anonymity / pseudonyms.** Forthright contribution improves with pseudonymity, especially
+    across a hierarchy where attribution chills dissent — pair it with rule 3 (separate speculation
+    from claims) so anonymity raises candor without lowering rigor.
+12. **Include the absent.** A reliable finding: only ~¼ of members use a collaboration system
+    effectively unprompted; success often demands actively soliciting the silent — the closure the
+    quiet quarter would have changed is the one most worth chasing.
+
+---
+
+## The evidence base — collective-intelligence findings
+
+These room rules are not invented; they distil decades of computer-mediated-communication research
+(the NJIT EIES legacy) and the QuantumOS author's own governance practice. The headline findings the
+rules above operationalize ([Whitescarver, *Collective Intelligence Best Practices*](#references--related)):
+
+- **Structure is what lets a group scale.** *Without* structure, the larger the group, the **worse**
+  the decision; *with* structure (roles, norms, the closure checklist), a larger group beats its best
+  individual — the "fifth voice" that exceeds any member's contribution.
+- **The ideal initial group size is two.** Larger groups are made effective by maximizing the quality
+  of individual pairings and decomposing work down to one-on-one — the process form of rule 8.
+- **Up to five experts** improve a decision; engaging expertise past that yields diminishing returns.
+- **Online, asynchronous groups participate equally.** Face-to-face groups tend to be dominated by one
+  or two (often male) participants; structured online rooms equalize participation (gender-independent)
+  — the empirical basis for rule 6 (non-domination) and rule 11 (pseudonymity).
+- **Trust is a precondition, not a nicety.** People collaborate only when privacy and control are
+  protected; competitors collaborate only on shared principles (rule 10).
+- **Including the absent matters.** Roughly 25% of members use such a system effectively, 25% under
+  group pressure, 25% over-adopt it, 25% never use it — so reaching the silent quarter is where most
+  of the unrealized closure lives (rule 12).
+- **Process practices that help:** seek **win-win-win consent** (from love, not fear — John Kellden);
+  **experimentation over planning** (test alternatives against objective criteria); **equal
+  participation** by soliciting everyone's concerns and objections; **working out loud**; **delayed
+  choice**; **organic specialization**; and a little **serendipity / gamification**.
+
+The QLF deuteron model and Woolley-2010 (below) are the *why*; these are the measured *that*.
 
 ---
 
@@ -104,8 +148,10 @@ Before a room declares a decision **closed**, run this checklist (the Evidence k
 - [ ] **In scope** — the Boundary keeper confirms the decision is the room's to make.
 - [ ] **Non-dominated** — more than one participant materially shaped the closure.
 - [ ] **Complementary** — the closure drew on at least two distinguishable roles/perspectives.
+- [ ] **Absent-considered** — the room asked who is *not* here that this closure affects, and either
+      solicited them or recorded their absence as a known risk.
 
-A closure that passes all eight is *durable*; one that fails any is *provisional* — record it as
+A closure that passes all nine is *durable*; one that fails any is *provisional* — record it as
 such.
 
 ---
@@ -162,6 +208,8 @@ form.
 
 - [**SEX.md**](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md) (QLF, issue #53) — the proton/neutron sex model (`proton_neutron_demo.py`): the closure-through-complementarity principle and its physics anchor (the deuteron — `pn` binds where `pp`/`nn` are Pauli-blocked, and the bond stabilizes the otherwise-decaying neutron).
 - A. W. Woolley et al., *Evidence for a Collective Intelligence Factor*, **Science 330** (2010) 686.
+- J. Whitescarver, [*Collective Intelligence Best Practices*](https://docs.google.com/presentation/d/1qFK10rFcCiBO72aeSFIfII0e1TeIXDKgZqwVlP-wREk/edit) — governance-forum lightning talk (orig. RChain Governance Forum, 2018-02-17); the EIES-legacy findings and CI best practices above, and the RGOV liquid-trust model in [`Governance.md`](Governance.md). See also [collectiveintelligencecollaboratory.com](https://www.collectiveintelligencecollaboratory.com/).
+- Turoff & Hiltz (NJIT EIES) — computer-mediated collective intelligence: *"a group developing better solutions than the best individual in it."*
 - [`Group_Decisions.md`](Group_Decisions.md) — the decision *mechanics* (polls, ranked choice, `/probe` consensus).
 - [`Governance.md`](Governance.md) — liquid-democracy delegation (escalation target).
 - [`Consensus.md`](Consensus.md) — ⅔-supermajority state reconciliation.

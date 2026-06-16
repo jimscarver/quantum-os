@@ -16,6 +16,37 @@ for a worked multi-peer walkthrough.
 
 ---
 
+## Design philosophy — RGOV as a liquid-trust network
+
+The intent ported here predates rgov: it is the **RGOV liquid-trust network
+governance** model from [Whitescarver, *Collective Intelligence Best
+Practices*](https://docs.google.com/presentation/d/1qFK10rFcCiBO72aeSFIfII0e1TeIXDKgZqwVlP-wREk/edit)
+(orig. RChain Governance Forum, 2018). Its principles are what `/gov` is *for*,
+not just what it does — an **anti-fragile sociocratic polyarchy**: maximal
+distribution of power with effective global coordination, representing **all**
+stakeholders through interlinked autonomous teams.
+
+| RGOV principle | How quantum-os realizes it |
+|---|---|
+| **Liquid democracy** (affirmative trust delegation) | `/gov delegate` — standing, transitive, revocable; direct vote overrides |
+| **Self-governance by peer-to-peer agreements** | dyncap-signed envelopes; each group sets its own roster, delegates, currencies — no central authority |
+| **Exchange of capabilities (property)** | unforgeable capability tokens (`/cap`/`/grant`), `/note` currencies (treasury, kudos) |
+| **Asset pools** — budgets, crowdfunds, staking | `/gov treasury`; *"budgets awarded to teams divided how they decide"* = sub-group autonomy |
+| **Chat channels distributing communications & capabilities** | `/channel`, `/gov say` (membership-scoped) |
+| **User-programmed — save and share actions** | the [RhoQuCalc macros](RhoQuCalc_Macros.md): name = quoted process = shareable capability |
+| **Purposeful transparency + privacy** | public signed decisions of record; bearer-private balances; pseudonymous peers |
+
+**Liquid *trust*, not only liquid democracy (a principled extension).** The RGOV
+vision weights alternatives by **voter trust ratings** alongside delegation —
+affirmative trust, not just vote-flow. Today's `resolveWeights` is the equal-weight
+(`weight = 1 + delegators`) liquid-democracy case; trust-rating weights are the
+named next step (Phase 2d), slotting into the same deterministic tally. The
+room-side complement — *who* should be in the room and how it closes well — is
+[`Room_Best_Practices.md`](Room_Best_Practices.md), grounded in the same talk's
+collective-intelligence findings.
+
+---
+
 ## Why not run the `.rho` directly?
 
 rgov uses full RChain Rholang — persistent `contract`s, the RSpace tuplespace with
@@ -157,4 +188,7 @@ group's members, delegations, issues, and treasury/kudos currencies survive when
 every browser leaves; it also honors a creator's group disband (`retract` /
 tombstone) and won't resurrect it.
 
-**Phase 2d (planned):** hard role/permission enforcement and more rgov exemplars.
+**Phase 2d (planned):** hard role/permission enforcement; more rgov exemplars; and
+**trust-rating weights** — the RGOV liquid-*trust* extension (affirmative voter trust
+ratings weighting alternatives alongside delegation), slotting into the same
+deterministic `resolveWeights` tally.
