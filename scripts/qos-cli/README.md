@@ -182,7 +182,8 @@ the room, not hard-coded.
 
 ```bash
 node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
-  [--budget 4] [--silent-min 6] [--quiet | --active] [--ai] [--state ./.qos-facilitator]
+  [--budget 4] [--silent-min 6] [--quiet | --active] \
+  [--ai] [--ai-backend api|claude-code] [--state ./.qos-facilitator]
 ```
 
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
@@ -210,13 +211,20 @@ Deterministic behaviours (no AI):
 - **Surfaces (dis)agreement** from `state-discrepancy` consensus broadcasts —
   names a contested split, or offers to record a converged value.
 
-**AI advisor (`--ai`, opt-in).** With `--ai` and `ANTHROPIC_API_KEY` set, a
-pluggable advisor ([`facilitator-advisor.mjs`](facilitator-advisor.mjs) — Anthropic
-Messages API via `fetch`, no SDK dep) adds two judgment behaviours: *stimulate*
-(re-engage after a lull, invite the quieter voices) and *disagreement → agreement*
-(name the crux + a path forward). It is **advisory only** — it proposes a nudge
-that the same throttle gates, and is called *only when a post would be allowed*,
-so API usage stays bounded. The daemon is fully functional without it.
+**AI advisor (`--ai`, opt-in).** With `--ai`, a pluggable advisor
+([`facilitator-advisor.mjs`](facilitator-advisor.mjs)) adds two judgment behaviours —
+*stimulate* (re-engage after a lull, invite the quieter voices) and *disagreement →
+agreement* (name the crux + a path forward) — plus the `/facil ask` answer. It is
+**advisory only**: it proposes a nudge that the same throttle gates, and is called
+*only when a post would be allowed*, so usage stays bounded. The daemon is fully
+functional without it. Two backends (`--ai-backend`):
+
+- **`api`** (default) — Anthropic Messages API via `fetch` (no SDK dep), key from
+  `ANTHROPIC_API_KEY`; pay-as-you-go API credits.
+- **`claude-code`** — shells out to the local `claude` CLI in print mode, using your
+  **Claude subscription** (Pro/Max) instead of API credits. Requires the `claude` CLI
+  installed and logged in (`claude` once interactively to authenticate). No key needed:
+  `node facilitator.mjs --room <…> --ai --ai-backend claude-code`.
 
 **Measured disruption** is enforced by a post budget (`--budget` per 5-min
 window), a minimum gap between posts, per-behaviour cooldowns, a fair-share check

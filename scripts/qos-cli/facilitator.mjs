@@ -47,9 +47,12 @@ Options:
   --silent-min <m>   Minutes of silence before soliciting a quiet member (default: 6).
   --quiet            Less assertive (halves budget, longer cooldowns).
   --active           More assertive (raises budget, shorter cooldowns).
-  --ai               Enable the AI advisor (stimulate + disagreement-synthesis).
-                     Requires ANTHROPIC_API_KEY in the environment.
-  --ai-model <m>     Anthropic model (default: claude-haiku-4-5-20251001).
+  --ai               Enable the AI advisor (stimulate + disagreement-synthesis + /facil ask).
+  --ai-backend <b>   api (default; needs ANTHROPIC_API_KEY, pay-as-you-go credits) or
+                     claude-code (shells out to the local \`claude\` CLI = your Claude
+                     subscription, no API credits — must be installed + logged in).
+  --ai-model <m>     Model. api default: claude-haiku-4-5-20251001;
+                     claude-code default: the CLI's configured model.
   --verbose          Log every inbound message + suppressed nudges.
   --help, -h         Show this help.
 
@@ -70,6 +73,7 @@ function parseArgs(argv) {
     else if (x === "--quiet") a.quiet = true;
     else if (x === "--active") a.active = true;
     else if (x === "--ai") a.ai = true;
+    else if (x === "--ai-backend") a.aiBackend = argv[++i];
     else if (x === "--ai-model") a.aiModel = argv[++i];
     else if (x === "--verbose") a.verbose = true;
     else if (x === "--help" || x === "-h") a.help = true;
@@ -111,7 +115,7 @@ async function main() {
   const TICK_MS = 30_000;
   const LULL_MS = Math.round(2 * 60_000 * scale);        // silence after activity before an AI stimulate
   const CHAT_RETAIN_MS = 15 * 60_000;                    // how long chat text/timestamps are kept for context
-  const advisor = makeAdvisor({ ai: args.ai, model: args.aiModel, log: console.log });
+  const advisor = makeAdvisor({ ai: args.ai, backend: args.aiBackend, model: args.aiModel, log: console.log });
 
   // ---- identity (stable across restarts), mirroring qos-daemon.mjs ----
   const stateDir = args.state;
@@ -186,7 +190,7 @@ async function main() {
   const helpText = () => `I'm ${myName}, a light-touch facilitator — I mostly stay quiet and only nudge to keep everyone included and decisions clear. Commands: \`/facil\` (am I here?) · \`/facil help\` · \`/facil ask <question>\`${advisor.enabled ? "" : " (needs --ai)"} · \`/facil off\` / \`/facil on\` (mute/unmute). \`/gov censure\` me if I'm noisy.`;
   async function handleAsk(q) {
     if (!q) { reply(`Ask me anything about the room, facilitation, or decisions — \`/facil ask <question>\`.`, "askhelp", 12_000); return; }
-    if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (and \`ANTHROPIC_API_KEY\` set). For now, \`/facil help\` lists what I do.`, "asknoai", 20_000); return; }
+    if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (\`--ai-backend claude-code\` to use a Claude subscription, or set \`ANTHROPIC_API_KEY\`). For now, \`/facil help\` lists what I do.`, "asknoai", 20_000); return; }
     if (!cooled("ask", 6_000)) return;                     // anti-flood before the API call
     cooldown.set("ask", Date.now());
     const text = await advisor.advise("ask", { question: q, transcript: recentMsgs.slice(-12).map((mm) => ({ name: mm.name, text: mm.text })) });
