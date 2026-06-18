@@ -18,24 +18,27 @@ import { spawn } from "node:child_process";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-const SYSTEM = `You are a light-touch group facilitator in a small collaborative QuantumOS chat room.
-Embody these norms: surface disagreement, then help the group reach agreement; make sure everyone
-participates (include the silent); keep decisions concrete and actionable; never dominate.
-You have NO authority — you only nudge; the group decides. Be terse and warm: at most one or two
-short sentences, specific to what was actually said, no preamble, no sign-off. If no nudge is
-warranted right now, reply with exactly: NONE`;
+// Persona = the role-specific "who you are" line (overridable per role via makeAdvisor's
+// `persona`); the norms / knowledge below are role-neutral and shared. The facilitator
+// persona is the default when no role persona is supplied.
+const DEFAULT_PERSONA =
+  "You are a light-touch group facilitator: surface disagreement and then help the group converge, make sure everyone participates (include the silent), keep decisions concrete, and never dominate.";
 
-// `/facil ask` — answer a participant's question, primed about the facilitator itself,
-// group discussion (Room_Best_Practices), and group decisions (the QuantumOS tools).
-const ASK_SYSTEM = `You are a group facilitator daemon in a small collaborative QuantumOS chat room
-(there may be other facilitators present — speak only for yourself, describe only your own behaviour),
-answering a quick question from a participant. Be brief and concrete — 2 to 4 short sentences, plain
-and warm, no preamble. You know:
+const NUDGE_NORMS = `You are participating in a small collaborative QuantumOS chat room. You have NO
+authority — you only nudge; the group decides. Be terse and warm: at most one or two short sentences,
+specific to what was actually said, no preamble, no sign-off. If no nudge is warranted right now,
+reply with exactly: NONE`;
 
-- YOURSELF: a light-touch facilitator that mostly stays quiet and nudges to keep everyone included and
-  decisions clear. You greet newcomers, ask the nameless to set a /name, invite quiet voices in, gently
-  rebalance anyone dominating, and surface (dis)agreement. In-room commands: \`/facil\` (am I here?),
-  \`/facil help\`, \`/facil ask <question>\`, \`/facil off\` and \`/facil on\` (mute/unmute). You have NO
+// `/<cmd> ask` — answer a participant's question, primed about the agent itself, group
+// discussion (Room_Best_Practices), and group decisions (the QuantumOS tools). Role-neutral;
+// `cmd` is the agent's command prefix (e.g. facil, scribe).
+const askKnowledge = (cmd) => `You are answering a quick question from a participant in a small
+collaborative QuantumOS chat room. There may be other agents present — speak only for yourself,
+describe only your own behaviour. Be brief and concrete — 2 to 4 short sentences, plain and warm,
+no preamble. You know:
+
+- YOURSELF: an opt-in room agent that mostly stays quiet. In-room commands: \`/${cmd}\` (am I here?),
+  \`/${cmd} help\`, \`/${cmd} ask <question>\`, \`/${cmd} off\` and \`/${cmd} on\` (mute/unmute). You have NO
   authority — you only nudge; the group decides, and can \`/gov trust\` or \`/gov censure\` you.
 - GROUP DISCUSSION (best practices): work from complementary roles — Proposer, Skeptic (refute before
   closing), Integrator (merge compatible ideas), Evidence keeper (track known/assumed/unresolved/testable),
@@ -90,8 +93,10 @@ function callClaudeCLI({ claudeBin, model, system, prompt, log, timeoutMs = 45_0
   });
 }
 
-export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.ANTHROPIC_API_KEY, model = null, claudeBin = "claude", log = () => {} } = {}) {
+export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.ANTHROPIC_API_KEY, model = null, claudeBin = "claude", persona = null, cmd = "facil", roleName = "facilitator", log = () => {} } = {}) {
   backend = (backend === "cli" || backend === "claude") ? "claude-code" : (backend || "api");
+  // System prompt = role persona (or the facilitator default) + shared norms/knowledge.
+  const sysFor = (mode) => { const who = persona || DEFAULT_PERSONA; return mode === "ask" ? `${who}\n\n${askKnowledge(cmd)}` : `${who}\n\n${NUDGE_NORMS}`; };
   const apiModel = model || "claude-haiku-4-5-20251001";    // api backend default
   const cliModel = model || null;                            // claude-code: null = CLI's own default
   let enabled, label;
@@ -105,7 +110,7 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
     /** mode: "ask" | "stimulate" | "synthesize". Returns a short string, or null. */
     async advise(mode, ctx) {
       if (!enabled) return null;
-      const system = mode === "ask" ? ASK_SYSTEM : SYSTEM;
+      const system = sysFor(mode);
       const prompt = userPrompt(mode, ctx);
       const max_tokens = mode === "ask" ? 256 : 160;
       let text = null;
