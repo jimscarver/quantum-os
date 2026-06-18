@@ -162,6 +162,7 @@ export async function run(args) {
   // ---- live room model (in-memory) ----
   const peerNames = new Map();     // peerId -> name
   const agents = new Map();        // peerId -> roleKey (other agents that announced themselves)
+  const introduced = new Set();    // human peerIds we've self-introduced to this run (re-intro on reconnect)
   const present = new Set();       // peerIds with an open channel
   const spokeAt = new Map();
   const joinedAt = new Map();
@@ -278,6 +279,15 @@ export async function run(args) {
   const askHint = advisor.enabled ? "" : " (needs --ai)";
   const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down.`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
+  const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing.`;
+  // Self-introduce to a newly-identified human peer, once per peer per run (direct
+  // message, so existing members aren't re-pinged each time someone joins).
+  function introduceTo(id) {
+    if (!role.duties.intro || muted || standing.budget === 0) return;
+    if (isAgentPeer(id) || introduced.has(id) || !present.has(id)) return;
+    if (!leadGate("intro", true)) { introduced.add(id); return; }   // a co-role agent leads
+    if (peer.send(id, { kind: "chat", text: introText() })) { introduced.add(id); console.log(`${TAG} ↪ intro → ${nameOf(id)}`); }
+  }
   async function handleAsk(q) {
     if (!q) { reply(`Ask me anything about the room, my role, or decisions — \`/${CMD} ask <question>\`.`, "askhelp", 12_000); return; }
     if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (\`--ai-backend claude-code\` to use a Claude subscription, or set \`ANTHROPIC_API_KEY\`). For now, \`/${CMD} help\` lists what I do.`, "asknoai", 20_000); return; }
@@ -313,7 +323,7 @@ export async function run(args) {
     onSignalingOpen: () => console.log(`${TAG} signaling connected; joined room`),
     onSignalingClose: () => console.warn(`${TAG} signaling dropped — reconnecting`),
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
-    onPeerLeft: (id) => { present.delete(id); },
+    onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); },
     onError: (e) => console.error(TAG, e?.message ?? e),
     onChannelOpen: (id) => onChannelOpen(id),
     onMessage: (from, d) => onMessage(from, d),
@@ -335,12 +345,9 @@ export async function run(args) {
     joinedAt.set(id, Date.now());
     // announce name + our agent role so other agents recognize us
     signedSend(id, { kind: "name", name: myName, agent: roleKey });
-    if (role.duties.intro && !onChannelOpen._introduced) {
-      onChannelOpen._introduced = true;
-      // Decide lead at FIRE time (after the agent-tag `name` envelopes have been
-      // exchanged), so co-present agents de-conflict the one-time intro.
-      setTimeout(() => { if (leadGate("intro", true)) say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`); }, GREET_DELAY_MS);
-    }
+    // Self-introduction is delivered per-peer when a human identifies (see introduceTo,
+    // called from onMessage) — NOT a one-time startup broadcast — so a browser that joins
+    // later, or whose channel opens after a co-agent's, still reliably gets it.
     if (role.duties.greet) {
       const rec = (known[id] ??= { firstSeen: Date.now() });
       if (!rec.greeted) scheduleGreet(id, 0);
@@ -373,12 +380,14 @@ export async function run(args) {
       case "name":
         if (typeof d.name === "string") { peerNames.set(from, d.name); const r = (known[from] ??= { firstSeen: Date.now() }); r.name = d.name; saveKnown(); }
         if (typeof d.agent === "string") agents.set(from, d.agent.toLowerCase());
+        introduceTo(from);   // a human just identified → self-introduce (skips agents/dups)
         break;
       case "chat": {
         spokeAt.set(from, Date.now());
         chatLog.push({ peer: from, at: Date.now() });
         recentMsgs.push({ name: nameOf(from), text: String(d.text ?? "").slice(0, 280), at: Date.now() });
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
+        introduceTo(from);   // covers a human who chats before announcing a name
         if (handleCommand(d.text)) break;
         if (!isAgentPeer(from) && !peerNames.has(from)) setTimeout(() => maybeNamePrompt(from), 2_000);
         checkDominator();
