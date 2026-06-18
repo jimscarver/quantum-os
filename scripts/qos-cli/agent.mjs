@@ -168,7 +168,9 @@ export async function run(args) {
   const joinedAt = new Map();
   const chatLog = [];              // {peer, at} for all chats (rolling)
   const recentMsgs = [];           // {name, text, at} for AI context (rolling)
-  const nameOf = (id) => peerNames.get(id) ?? known[id]?.name ?? short(id);
+  const realName = (n) => (typeof n === "string" && n.trim()) ? n.trim() : null;   // "" / blank ⇒ no name
+  const nameOf = (id) => realName(peerNames.get(id)) ?? realName(known[id]?.name) ?? short(id);
+  const hasName = (id) => !!(realName(peerNames.get(id)) ?? realName(known[id]?.name));
 
   // ---- trust-governed membership (PR B) ----
   // The agent is an ordinary trust-weighted member: the room governs its voice via
@@ -369,7 +371,7 @@ export async function run(args) {
   function maybeNamePrompt(id) {
     if (!leadGate("namePrompt") || agents.has(id)) return;
     const rec = (known[id] ??= { firstSeen: Date.now() });
-    if (rec.namePrompted || peerNames.has(id)) return;
+    if (rec.namePrompted || hasName(id)) return;
     if (say(`(psst ${short(id)}… — set a name with \`/name\` so everyone knows who's talking 🙂)`, `name:${id}`, CD.name)) { rec.namePrompted = Date.now(); saveKnown(); }
   }
 
@@ -381,6 +383,7 @@ export async function run(args) {
         if (typeof d.name === "string") { peerNames.set(from, d.name); const r = (known[from] ??= { firstSeen: Date.now() }); r.name = d.name; saveKnown(); }
         if (typeof d.agent === "string") agents.set(from, d.agent.toLowerCase());
         introduceTo(from);   // a human just identified → self-introduce (skips agents/dups)
+        if (!isAgentPeer(from) && !hasName(from)) setTimeout(() => maybeNamePrompt(from), 3_000);   // joined nameless → prompt
         break;
       case "chat": {
         spokeAt.set(from, Date.now());
@@ -389,7 +392,7 @@ export async function run(args) {
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
         introduceTo(from);   // covers a human who chats before announcing a name
         if (handleCommand(d.text)) break;
-        if (!isAgentPeer(from) && !peerNames.has(from)) setTimeout(() => maybeNamePrompt(from), 2_000);
+        if (!isAgentPeer(from) && !hasName(from)) setTimeout(() => maybeNamePrompt(from), 2_000);
         checkDominator();
         break;
       }
