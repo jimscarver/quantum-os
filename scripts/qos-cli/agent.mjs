@@ -217,18 +217,23 @@ export async function run(args) {
     return rk ? dutiesOf(rk) : null;       // null ⇒ not a known agent
   }
   // Among present agents that perform `duty` (incl. self), the lowest peerId leads.
-  function isLead(duty) {
+  // `sameRoleOnly`: compete only with agents of MY role — used for self-introduction,
+  // where a facilitator and a scribe should EACH announce themselves (different
+  // content), but two facilitators should not double-announce.
+  function isLead(duty, sameRoleOnly = false) {
     if (!role.duties[duty]) return false;
     const cands = [identity.peerId];
     for (const id of present) {
       if (id === identity.peerId) continue;
-      const du = dutiesForPeer(id);
-      if (du && du[duty]) cands.push(id);
+      const rk = agents.get(id);
+      if (!rk) continue;                                  // not a known agent
+      if (sameRoleOnly && rk !== roleKey) continue;       // only same-role peers compete
+      if (dutiesOf(rk)[duty]) cands.push(id);
     }
     cands.sort();
     return cands[0] === identity.peerId;
   }
-  const leadGate = (duty) => role.duties[duty] && isLead(duty);
+  const leadGate = (duty, sameRoleOnly = false) => role.duties[duty] && isLead(duty, sameRoleOnly);
 
   // ---- measured-disruption gate ----
   const postLog = [];
