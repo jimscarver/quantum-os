@@ -187,8 +187,9 @@ node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
 
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
 "anyone here?", or just "hi") and it replies — that's how you confirm it's
-present. `/facil help` lists what it does; `/facil off` / `/facil on` mute and
-unmute it at runtime. These replies *answer a request*, so they're responsive
+present. `/facil help` lists what it does; `/facil ask <question>` gets a brief AI
+answer about the room, facilitation, or decisions (needs `--ai`); `/facil off` /
+`/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 
 Deterministic behaviours (no AI):

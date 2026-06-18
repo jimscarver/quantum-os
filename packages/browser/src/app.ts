@@ -4740,7 +4740,7 @@ const CMD_HELP: Record<string, string[]> = {
   room: ["/room list · join <cap|url> · leave · ref — multi-room tabs (each room is a separate ZFA process)."],
   share: ["/share <selector> to <room> — bridge an item into another joined room.", "selectors: @lemma · msg <text> · note <cur> <N>"],
   channel: ["/channel listen <name> · unlisten <name> · send <name> <text> · list — tagged broadcast messages (per-room subscriptions)."],
-  facil: ["/facil — ask the room facilitator whether it's present.", "/facil help — what the facilitator does.", "/facil off · /facil on — mute / unmute it.", "Relayed to a facilitator daemon (scripts/qos-cli/facilitator.mjs) if one is in the room."],
+  facil: ["/facil — ask the room facilitator whether it's present.", "/facil help — what the facilitator does.", "/facil ask <question> — a brief AI answer about the room, facilitation, or decisions (daemon needs --ai).", "/facil off · /facil on — mute / unmute it.", "Relayed to a facilitator daemon (scripts/qos-cli/facilitator.mjs) if one is in the room."],
   script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
