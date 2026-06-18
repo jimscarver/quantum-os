@@ -28,6 +28,7 @@ import path from "node:path";
 import { QOSPeer } from "./qospeer.mjs";
 import { generateCapability, validateCapability } from "./zfa.mjs";
 import { newDynCapState, signEnvelope, serializeState, deserializeState } from "./dyncap.mjs";
+import { makeAdvisor } from "./facilitator-advisor.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
 const SIGNED_KINDS = new Set(["name"]);
@@ -46,9 +47,14 @@ Options:
   --silent-min <m>   Minutes of silence before soliciting a quiet member (default: 6).
   --quiet            Less assertive (halves budget, longer cooldowns).
   --active           More assertive (raises budget, shorter cooldowns).
+  --ai               Enable the AI advisor (stimulate + disagreement-synthesis).
+                     Requires ANTHROPIC_API_KEY in the environment.
+  --ai-model <m>     Anthropic model (default: claude-haiku-4-5-20251001).
   --verbose          Log every inbound message + suppressed nudges.
   --help, -h         Show this help.
 
+In a room, say \`/facil\` (or "anyone here?") and it replies — that's how you tell it's
+present; \`/facil help\` lists commands, \`/facil off\` / \`/facil on\` mute/unmute.
 It only posts chat nudges — it cannot force anything. Runs until Ctrl-C.`;
 
 function parseArgs(argv) {
@@ -63,6 +69,8 @@ function parseArgs(argv) {
     else if (x === "--silent-min") a.silentMin = Number(argv[++i]);
     else if (x === "--quiet") a.quiet = true;
     else if (x === "--active") a.active = true;
+    else if (x === "--ai") a.ai = true;
+    else if (x === "--ai-model") a.aiModel = argv[++i];
     else if (x === "--verbose") a.verbose = true;
     else if (x === "--help" || x === "-h") a.help = true;
   }
@@ -99,8 +107,11 @@ async function main() {
   const GREET_DELAY_MS = 4_000;
   const ACTIVE_MS   = 4 * 60_000;                              // "room is active" if a human spoke this recently
   const DOMINATE_FRAC = 0.6, DOMINATE_MIN = 6;                // one voice > 60% of ≥6 recent msgs (≥3 speakers)
-  const CD = { greet: 0, name: 0, silent: Math.round(10 * 60_000 * scale), dominate: Math.round(8 * 60_000 * scale), discrepancy: Math.round(5 * 60_000 * scale) };
+  const CD = { greet: 0, name: 0, silent: Math.round(10 * 60_000 * scale), dominate: Math.round(8 * 60_000 * scale), discrepancy: Math.round(5 * 60_000 * scale), stimulate: Math.round(12 * 60_000 * scale), synthesize: Math.round(9 * 60_000 * scale) };
   const TICK_MS = 30_000;
+  const LULL_MS = Math.round(2 * 60_000 * scale);        // silence after activity before an AI stimulate
+  const CHAT_RETAIN_MS = 15 * 60_000;                    // how long chat text/timestamps are kept for context
+  const advisor = makeAdvisor({ ai: args.ai, model: args.aiModel, log: console.log });
 
   // ---- identity (stable across restarts), mirroring qos-daemon.mjs ----
   const stateDir = args.state;
@@ -131,19 +142,25 @@ async function main() {
   const spokeAt = new Map();       // peerId -> last time they sent chat
   const joinedAt = new Map();      // peerId -> channel-open time
   const chatLog = [];              // {peer, at} for human chats (rolling window, for share/active checks)
+  const recentMsgs = [];           // {name, text, at} for AI context (rolling)
   const nameOf = (id) => peerNames.get(id) ?? known[id]?.name ?? short(id);
 
   // ---- measured-disruption gate ----
   const postLog = [];              // timestamps of our own posts
   const cooldown = new Map();      // behaviour-key -> last fire time
   let lastPostAt = 0;
+  let muted = false;               // /facil off → suppress nudges (replies still work)
   const withinBudget = () => { const now = Date.now(); while (postLog.length && now - postLog[0] > WINDOW_MS) postLog.shift(); return postLog.length < MAX_POSTS; };
   const cooled = (key, ms) => Date.now() - (cooldown.get(key) ?? 0) >= ms;
-  function recentHumanCount(ms = ACTIVE_MS) { const now = Date.now(); while (chatLog.length && now - chatLog[0].at > WINDOW_MS) chatLog.shift(); return chatLog.filter((c) => now - c.at <= ms).length; }
+  function recentHumanCount(ms = ACTIVE_MS) { const now = Date.now(); while (chatLog.length && now - chatLog[0].at > CHAT_RETAIN_MS) chatLog.shift(); while (recentMsgs.length && now - recentMsgs[0].at > CHAT_RETAIN_MS) recentMsgs.shift(); return chatLog.filter((c) => now - c.at <= ms).length; }
+  function wouldPost(key, ms) { const now = Date.now(); if (now - lastPostAt < MIN_GAP_MS) return false; if (!withinBudget()) return false; if (key && !cooled(key, ms)) return false; if (overFairShare()) return false; return true; }
+  function buildCtx() { const now = Date.now(); const silent = [...present].filter((id) => id !== identity.peerId && (now - (spokeAt.get(id) ?? 0)) > LULL_MS).map(nameOf); return { transcript: recentMsgs.slice(-20).map((m) => ({ name: m.name, text: m.text })), silent }; }
+  function substantiveChat() { const now = Date.now(); const recent = chatLog.filter((c) => now - c.at <= ACTIVE_MS); return recent.length >= 4 && new Set(recent.map((c) => c.peer)).size >= 2; }
   // fair-share: in an ACTIVE conversation, don't let the facilitator out-talk the humans.
   function overFairShare() { const humans = recentHumanCount(); if (humans < 4) return false; const now = Date.now(); const mine = postLog.filter((t) => now - t <= ACTIVE_MS).length; return mine >= Math.ceil(humans * 0.34); }
 
   function say(text, key, cooldownMs = 0) {
+    if (muted) { if (args.verbose) console.log(`[facil] · held (muted): ${text}`); return false; }
     const now = Date.now();
     if (now - lastPostAt < MIN_GAP_MS) { if (args.verbose) console.log(`[facil] · held (min-gap): ${text}`); return false; }
     if (!withinBudget())             { if (args.verbose) console.log(`[facil] · held (budget): ${text}`); return false; }
@@ -153,6 +170,36 @@ async function main() {
     postLog.push(now); lastPostAt = now; if (key) cooldown.set(key, now);
     console.log(`[facil] → ${text}`);
     return true;
+  }
+
+  // Direct replies to a user's query/command. Unlike nudges, these *answer a
+  // request*, so they bypass the budget/min-gap/fair-share gate (rate-limited only
+  // by a per-command cooldown) and work even when muted — so you can always tell
+  // the facilitator is there.
+  function reply(text, key, cooldownMs = 30_000) {
+    if (key && !cooled(key, cooldownMs)) return false;
+    peer.broadcast({ kind: "chat", text });
+    postLog.push(Date.now()); lastPostAt = Date.now(); if (key) cooldown.set(key, Date.now());
+    console.log(`[facil] ↩ ${text}`);
+    return true;
+  }
+  const helpText = () => `I'm ${myName}, a light-touch facilitator — I mostly stay quiet and only nudge to keep everyone included and decisions clear. Commands: \`/facil\` (am I here?) · \`/facil help\` · \`/facil off\` / \`/facil on\` (mute/unmute)${advisor.enabled ? " · AI nudges on" : ""}. \`/gov censure\` me if I'm noisy.`;
+  const statusText = () => `👋 Yes, I'm here${muted ? " — currently muted (\`/facil on\` to wake me)" : ""}. \`/facil help\` for what I do.`;
+  function handleCommand(text) {
+    const lc = String(text ?? "").trim().toLowerCase();
+    const m = /^\/facil(?:itator)?\b\s*(\w+)?/.exec(lc);
+    if (m) {
+      const sub = m[1] ?? "";
+      if (sub === "off" || sub === "mute" || sub === "quiet") { muted = true; reply(`Muted — I'll stay quiet. Say \`/facil on\` to bring me back.`, "facmute", 0); return true; }
+      if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/facil help\` for what I do.`, "facmute", 0); return true; }
+      if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText(), "facstatus", 20_000); return true; }
+      reply(helpText(), "fachelp", 25_000); return true;   // `/facil` or `/facil help`
+    }
+    // natural presence query, e.g. "anyone here?" / "is the facilitator around?"
+    if (/^facilitator\??$/.test(lc) || /\b(any\s?(one|body)|facilitator)\b[^?]*\b(here|there|around|online|present|listening)\b\??/.test(lc)) { reply(statusText(), "facstatus", 20_000); return true; }
+    // a bare greeting → a measured, rate-limited hello (so newcomers learn it's here)
+    if (/^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/.test(lc)) { reply(`👋 Hi! I'm ${myName}, the room facilitator — \`/facil help\` for what I do.`, "facgreet", Math.round(4 * 60_000 * scale)); return true; }
+    return false;
   }
 
   const peer = new QOSPeer({
@@ -221,7 +268,9 @@ async function main() {
       case "chat": {
         spokeAt.set(from, Date.now());
         chatLog.push({ peer: from, at: Date.now() });
+        recentMsgs.push({ name: nameOf(from), text: String(d.text ?? "").slice(0, 280), at: Date.now() });
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
+        if (handleCommand(d.text)) break;     // answered a /facil command or a greeting/presence query
         // nameless speaker → gentle one-time name prompt
         if (!peerNames.has(from)) setTimeout(() => maybeNamePrompt(from), 2_000);
         // dominator: one voice taking the room
@@ -233,11 +282,18 @@ async function main() {
   }
 
   // (Dis)agreement surfacing from the consensus probe (app.ts / Consensus.md).
-  function surfaceDiscrepancy(d) {
+  // When the AI advisor is on and a post is allowed, try a synthesis of the real
+  // positions first; otherwise fall back to the deterministic line.
+  async function surfaceDiscrepancy(d) {
     const key = `disc:${d.storeName}:${d.key}`;
     const label = d.key ?? d.storeName ?? "that";
-    if (d.winner == null) say(`We don't have consensus on **${label}** yet — want to deliberate it, or defer and record it as unresolved?`, key, CD.discrepancy);
-    else say(`Looks like we've converged on **${label}**. Want me to flag it so someone can record the decision (\`/lemma\`)?`, key, CD.discrepancy);
+    if (d.winner == null) {
+      if (advisor.enabled && wouldPost(key, CD.discrepancy)) {
+        const text = await advisor.advise("synthesize", buildCtx());
+        if (text && say(text, key, CD.discrepancy)) return;
+      }
+      say(`We don't have consensus on **${label}** yet — want to deliberate it, or defer and record it as unresolved?`, key, CD.discrepancy);
+    } else say(`Looks like we've converged on **${label}**. Want me to flag it so someone can record the decision (\`/lemma\`)?`, key, CD.discrepancy);
   }
 
   function checkDominator() {
@@ -252,19 +308,37 @@ async function main() {
     if (topN / recent.length > DOMINATE_FRAC) say(`Lots of good thinking from ${nameOf(top)} — let's make space for other voices too. What do the rest of you make of it?`, "dominate", CD.dominate);
   }
 
-  // Periodic: solicit the silent quarter while the room is active.
-  function tick() {
-    if (recentHumanCount() < 2) return;                       // room isn't really active
+  // Periodic facilitation. AI calls happen ONLY when a post would be allowed
+  // (gated by the same budget/cooldowns), so usage stays bounded.
+  async function tick() {
+    const humans = recentHumanCount();
+    if (advisor.enabled) {
+      const now = Date.now();
+      const lastHuman = chatLog.length ? chatLog[chatLog.length - 1].at : 0;
+      // disagreement → agreement: name the crux + a path forward
+      if (substantiveChat() && wouldPost("synthesize", CD.synthesize)) {
+        const text = await advisor.advise("synthesize", buildCtx());
+        if (text) say(text, "synthesize", CD.synthesize);
+      }
+      // stimulate after a lull that followed real activity (subsumes the v1 silent nudge)
+      if (lastHuman && now - lastHuman > LULL_MS && recentHumanCount(10 * 60_000) >= 3 && wouldPost("stimulate", CD.stimulate)) {
+        const text = await advisor.advise("stimulate", buildCtx());
+        if (text) say(text, "stimulate", CD.stimulate);
+      }
+      return;
+    }
+    // v1 deterministic silent-quarter
+    if (humans < 2) return;
     const now = Date.now();
     const quiet = [...present].filter((id) => id !== identity.peerId && (now - (joinedAt.get(id) ?? now)) > SILENT_MS && (now - (spokeAt.get(id) ?? 0)) > SILENT_MS);
     if (!quiet.length) return;
     const names = quiet.slice(0, 2).map(nameOf).join(", ");
     say(`We haven't heard from everyone — ${names}, curious what you're thinking on this?`, "silent", CD.silent);
   }
-  const timer = setInterval(tick, TICK_MS);
+  const timer = setInterval(() => tick().catch((e) => console.error("[facil] tick:", e?.message ?? e)), TICK_MS);
 
   peer.connect();
-  console.log(`[facil] running as "${myName}"  budget=${MAX_POSTS}/5min  min-gap=${Math.round(MIN_GAP_MS / 1000)}s  silent=${Math.round(SILENT_MS / 60000)}min. Ctrl-C to stop.`);
+  console.log(`[facil] running as "${myName}"  budget=${MAX_POSTS}/5min  min-gap=${Math.round(MIN_GAP_MS / 1000)}s  silent=${Math.round(SILENT_MS / 60000)}min  AI=${advisor.enabled ? advisor.model : "off"}. Ctrl-C to stop.`);
 
   const shutdown = () => { console.log("\n[facil] shutting down…"); try { clearInterval(timer); saveIdentity(); saveKnown(); } catch {} try { peer.disconnect(); } catch {} setTimeout(() => process.exit(0), 200); };
   process.on("SIGINT", shutdown);
