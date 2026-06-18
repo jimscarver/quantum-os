@@ -196,7 +196,7 @@ async function main() {
       reply(helpText(), "fachelp", 25_000); return true;   // `/facil` or `/facil help`
     }
     // natural presence query, e.g. "anyone here?" / "is the facilitator around?"
-    if (/^facilitator\??$/.test(lc) || /\b(any\s?(one|body)|facilitator)\b[^?]*\b(here|there|around|online|present|listening)\b\??/.test(lc)) { reply(statusText(), "facstatus", 20_000); return true; }
+    if (/^facil(?:itator)?\??$/.test(lc) || /\b(any\s?(one|body)|facil(?:itator)?)\b[^?]*\b(here|there|around|online|present|listening)\b\??/.test(lc)) { reply(statusText(), "facstatus", 20_000); return true; }
     // a bare greeting → a measured, rate-limited hello (so newcomers learn it's here)
     if (/^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/.test(lc)) { reply(`👋 Hi! I'm ${myName}, the room facilitator — \`/facil help\` for what I do.`, "facgreet", Math.round(4 * 60_000 * scale)); return true; }
     return false;
