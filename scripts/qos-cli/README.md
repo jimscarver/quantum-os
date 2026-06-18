@@ -171,6 +171,49 @@ locally (needs `ws` + `werift`).
   `sync-lemmas` gate (`achievesZfa` required), so the daemon mirrors the room
   faithfully.
 
+## Group facilitator
+
+`facilitator.mjs` is a sibling daemon that joins a room as a peer and posts
+**measured** facilitation nudges — effectively the runtime of
+[`Room_Best_Practices.md`](../../Room_Best_Practices.md). It has no special
+authority (it only posts `chat`); the group decides, and can `/gov trust` it up
+or `/gov censure` it down like any peer — so its disruption level is governed by
+the room, not hard-coded.
+
+```bash
+node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
+  [--budget 4] [--silent-min 6] [--quiet | --active] [--ai] [--state ./.qos-facilitator]
+```
+
+**Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
+"anyone here?", or just "hi") and it replies — that's how you confirm it's
+present. `/facil help` lists what it does; `/facil off` / `/facil on` mute and
+unmute it at runtime. These replies *answer a request*, so they're responsive
+(rate-limited only by a short per-command cooldown) and work even while muted.
+
+Deterministic behaviours (no AI):
+
+- **Greets** new members once each (after a short grace) and **prompts the
+  nameless** to set a `/name`. A greet held by the throttle re-queues (bounded).
+- **Participation** (Room_Best_Practices Rules 6 & 12): solicits the silent
+  quarter, gently rebalances a dominator.
+- **Surfaces (dis)agreement** from `state-discrepancy` consensus broadcasts —
+  names a contested split, or offers to record a converged value.
+
+**AI advisor (`--ai`, opt-in).** With `--ai` and `ANTHROPIC_API_KEY` set, a
+pluggable advisor ([`facilitator-advisor.mjs`](facilitator-advisor.mjs) — Anthropic
+Messages API via `fetch`, no SDK dep) adds two judgment behaviours: *stimulate*
+(re-engage after a lull, invite the quieter voices) and *disagreement → agreement*
+(name the crux + a path forward). It is **advisory only** — it proposes a nudge
+that the same throttle gates, and is called *only when a post would be allowed*,
+so API usage stays bounded. The daemon is fully functional without it.
+
+**Measured disruption** is enforced by a post budget (`--budget` per 5-min
+window), a minimum gap between posts, per-behaviour cooldowns, a fair-share check
+so it never out-talks the humans in an active thread, and quiet-by-default.
+`--quiet` / `--active` shift the whole policy. Stable identity + who-we've-greeted
+persist under `--state`.
+
 ## Status / caveats
 
 - **ZFA capability layer: tested** (`selftest.mjs`, all pass). Faithful port of
