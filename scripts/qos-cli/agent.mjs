@@ -339,7 +339,7 @@ export async function run(args) {
       onChannelOpen._introduced = true;
       // Decide lead at FIRE time (after the agent-tag `name` envelopes have been
       // exchanged), so co-present agents de-conflict the one-time intro.
-      setTimeout(() => { if (leadGate("intro")) say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`); }, GREET_DELAY_MS);
+      setTimeout(() => { if (leadGate("intro", true)) say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`); }, GREET_DELAY_MS);
     }
     if (role.duties.greet) {
       const rec = (known[id] ??= { firstSeen: Date.now() });
