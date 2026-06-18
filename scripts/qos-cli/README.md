@@ -187,9 +187,19 @@ node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
 
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
 "anyone here?", or just "hi") and it replies — that's how you confirm it's
-present. `/facil help` lists what it does; `/facil off` / `/facil on` mute and
-unmute it at runtime. These replies *answer a request*, so they're responsive
+present. `/facil help` lists what it does; `/facil ask <question>` gets a brief AI
+answer about the room, facilitation, or decisions (needs `--ai`); `/facil off` /
+`/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
+
+**Many facilitators, each speaks only for itself.** A room may have more than one
+facilitator (or none) — `/facil` is broadcast, so each present facilitator replies
+on its own. The browser does **not** run facilitation and does not vouch for any
+facilitator; it only relays the command, and the `/help facil` text describes the
+*relay*, not any facilitator's behaviour. Trust a facilitator's **self-description**
+(its `/facil help` / `/facil ask` reply, attributed to its signed `name`/identity),
+and judge each by its own replies — the AdvisorSystem prompt likewise tells the
+daemon to describe only itself.
 
 Deterministic behaviours (no AI):
 

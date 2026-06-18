@@ -183,16 +183,26 @@ async function main() {
     console.log(`[facil] ↩ ${text}`);
     return true;
   }
-  const helpText = () => `I'm ${myName}, a light-touch facilitator — I mostly stay quiet and only nudge to keep everyone included and decisions clear. Commands: \`/facil\` (am I here?) · \`/facil help\` · \`/facil off\` / \`/facil on\` (mute/unmute)${advisor.enabled ? " · AI nudges on" : ""}. \`/gov censure\` me if I'm noisy.`;
+  const helpText = () => `I'm ${myName}, a light-touch facilitator — I mostly stay quiet and only nudge to keep everyone included and decisions clear. Commands: \`/facil\` (am I here?) · \`/facil help\` · \`/facil ask <question>\`${advisor.enabled ? "" : " (needs --ai)"} · \`/facil off\` / \`/facil on\` (mute/unmute). \`/gov censure\` me if I'm noisy.`;
+  async function handleAsk(q) {
+    if (!q) { reply(`Ask me anything about the room, facilitation, or decisions — \`/facil ask <question>\`.`, "askhelp", 12_000); return; }
+    if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (and \`ANTHROPIC_API_KEY\` set). For now, \`/facil help\` lists what I do.`, "asknoai", 20_000); return; }
+    if (!cooled("ask", 6_000)) return;                     // anti-flood before the API call
+    cooldown.set("ask", Date.now());
+    const text = await advisor.advise("ask", { question: q, transcript: recentMsgs.slice(-12).map((mm) => ({ name: mm.name, text: mm.text })) });
+    reply(text || `Hmm, I don't have a good answer to that one. \`/facil help\` for what I can do.`, null, 0);
+  }
   const statusText = () => `👋 Yes, I'm here${muted ? " — currently muted (\`/facil on\` to wake me)" : ""}. \`/facil help\` for what I do.`;
   function handleCommand(text) {
-    const lc = String(text ?? "").trim().toLowerCase();
+    const raw = String(text ?? "").trim();
+    const lc = raw.toLowerCase();
     const m = /^\/facil(?:itator)?\b\s*(\w+)?/.exec(lc);
     if (m) {
       const sub = m[1] ?? "";
       if (sub === "off" || sub === "mute" || sub === "quiet") { muted = true; reply(`Muted — I'll stay quiet. Say \`/facil on\` to bring me back.`, "facmute", 0); return true; }
       if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/facil help\` for what I do.`, "facmute", 0); return true; }
       if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText(), "facstatus", 20_000); return true; }
+      if (sub === "ask") { handleAsk(raw.replace(/^\/facil(?:itator)?\s+ask\b\s*/i, "").trim()); return true; }
       reply(helpText(), "fachelp", 25_000); return true;   // `/facil` or `/facil help`
     }
     // natural presence query, e.g. "anyone here?" / "is the facilitator around?"

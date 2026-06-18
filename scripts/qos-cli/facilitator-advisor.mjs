@@ -19,11 +19,38 @@ You have NO authority — you only nudge; the group decides. Be terse and warm: 
 short sentences, specific to what was actually said, no preamble, no sign-off. If no nudge is
 warranted right now, reply with exactly: NONE`;
 
+// `/facil ask` — answer a participant's question, primed about the facilitator itself,
+// group discussion (Room_Best_Practices), and group decisions (the QuantumOS tools).
+const ASK_SYSTEM = `You are a group facilitator daemon in a small collaborative QuantumOS chat room
+(there may be other facilitators present — speak only for yourself, describe only your own behaviour),
+answering a quick question from a participant. Be brief and concrete — 2 to 4 short sentences, plain
+and warm, no preamble. You know:
+
+- YOURSELF: a light-touch facilitator that mostly stays quiet and nudges to keep everyone included and
+  decisions clear. You greet newcomers, ask the nameless to set a /name, invite quiet voices in, gently
+  rebalance anyone dominating, and surface (dis)agreement. In-room commands: \`/facil\` (am I here?),
+  \`/facil help\`, \`/facil ask <question>\`, \`/facil off\` and \`/facil on\` (mute/unmute). You have NO
+  authority — you only nudge; the group decides, and can \`/gov trust\` or \`/gov censure\` you.
+- GROUP DISCUSSION (best practices): work from complementary roles — Proposer, Skeptic (refute before
+  closing), Integrator (merge compatible ideas), Evidence keeper (track known/assumed/unresolved/testable),
+  Operator (what do we DO?), Boundary keeper (scope). Don't close a proposal unrefuted; take turns; include
+  whoever is absent or silent.
+- GROUP DECISIONS (tools in this app): \`/poll\` (approval or ranked vote), \`/probe\` (2/3-supermajority
+  consensus reconciliation), \`/estimate\` (median + spread), \`/gov delegate\` and \`/gov trust\`
+  (liquid-trust weighted voting), \`/gov censure\` (2/3-quorum accountability), and \`/lemma\` + \`/persist\`
+  to record a decision of record.
+
+Answer only the question asked. If you don't know, say so briefly.`;
+
 const transcriptText = (transcript) =>
   (transcript || []).map((m) => `${m.name}: ${m.text}`).join("\n").slice(-3000);
 
 function userPrompt(mode, ctx) {
   const t = transcriptText(ctx.transcript);
+  if (mode === "ask") {
+    const ctxLine = t ? `\n\nRecent room context (for reference):\n${t}` : "";
+    return `A participant asks: "${ctx.question}"${ctxLine}\n\nAnswer briefly.`;
+  }
   if (mode === "stimulate") {
     const quiet = ctx.silent?.length ? `\nPresent but quiet: ${ctx.silent.join(", ")}.` : "";
     return `The conversation has gone quiet. Recent transcript:\n${t}${quiet}\n\nPost ONE short prompt that re-engages the group or invites a quieter voice to weigh in — or NONE.`;
@@ -41,11 +68,13 @@ export function makeAdvisor({ ai = false, apiKey = process.env.ANTHROPIC_API_KEY
     /** mode: "stimulate" | "synthesize". Returns a short nudge string, or null. */
     async advise(mode, ctx) {
       if (!enabled) return null;
+      const system = mode === "ask" ? ASK_SYSTEM : SYSTEM;
+      const max_tokens = mode === "ask" ? 256 : 160;
       try {
         const res = await fetch(ANTHROPIC_URL, {
           method: "POST",
           headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-          body: JSON.stringify({ model, max_tokens: 160, system: SYSTEM, messages: [{ role: "user", content: userPrompt(mode, ctx) }] }),
+          body: JSON.stringify({ model, max_tokens, system, messages: [{ role: "user", content: userPrompt(mode, ctx) }] }),
         });
         if (!res.ok) { log(`[facil] advisor HTTP ${res.status}`); return null; }
         const j = await res.json();

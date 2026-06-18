@@ -3345,7 +3345,7 @@ function handleCommand(raw: string): string[] {
       // the room as chat so a facilitator daemon (a peer) can parse and answer it.
       const out = "/" + cmd + (arg ? " " + arg : "");
       if (qpeer) qpeer.broadcast({ kind: "chat", text: out });
-      sys("→ sent to the room facilitator (a facilitator daemon must be present to answer)");
+      sys("→ relayed to facilitator(s) in the room — each answers for itself (there may be several, or none). The browser doesn't vouch for any.");
       break;
     }
 
@@ -4740,7 +4740,7 @@ const CMD_HELP: Record<string, string[]> = {
   room: ["/room list · join <cap|url> · leave · ref — multi-room tabs (each room is a separate ZFA process)."],
   share: ["/share <selector> to <room> — bridge an item into another joined room.", "selectors: @lemma · msg <text> · note <cur> <N>"],
   channel: ["/channel listen <name> · unlisten <name> · send <name> <text> · list — tagged broadcast messages (per-room subscriptions)."],
-  facil: ["/facil — ask the room facilitator whether it's present.", "/facil help — what the facilitator does.", "/facil off · /facil on — mute / unmute it.", "Relayed to a facilitator daemon (scripts/qos-cli/facilitator.mjs) if one is in the room."],
+  facil: ["/facil [help|ask <question>|off|on] — relayed to facilitator daemon(s) in the room.", "The browser does NOT run facilitation and does not vouch for any facilitator — it only forwards the command. Each facilitator answers for ITSELF; trust its self-description only, judge it by its own (signed-name) replies, and note more than one may be present (or none).", "Typical: /facil (present?) · /facil help (it describes itself) · /facil ask <q> (brief AI answer, if it runs --ai) · /facil off|on (mute/unmute)."],
   script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
