@@ -25,7 +25,8 @@ dominate, include the silent, don't close a proposal unrefuted.
 
 Optional **AI agents** can join as full members to help: a `facilitator` (keeps everyone
 included, surfaces dis/agreement), a `scribe` (tracks decisions, offers to record them),
-a `greeter`. They only *nudge*, and the room governs them with the same trust as anyone.
+a `greeter`, a `skeptic` (surfaces unexamined assumptions before the group closes). They
+only *nudge*, and the room governs them with the same trust as anyone.
 → **[Running agents](scripts/qos-cli/README.md)** · build your own → **[Developer Guide](Developer_Guide.md)**.
 
 ## 3. Build trust
