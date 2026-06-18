@@ -330,9 +330,11 @@ export async function run(args) {
     joinedAt.set(id, Date.now());
     // announce name + our agent role so other agents recognize us
     signedSend(id, { kind: "name", name: myName, agent: roleKey });
-    if (leadGate("intro") && !onChannelOpen._introduced) {
+    if (role.duties.intro && !onChannelOpen._introduced) {
       onChannelOpen._introduced = true;
-      setTimeout(() => say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`), GREET_DELAY_MS);
+      // Decide lead at FIRE time (after the agent-tag `name` envelopes have been
+      // exchanged), so co-present agents de-conflict the one-time intro.
+      setTimeout(() => { if (leadGate("intro")) say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`); }, GREET_DELAY_MS);
     }
     if (role.duties.greet) {
       const rec = (known[id] ??= { firstSeen: Date.now() });
