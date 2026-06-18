@@ -30,6 +30,7 @@ import { generateCapability, validateCapability } from "./zfa.mjs";
 import { newDynCapState, signEnvelope, serializeState, deserializeState } from "./dyncap.mjs";
 import { makeAdvisor } from "./facilitator-advisor.mjs";
 import { ROLES, DEFAULT_ROLE, resolveRole, dutiesOf } from "./agent-roles.mjs";
+import { trustLevels, discreditedMembers, isMember, groupHasRatings, normalizeGroup, TRUST_MAX } from "./gov.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
 const SIGNED_KINDS = new Set(["name"]);
@@ -60,7 +61,10 @@ Options:
 
 Run several with different --role (and distinct --state dirs) in one room; they
 de-conflict shared duties automatically. Say \`/<role>\` (e.g. \`/facil\`, \`/scribe\`)
-or "anyone here?" and the agent replies. Runs until Ctrl-C.`;
+or "anyone here?" and the agent replies. It is a full trust-weighted member: the room
+governs its voice via \`/gov trust\` / \`/gov censure\` (it posts up to its trust level
+per window, one rung below a same-rated human; \`/<role> trust\` shows its standing).
+Runs until Ctrl-C.`;
 
 export function parseArgs(argv) {
   const a = { signal: DEFAULT_SIGNAL, verbose: false };
@@ -165,6 +169,46 @@ export async function run(args) {
   const recentMsgs = [];           // {name, text, at} for AI context (rolling)
   const nameOf = (id) => peerNames.get(id) ?? known[id]?.name ?? short(id);
 
+  // ---- trust-governed membership (PR B) ----
+  // The agent is an ordinary trust-weighted member: the room governs its voice via
+  // the SAME liquid-trust primitives as humans. It ingests gov envelopes, computes
+  // its own standing, and applies Jim's rule — operate at ONE LEVEL BELOW its actual
+  // rating, at full power for that capped level. Concretely a rated agent posts up to
+  // `min(configured budget, trustLevel)` per window (= a same-rated human's weight
+  // 1+level, minus the one-level dock), 0 if censure-discredited (stand down). With no
+  // ratings in its groups it runs at the configured budget (back-compat). Ingesting
+  // unverified gov envelopes only ever throttles the agent's OWN voice (never exceeds
+  // the operator's --budget ceiling), and the ⅔ censure quorum blocks lone griefers.
+  const groups = new Map();    // groupId -> Group model (from gov envelopes / sync-gov)
+  let standing = { governed: false, budget: MAX_POSTS, level: null, discredited: false };
+  function computeStanding() {
+    let governed = false, level = null, discredited = false;
+    for (const g of groups.values()) {
+      if (!isMember(g, identity.peerId) || !groupHasRatings(g)) continue;
+      governed = true;
+      const lv = trustLevels(g)[identity.peerId] ?? 0;
+      if (level === null || lv > level) level = lv;
+      if (discreditedMembers(g).includes(identity.peerId)) discredited = true;
+    }
+    if (!governed) return { governed: false, budget: MAX_POSTS, level: null, discredited: false };
+    const lv = level ?? 0;
+    const budget = discredited ? 0 : Math.min(MAX_POSTS, lv);   // 1+effectiveLevel = lv; 0 ⇒ stand down
+    return { governed: true, budget, level: lv, discredited };
+  }
+  function updateStanding() {
+    const prev = standing;
+    standing = computeStanding();
+    if (prev.budget === standing.budget && prev.governed === standing.governed) return;
+    console.log(`${TAG} standing: governed=${standing.governed} level=${standing.level ?? "-"} budget=${standing.budget}/5min${standing.discredited ? " (discredited)" : ""}`);
+    if (prev.budget === 0 && standing.budget > 0) reply(`Thanks — I'm cleared to take part again (trust level ${standing.level}).`, "govstanding", 30_000);
+    else if (prev.budget > 0 && standing.budget === 0) reply(standing.discredited ? `Understood — I've been censured, so I'll stand down (direct replies only). \`/gov trust\` me to restore.` : `I'm not vouched here yet, so I'll stay quiet until an admin \`/gov trust\`s me.`, "govstanding", 30_000);
+  }
+  function standingText() {
+    if (!standing.governed) return `I'm not under room trust yet — running at my configured budget (${MAX_POSTS}/5min). An admin can \`/gov member add ${identity.peerId}\` then \`/gov trust\` me.`;
+    if (standing.discredited) return `I've been censured here, so I've stood down (trust 0). \`/gov trust\` me to restore my voice.`;
+    return `Room trust level ${standing.level} → I post up to ${standing.budget}/5min — one rung below a same-rated member (\`/gov trust\`/\`/gov censure\` to adjust).`;
+  }
+
   // ---- multi-agent: which duties a peer's role performs; lead election ----
   const isAgentPeer = (id) => id === identity.peerId || agents.has(id);
   function dutiesForPeer(id) {
@@ -191,7 +235,7 @@ export async function run(args) {
   const cooldown = new Map();
   let lastPostAt = 0;
   let muted = false;               // /<cmd> off → suppress nudges (replies still work)
-  const withinBudget = () => { const now = Date.now(); while (postLog.length && now - postLog[0] > WINDOW_MS) postLog.shift(); return postLog.length < MAX_POSTS; };
+  const withinBudget = () => { const now = Date.now(); while (postLog.length && now - postLog[0] > WINDOW_MS) postLog.shift(); return postLog.length < standing.budget; };
   const cooled = (key, ms) => Date.now() - (cooldown.get(key) ?? 0) >= ms;
   function purgeRolling() { const now = Date.now(); while (chatLog.length && now - chatLog[0].at > CHAT_RETAIN_MS) chatLog.shift(); while (recentMsgs.length && now - recentMsgs[0].at > CHAT_RETAIN_MS) recentMsgs.shift(); }
   function recentHumanCount(ms = ACTIVE_MS) { purgeRolling(); const now = Date.now(); return chatLog.filter((c) => now - c.at <= ms && !isAgentPeer(c.peer)).length; }
@@ -204,6 +248,7 @@ export async function run(args) {
 
   function say(text, key, cooldownMs = 0) {
     if (muted) { if (args.verbose) console.log(`${TAG} · held (muted): ${text}`); return false; }
+    if (standing.budget === 0) { if (args.verbose) console.log(`${TAG} · held (trust stand-down): ${text}`); return false; }
     const now = Date.now();
     if (now - lastPostAt < MIN_GAP_MS) { if (args.verbose) console.log(`${TAG} · held (min-gap): ${text}`); return false; }
     if (!withinBudget())             { if (args.verbose) console.log(`${TAG} · held (budget): ${text}`); return false; }
@@ -226,8 +271,8 @@ export async function run(args) {
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). \`/gov censure\` me if I'm noisy.`;
-  const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}. \`/${CMD} help\` for what I do.`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down.`;
+  const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
   async function handleAsk(q) {
     if (!q) { reply(`Ask me anything about the room, my role, or decisions — \`/${CMD} ask <question>\`.`, "askhelp", 12_000); return; }
     if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (\`--ai-backend claude-code\` to use a Claude subscription, or set \`ANTHROPIC_API_KEY\`). For now, \`/${CMD} help\` lists what I do.`, "asknoai", 20_000); return; }
@@ -245,6 +290,7 @@ export async function run(args) {
       if (sub === "off" || sub === "mute" || sub === "quiet") { muted = true; reply(`Muted — I'll stay quiet. Say \`/${CMD} on\` to bring me back.`, "agmute", 0); return true; }
       if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/${CMD} help\` for what I do.`, "agmute", 0); return true; }
       if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText(), "agstatus", 20_000); return true; }
+      if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
       if (sub === "ask") { handleAsk(raw.replace(askStripRe, "").trim()); return true; }
       reply(helpText(), "aghelp", 25_000); return true;
     }
@@ -286,7 +332,7 @@ export async function run(args) {
     signedSend(id, { kind: "name", name: myName, agent: roleKey });
     if (leadGate("intro") && !onChannelOpen._introduced) {
       onChannelOpen._introduced = true;
-      setTimeout(() => say(`Hi — I'm ${myName}, ${role.blurb} \`/gov censure\` me if I'm noisy.`), GREET_DELAY_MS);
+      setTimeout(() => say(`Hi — I'm ${myName}, ${role.blurb} I'm a full room member — \`/gov trust\` me up or \`/gov censure\` me down (\`/${CMD} trust\` shows my standing).`), GREET_DELAY_MS);
     }
     if (role.duties.greet) {
       const rec = (known[id] ??= { firstSeen: Date.now() });
@@ -332,6 +378,41 @@ export async function run(args) {
         break;
       }
       case "state-discrepancy": surfaceDiscrepancy(d); break;
+      // governance ingestion → recompute the agent's own trust standing (self-throttle only)
+      case "group-open":
+        if (d.id && !groups.has(d.id)) groups.set(d.id, normalizeGroup({ id: d.id, name: d.name, creator: from, creatorLabel: d.creatorLabel ?? short(from), createdAt: d.createdAt, members: { [from]: { peerId: from, role: "admin", label: d.creatorLabel ?? short(from), at: d.createdAt ?? Date.now() } } }));
+        updateStanding();
+        break;
+      case "group-member": {
+        const g = groups.get(d.groupId);
+        if (g && d.peerId) {
+          if (d.remove) delete g.members[d.peerId];
+          else g.members[d.peerId] = { peerId: d.peerId, role: d.role === "admin" ? "admin" : "member", label: d.label ?? short(d.peerId), at: Date.now() };
+          updateStanding();
+        }
+        break;
+      }
+      case "gov-trust": {
+        const g = groups.get(d.groupId);
+        if (g && d.rater && d.ratee && typeof d.rating === "number") {
+          (g.trustRatings ??= {})[d.rater] ??= {};
+          if (d.rating > 0) g.trustRatings[d.rater][d.ratee] = d.rating; else delete g.trustRatings[d.rater][d.ratee];
+          updateStanding();
+        }
+        break;
+      }
+      case "gov-censure": {
+        const g = groups.get(d.groupId);
+        if (g && d.censurer && d.target) {
+          (g.censures ??= {})[d.censurer] ??= {};
+          if (d.on) g.censures[d.censurer][d.target] = 1; else delete g.censures[d.censurer][d.target];
+          updateStanding();
+        }
+        break;
+      }
+      case "sync-gov":
+        if (Array.isArray(d.groups)) { for (const g of d.groups) if (g && g.id) groups.set(g.id, normalizeGroup(g)); updateStanding(); }
+        break;
     }
   }
 

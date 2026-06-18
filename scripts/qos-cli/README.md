@@ -202,6 +202,22 @@ lowest-`peerId` agent that performs a duty acts, so N agents don't all greet —
 agents can't inflate the budget. Direct replies (`/facil`, `/<role> ask`) still
 come from each agent for itself.
 
+**Trust-governed membership.** An agent is an ordinary trust-weighted member: the
+room governs its voice through the *same* liquid-trust primitives as humans
+(`gov.mjs` is a faithful port of the browser's `trustLevels`). It ingests
+`group-open` / `group-member` / `gov-trust` / `gov-censure` (and `sync-gov`) and
+computes its **own standing**, then applies the rule *operate one level below your
+actual rating, at full power for that capped level*: a rated agent posts up to
+`min(configured budget, trustLevel)` per window — exactly one rung below a same-rated
+human's weight `1 + level` — and **stands down** (posts nothing, direct replies only)
+if a ⅔ censure quorum discredits it. With no ratings in its groups it runs at the
+configured `--budget` (back-compat). `/<role> trust` reports its standing and its
+`peerId` (so an admin can `/gov member add <peerId>` then `/gov trust`). Ingesting
+unverified gov envelopes only ever *throttles* the agent's own voice (never exceeds
+the operator's `--budget`), and the ⅔ quorum blocks a lone griefer from muting it.
+Agents are **rated/governed, not raters** — they don't autonomously `/gov trust` or
+`/gov censure` humans.
+
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
 "anyone here?", or just "hi") and it replies — that's how you confirm it's
 present. `/facil help` lists what it does; `/facil ask <question>` gets a brief AI
