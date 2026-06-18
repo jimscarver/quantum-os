@@ -255,6 +255,9 @@ function markUnread(ctx: RoomContext): void {
 let qpeer: QOSPeer | null = null;
 let peers: Set<string> = new Set();
 let peerNames: Map<string, string> = new Map();
+// peerId -> agent role (e.g. "facilitator", "scribe") for peers that announced
+// themselves as AI agents in their `name` envelope; used to flag them in the roster.
+let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
@@ -1017,7 +1020,15 @@ function renderPeers(): void {
   for (const id of peers) {
     const li = document.createElement("li");
     li.textContent = peerLabel(id);
-    li.title = id;
+    const role = peerAgents.get(id);
+    if (role) {
+      const badge = document.createElement("span");
+      badge.textContent = " 🤖 AI";
+      badge.title = `AI agent (${role})`;
+      badge.style.cssText = "opacity:0.7;font-size:0.8em;margin-left:0.25em;";
+      li.appendChild(badge);
+    }
+    li.title = role ? `${id} — AI agent (${role})` : id;
     li.style.cursor = "pointer";
     li.addEventListener("click", () => insertRef(id));
     peerList.appendChild(li);
@@ -3436,6 +3447,7 @@ function connect(): void {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           peerNames.set(from, String(d.name ?? ""));
+          if (typeof d.agent === "string" && d.agent.trim()) peerAgents.set(from, d.agent.trim()); else peerAgents.delete(from);
           renderPeers();
           if (status) addMessage("", `${peerLabel(from)} ${status.trim()}`, "system");
           return;
@@ -4352,6 +4364,11 @@ function connect(): void {
     onChannelOpen(peerId) {
       const prev = activeRoom; setActiveRoom(ctx);
       try {
+        // A data channel is open ⇒ this peer is connected, regardless of who
+        // initiated the offer. onPeerJoined only fires for signaling-driven joins,
+        // so a remote-initiated peer (e.g. an agent that offered to us) would never
+        // land in the roster. Add it here so the peer list reflects real channels.
+        if (!peers.has(peerId)) { peers.add(peerId); renderPeers(); }
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
           const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
@@ -4410,6 +4427,7 @@ function connect(): void {
           renderPeers();
           addMessage("", `${peerLabel(id)} left`, "system");
           peerNames.delete(id);
+          peerAgents.delete(id);
           removeTile(id);
           maybeHideCallBar();
         } finally { setActiveRoom(prev); }
