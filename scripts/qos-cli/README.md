@@ -171,20 +171,36 @@ locally (needs `ws` + `werift`).
   `sync-lemmas` gate (`achievesZfa` required), so the daemon mirrors the room
   faithfully.
 
-## Group facilitator
+## Agents (facilitator, scribe, greeter …)
 
-`facilitator.mjs` is a sibling daemon that joins a room as a peer and posts
-**measured** facilitation nudges — effectively the runtime of
+`agent.mjs` is a sibling daemon that joins a room as a **full member** (stable
+`cap:peer` + dyncap identity) and posts **measured** nudges according to its
+`--role` — effectively the runtime of
 [`Room_Best_Practices.md`](../../Room_Best_Practices.md). It has no special
 authority (it only posts `chat`); the group decides, and can `/gov trust` it up
 or `/gov censure` it down like any peer — so its disruption level is governed by
 the room, not hard-coded.
 
 ```bash
-node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
+node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>] \
   [--budget 4] [--silent-min 6] [--quiet | --active] \
-  [--ai] [--ai-backend api|claude-code] [--state ./.qos-facilitator]
+  [--ai] [--ai-backend api|claude-code] [--state ./.qos-agent]
 ```
+
+**Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
+nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to
+record them as `/lemma`), `greeter` (welcomes newcomers, helps set a name). Each
+role picks a default name, a command prefix (`/facil`, `/scribe`, `/greeter`), an
+AI persona, and which proactive duties it performs. `facilitator.mjs` remains as a
+thin back-compat shim (`--role facilitator`, historical `--state ./.qos-facilitator`).
+
+**Multiple agents in one room.** Run several with different `--role` (and distinct
+`--state` dirs). They tag their `name` envelope with their role, so they recognize
+each other and (a) **elect a single lead** per shared proactive duty — only the
+lowest-`peerId` agent that performs a duty acts, so N agents don't all greet — and
+(b) count their posts **collectively** against the human fair-share, so adding
+agents can't inflate the budget. Direct replies (`/facil`, `/<role> ask`) still
+come from each agent for itself.
 
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
 "anyone here?", or just "hi") and it replies — that's how you confirm it's
