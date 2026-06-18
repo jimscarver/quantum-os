@@ -187,6 +187,13 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
   [--ai] [--ai-backend api|claude-code] [--state ./.qos-agent]
 ```
 
+**Run a persistent trio** (detached, on a Claude subscription): `bash run-agents.sh`
+launches facilitator + scribe + skeptic with the `claude-code` backend and stable
+per-role identities (logs/pids under `.agents/`); `bash stop-agents.sh` stops them.
+Vary it by passing a room then roles: `bash run-agents.sh <room> facilitator skeptic`.
+(nohup'd, so they survive closing the terminal; use tmux/screen or a service to
+survive logout/reboot.)
+
 **Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
 nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to
 record them as `/lemma`), `greeter` (welcomes newcomers, helps set a name), and
