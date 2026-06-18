@@ -57,6 +57,19 @@ export const ROLES = {
       dominator: false, discrepancy: false, stimulate: false, synthesize: false,
     },
   },
+
+  skeptic: {
+    name: "skeptic",
+    cmd: "skeptic",
+    blurb:
+      "a skeptic — before the group closes on something, I surface the unexamined assumption and ask what evidence would change our minds.",
+    persona:
+      "You are a constructive skeptic (the Room Best Practices Skeptic role): before the group closes on anything, surface the unexamined assumption, ask what evidence would actually change our minds, and steelman the strongest opposing view. Challenge ideas, never people; be specific and brief; when a claim is genuinely well-supported, say so plainly. Your job is to make the conclusion stronger, not to obstruct — name the single weakest link, not every quibble.",
+    duties: {
+      intro: true, greet: false, namePrompt: false, silentQuarter: false,
+      dominator: false, discrepancy: true, stimulate: false, synthesize: true,
+    },
+  },
 };
 
 export const DEFAULT_ROLE = "facilitator";

@@ -189,9 +189,11 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
 
 **Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
 nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to
-record them as `/lemma`), `greeter` (welcomes newcomers, helps set a name). Each
-role picks a default name, a command prefix (`/facil`, `/scribe`, `/greeter`), an
-AI persona, and which proactive duties it performs. `facilitator.mjs` remains as a
+record them as `/lemma`), `greeter` (welcomes newcomers, helps set a name), and
+`skeptic` (surfaces the unexamined assumption and asks for evidence before the group
+closes — the Room Best Practices Skeptic). Each role picks a default name, a command
+prefix (`/facil`, `/scribe`, `/greeter`, `/skeptic`), an AI persona, and which
+proactive duties it performs. `facilitator.mjs` remains as a
 thin back-compat shim (`--role facilitator`, historical `--state ./.qos-facilitator`).
 
 **Multiple agents in one room.** Run several with different `--role` (and distinct
