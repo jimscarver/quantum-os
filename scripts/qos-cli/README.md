@@ -192,6 +192,15 @@ answer about the room, facilitation, or decisions (needs `--ai`); `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 
+**Many facilitators, each speaks only for itself.** A room may have more than one
+facilitator (or none) — `/facil` is broadcast, so each present facilitator replies
+on its own. The browser does **not** run facilitation and does not vouch for any
+facilitator; it only relays the command, and the `/help facil` text describes the
+*relay*, not any facilitator's behaviour. Trust a facilitator's **self-description**
+(its `/facil help` / `/facil ask` reply, attributed to its signed `name`/identity),
+and judge each by its own replies — the AdvisorSystem prompt likewise tells the
+daemon to describe only itself.
+
 Deterministic behaviours (no AI):
 
 - **Greets** new members once each (after a short grace) and **prompts the
