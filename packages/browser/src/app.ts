@@ -3350,13 +3350,17 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    // Room-agent commands (agent.mjs roles). The browser doesn't implement any of
+    // these — it relays the command into the room as chat so an agent daemon (a peer)
+    // can parse and answer it. Add new role command-prefixes here when you add a role.
     case "facil":
-    case "facilitator": {
-      // The browser doesn't implement facilitation — it relays the command into
-      // the room as chat so a facilitator daemon (a peer) can parse and answer it.
+    case "facilitator":
+    case "scribe":
+    case "skeptic":
+    case "greeter": {
       const out = "/" + cmd + (arg ? " " + arg : "");
       if (qpeer) qpeer.broadcast({ kind: "chat", text: out });
-      sys("→ relayed to facilitator(s) in the room — each answers for itself (there may be several, or none). The browser doesn't vouch for any.");
+      sys(`→ relayed to the room's ${cmd} agent(s) — each answers for itself (there may be several, or none). The browser doesn't vouch for any.`);
       break;
     }
 
@@ -4470,7 +4474,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
