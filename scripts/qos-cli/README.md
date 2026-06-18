@@ -171,6 +171,36 @@ locally (needs `ws` + `werift`).
   `sync-lemmas` gate (`achievesZfa` required), so the daemon mirrors the room
   faithfully.
 
+## Group facilitator (v1)
+
+`facilitator.mjs` is a sibling daemon that joins a room as a peer and posts
+**measured** facilitation nudges — effectively the runtime of
+[`Room_Best_Practices.md`](../../Room_Best_Practices.md). It has no special
+authority (it only posts `chat`); the group decides, and can `/gov trust` it up
+or `/gov censure` it down like any peer — so its disruption level is governed by
+the room, not hard-coded.
+
+```bash
+node facilitator.mjs --room <cap:room:… | room-URL> [--name facilitator] \
+  [--budget 4] [--silent-min 6] [--quiet | --active] [--state ./.qos-facilitator]
+```
+
+v1 behaviours (deterministic, no AI):
+
+- **Greets** new members once each (after a short grace) and **prompts the
+  nameless** to set a `/name`.
+- **Participation** (Room_Best_Practices Rules 6 & 12): solicits the silent
+  quarter, gently rebalances a dominator.
+- **Surfaces (dis)agreement** from `state-discrepancy` consensus broadcasts —
+  names a contested split, or offers to record a converged value.
+
+**Measured disruption** is enforced by a post budget (`--budget` per 5-min
+window), a minimum gap between posts, per-behaviour cooldowns, and a fair-share
+check so it never out-talks the humans in an active thread. `--quiet` / `--active`
+shift the whole policy. State (stable identity + who-we've-greeted) persists under
+`--state`. v2 (planned): a pluggable AI advisor for *stimulate* /
+disagreement-synthesis — advisory-only, gated by the same throttle.
+
 ## Status / caveats
 
 - **ZFA capability layer: tested** (`selftest.mjs`, all pass). Faithful port of
