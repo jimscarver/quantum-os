@@ -142,6 +142,7 @@ interface RoomContext {
   peers: Set<string>;
   peerNames: Map<string, string>;
   pendingLeaves: Map<string, ReturnType<typeof setTimeout>>;
+  pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Lemma + note stores (the public room knowledge)
   lemmaStore: Map<string, LemmaEntry>;
   currencyTokens: Map<string, string>;
@@ -198,6 +199,7 @@ function createRoom(roomId: string): RoomContext {
     peers: new Set(),
     peerNames: new Map(),
     pendingLeaves: new Map(),
+    pendingJoins: new Map(),
     lemmaStore: new Map(),
     currencyTokens: new Map(),
     noteStore: new Map(),
@@ -259,6 +261,7 @@ let peerNames: Map<string, string> = new Map();
 // themselves as AI agents in their `name` envelope; used to flag them in the roster.
 let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
+let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
 let noteStore: Map<string, NoteEntry> = new Map();
@@ -295,6 +298,7 @@ function setActiveRoom(ctx: RoomContext): void {
   peers              = ctx.peers;
   peerNames          = ctx.peerNames;
   pendingLeaves      = ctx.pendingLeaves;
+  pendingJoins       = ctx.pendingJoins;
   lemmaStore         = ctx.lemmaStore;
   currencyTokens     = ctx.currencyTokens;
   noteStore          = ctx.noteStore;
@@ -785,7 +789,19 @@ function shortId(id: string): string {
 }
 
 function peerLabel(id: string): string {
-  return peerNames.get(id) ?? shortId(id);
+  const n = peerNames.get(id);
+  return (n && n.trim()) ? n : shortId(id);
+}
+
+// Emit the "<name> joined" line once we know the peer's NAME (browsers send it
+// right after the channel opens), or after a short timeout fall back to the id so a
+// slow/nameless peer still shows. No-op if the peer already left or was announced.
+function announceJoin(id: string): void {
+  const jt = pendingJoins.get(id);
+  if (jt === undefined) return;
+  clearTimeout(jt);
+  pendingJoins.delete(id);
+  if (peers.has(id)) addMessage("", `${peerLabel(id)} joined`, "system");
 }
 
 function findPeerByName(name: string): string | null {
@@ -3460,9 +3476,11 @@ function connect(): void {
         if (d.kind === "name") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
-          peerNames.set(from, String(d.name ?? ""));
+          const nm = String(d.name ?? "");
+          peerNames.set(from, nm);
           if (typeof d.agent === "string" && d.agent.trim()) peerAgents.set(from, d.agent.trim()); else peerAgents.delete(from);
           renderPeers();
+          if (nm.trim()) announceJoin(from);   // real name → show "<name> joined" now (else the timeout shows the id)
           if (status) addMessage("", `${peerLabel(from)} ${status.trim()}`, "system");
           return;
         }
@@ -4422,7 +4440,15 @@ function connect(): void {
         if (peers.has(id)) return;
         peers.add(id);
         renderPeers();
-        addMessage("", `${peerLabel(id)} joined`, "system");
+        // Wait for the peer's name before announcing — browsers send it right after
+        // the channel opens — so the line shows a name, not a raw id; fall back to the
+        // id after a timeout. Fired early by the name handler; cleared on leave.
+        if (!pendingJoins.has(id)) {
+          pendingJoins.set(id, setTimeout(() => {
+            const p2 = activeRoom; setActiveRoom(ctx);
+            try { announceJoin(id); } finally { setActiveRoom(p2); }
+          }, 5000));
+        }
       } finally { setActiveRoom(prev); }
     },
     onPeerLeft(id) {
@@ -4439,7 +4465,11 @@ function connect(): void {
           pendingLeaves.delete(id);
           peers.delete(id);
           renderPeers();
-          addMessage("", `${peerLabel(id)} left`, "system");
+          // If their join was never announced (no name arrived / a quick refresh),
+          // stay silent on the leave too — no "<id> joined"/"left" noise.
+          const pj = pendingJoins.get(id);
+          if (pj !== undefined) { clearTimeout(pj); pendingJoins.delete(id); }
+          else addMessage("", `${peerLabel(id)} left`, "system");
           peerNames.delete(id);
           peerAgents.delete(id);
           removeTile(id);
