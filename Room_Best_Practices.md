@@ -87,12 +87,13 @@ procedural). The point is **complementary coverage**, not a fixed cast.
    re-sync the *decision*, not just the chatter (`sync-*` handshake, `Group_Decisions.md`).
 6. **Avoid letting one agent dominate the closure process.** Even the turn-taking; a dominated
    room collapses to a single blanket and loses its collective intelligence. **And avoid two
-   co-equal leaders** — a finding borne out in the research: two dominant voices *deadlock* a group
-   the way two identical protons can't bind (the social *diproton*; see
-   [`SEX.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md) §3). Seat
-   **one** lead per role and let a second strong voice take the complementary *checking* role
-   (rule 2), not a rival lead — exactly what the QuantumOS agents do by electing a single lead per
-   duty.
+   co-equal leaders** — a finding borne out in the research: two dominant voices *deadlock* into a
+   rivalry rather than a closure. Seat **one** lead per role and let a second strong voice take the
+   complementary *checking* role (rule 2), not a rival lead — exactly what the QuantumOS agents do by
+   electing a single lead per duty. (In the QLF *model* this is the "social diproton" — two identical
+   closures that can't bind,
+   [`SEX.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md) §3 — but the
+   operational point holds in plain terms.)
 7. **Use diversity of role, perspective, and model type as a closure-strengthening mechanism**, not
    an obstacle to manage away.
 8. **Decompose to pairings.** The ideal initial group size is **two**; make a large room effective by
