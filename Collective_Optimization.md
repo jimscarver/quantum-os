@@ -110,9 +110,11 @@ quantum hardware isn't even applicable.
 
 ## Try it
 
-A runnable demo anneals a classic problem (the Travelling Salesman Problem) to its brute-force optimum,
-so you can watch the loop converge — see **[OptimizationDemo.md](OptimizationDemo.md)**
-(`node scripts/qos-cli/optimize-demo.mjs`).
+A runnable demo plays out a **room session** on a classic problem (the Travelling Salesman Problem) —
+named participants proposing routes, a Facilitator scoring (trust-weighted) and cooling the temperature
+— and reaches the brute-force optimum, so you can watch the *collaboration* converge. See
+**[OptimizationDemo.md](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`). For a live
+round, ask a facilitator in your room: **`/facil optimize <objective + constraints>`**.
 
 ## Grounding (QLF)
 
