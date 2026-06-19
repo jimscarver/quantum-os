@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic greeter)
+ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic greeter memory)
 for role in "${ROLES[@]}"; do
   pidf=".agents/$role.pid"
   [ -f "$pidf" ] || continue
