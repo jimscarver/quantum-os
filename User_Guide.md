@@ -44,9 +44,15 @@ Use the lightest process that fits:
 - a formal group issue + weighted vote → `/gov issue`, then `/gov vote`
 
 → **[Group Decisions](Group_Decisions.md)** (the whole family, and when to use each) ·
-**[Consensus](Consensus.md)** (the `/probe` protocol and its threat model) ·
-**[Collective Optimization](Collective_Optimization.md)** (running these as an annealing loop to
-*optimize*, not just decide — with a runnable [demo](OptimizationDemo.md)).
+**[Consensus](Consensus.md)** (the `/probe` protocol and its threat model).
+
+## 4½. Optimize, don't just decide
+Chain those tools into an **annealing loop** and the room becomes a collective optimizer: propose
+candidate solutions, score them (trust-weighted) with `/estimate` or `/poll`, refine the leaders each
+round, then `/probe` to converge and `/lemma`+`/persist` the winner. An AI facilitator can run the
+rounds for you — **`/facil optimize <objective + constraints>`** proposes candidates and the next step.
+→ **[Collective Optimization](Collective_Optimization.md)** (and how it compares to a quantum computer),
+with a runnable room-session **[demo](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
 
 ## 5. Record the decision
 A decision only outlives the session if it's written down: `/lemma <statement>` mints it;

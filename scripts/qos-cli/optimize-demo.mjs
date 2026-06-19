@@ -1,22 +1,21 @@
 #!/usr/bin/env node
-// Collective-annealing optimization DEMO on a classic problem: the Travelling
-// Salesman Problem (TSP). It runs the loop from Collective_Optimization.md —
-//   generate a candidate (a 2-opt neighbour) → score it (exact tour length) →
-//   select & anneal (Metropolis accept, temperature cooling) → converge
-// — and checks the result against the brute-force optimum on a small instance.
+// Collective-optimization DEMO — a ROOM solving a classic problem together.
 //
-// This is the SAME loop a room runs COLLECTIVELY: in a room, humans + AI agents
-// are the proposers, `/estimate` or `/poll` is the (trust-weighted) scorer, and
-// `/probe` confirms convergence. Here one process plays every role so you can
-// watch it anneal. Honest scope: a metaheuristic — excellent solutions, not a
-// guaranteed-optimal NP solver (see Collective_Optimization.md).
+// It prints a simulated room session on the Travelling Salesman Problem: named
+// participants propose candidate tours each round, a Facilitator agent scores them
+// (trust-weighted) and narrows the "temperature" (explore wide early, refine the
+// leader late), and the room converges — checked against the brute-force optimum.
+// This is the loop from Collective_Optimization.md, shown as the interaction it
+// really is. Self-contained: no deps, no network, no AI key.
 //
 //   node optimize-demo.mjs [--cities N] [--seed S] [--rounds R]
 //
-// No dependencies, no network, no AI key.
+// Honest scope: a metaheuristic — excellent solutions, not a guaranteed-optimal NP
+// solver. The "quantum" part is the relaxation to a low-energy consensus, not
+// evaluating every answer at once.
 
 function parseArgs(argv) {
-  const a = { cities: 9, seed: 42, rounds: 60 };
+  const a = { cities: 9, seed: 42, rounds: 8 };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--cities") a.cities = Number(argv[++i]);
     else if (argv[i] === "--seed") a.seed = Number(argv[++i]);
@@ -43,6 +42,8 @@ function tourLength(order, cities) {
   for (let i = 0; i < order.length; i++) d += dist(cities[order[i]], cities[order[(i + 1) % order.length]]);
   return d;
 }
+const route = (order) => order.join("→") + "→" + order[0];
+
 // 2-opt move: reverse the segment between two positions — the classic TSP neighbour.
 function twoOpt(order, rng) {
   const n = order.length;
@@ -55,22 +56,29 @@ function twoOpt(order, rng) {
   return next;
 }
 
-// Brute-force optimum (only for small N): fix city 0, permute the rest.
+// One participant's contribution this round: a short local search (Metropolis at the
+// round's temperature) starting from the current leader — their own annealing run.
+function propose(leader, cities, T, steps, rng) {
+  let cur = leader.slice(), curLen = tourLength(cur, cities);
+  let best = cur.slice(), bestLen = curLen;
+  for (let s = 0; s < steps; s++) {
+    const cand = twoOpt(cur, rng);
+    const cl = tourLength(cand, cities);
+    if (cl < curLen || rng() < Math.exp(-(cl - curLen) / Math.max(T, 1e-9))) { cur = cand; curLen = cl; }
+    if (curLen < bestLen) { best = cur.slice(); bestLen = curLen; }
+  }
+  return { order: best, len: bestLen };
+}
+
 function bruteForce(cities) {
   const rest = cities.map((_, i) => i).slice(1);
   let best = Infinity;
-  const perm = [];
-  const used = new Array(rest.length).fill(false);
+  const perm = [], used = new Array(rest.length).fill(false);
   (function rec() {
-    if (perm.length === rest.length) {
-      best = Math.min(best, tourLength([0, ...perm], cities));
-      return;
-    }
+    if (perm.length === rest.length) { best = Math.min(best, tourLength([0, ...perm], cities)); return; }
     for (let k = 0; k < rest.length; k++) {
       if (used[k]) continue;
-      used[k] = true; perm.push(rest[k]);
-      rec();
-      perm.pop(); used[k] = false;
+      used[k] = true; perm.push(rest[k]); rec(); perm.pop(); used[k] = false;
     }
   })();
   return best;
@@ -83,43 +91,63 @@ function main() {
   const rng = mulberry32(args.seed);
   const cities = Array.from({ length: N }, () => [Math.round(rng() * 100), Math.round(rng() * 100)]);
 
-  console.log(`Collective-annealing demo — Travelling Salesman (${N} cities, seed ${args.seed})`);
-  console.log("The loop: generate (2-opt) → score (tour length) → select & anneal (Metropolis) → converge.\n");
+  // The room: a few participants (with earned trust) + a Facilitator agent.
+  const people = [
+    { name: "Ana", trust: 4 }, { name: "Ben", trust: 3 },
+    { name: "Cara", trust: 2 }, { name: "Dee", trust: 1 },
+  ];
+  const F = "Facilitator";
 
-  // ---- the annealing loop ----
-  let order = cities.map((_, i) => i);          // start: 0,1,2,…
-  let cur = tourLength(order, cities);
-  let best = order.slice(), bestLen = cur;
-  console.log(`initial tour length: ${cur.toFixed(1)}`);
+  console.log(`Collective-optimization demo — a room solving the Travelling Salesman Problem (${N} cities)`);
+  console.log(`Participants: ${people.map((p) => `${p.name} [trust ${p.trust}]`).join(", ")}  +  ${F} (an AI agent)`);
+  console.log(`Goal: the shortest closed tour. Each round, people propose a route; the Facilitator scores`);
+  console.log(`it (trust breaks ties) and cools the temperature — explore wide early, refine the leader late.\n`);
 
-  let T = bestLen / 4;                           // initial "temperature" (problem-scaled)
-  const cooling = Math.pow(0.02, 1 / args.rounds);   // cool to ~2% of T0 over the run
-  const sweeps = 30 * N;                          // proposals per round
+  let leader = cities.map((_, i) => i);             // start: 0,1,2,…
+  let leaderLen = tourLength(leader, cities);
+  let leaderBy = "the starting order";
+  console.log(`${F}: Optimizing the ${N}-city tour. Starting point is ${leaderLen.toFixed(1)} — propose better routes.\n`);
+
+  const T0 = leaderLen / 4;
+  const cooling = Math.pow(0.05, 1 / args.rounds);
+  let T = T0, stale = 0;
   for (let r = 1; r <= args.rounds; r++) {
-    for (let s = 0; s < sweeps; s++) {
-      const cand = twoOpt(order, rng);
-      const cl = tourLength(cand, cities);
-      const dE = cl - cur;
-      if (dE < 0 || rng() < Math.exp(-dE / Math.max(T, 1e-9))) { order = cand; cur = cl; }
-      if (cur < bestLen) { best = order.slice(); bestLen = cur; }
+    const heat = T > T0 * 0.5 ? "HIGH — explore" : T > T0 * 0.12 ? "cooling — refine" : "LOW — converge";
+    console.log(`── Round ${r}  (temperature ${heat}) ──`);
+    if (r === 1) console.log(`${F}: Propose any route you like — wild ideas welcome while it's hot.`);
+    else console.log(`${F}: Current leader is ${leaderLen.toFixed(1)} (${leaderBy}). Refine it.`);
+
+    // each participant proposes (more internal search while hot)
+    const steps = Math.round((10 + 60 * (T / T0)) * N);
+    const proposals = people.map((p, i) => {
+      const prng = mulberry32(args.seed * 131 + r * 17 + i * 1009);   // distinct, reproducible stream
+      return { p, ...propose(leader, cities, T, steps, prng) };
+    });
+    for (const pr of proposals) console.log(`  ${pr.p.name}: ${route(pr.order)}   (length ${pr.len.toFixed(1)})`);
+
+    // Facilitator scores: best length wins; trust breaks a tie.
+    let win = { p: { name: leaderBy, trust: 0 }, order: leader, len: leaderLen };
+    for (const pr of proposals) {
+      if (pr.len < win.len - 1e-9 || (Math.abs(pr.len - win.len) < 1e-9 && pr.p.trust > win.p.trust)) win = pr;
     }
-    if (r % Math.ceil(args.rounds / 12) === 0 || r === args.rounds) {
-      console.log(`  round ${String(r).padStart(2)}  T=${T.toFixed(1).padStart(6)}  best=${bestLen.toFixed(1)}`);
-    }
-    T *= cooling;                                // anneal: lower the temperature
+    if (win.len < leaderLen - 1e-9) { leader = win.order.slice(); leaderLen = win.len; leaderBy = win.p.name; stale = 0; }
+    else stale++;
+    console.log(`${F}: Scored (trust-weighted). Leader: ${leaderLen.toFixed(1)} — ${leaderBy}.\n`);
+
+    T *= cooling;
+    if (stale >= 2) { console.log(`${F}: No one's improved on ${leaderLen.toFixed(1)} for two rounds — looks converged.\n`); break; }
   }
 
-  console.log(`\nconverged: best tour length = ${bestLen.toFixed(1)}`);
-  console.log(`  tour: ${best.join("→")}→${best[0]}`);
+  console.log(`${F}: Converged. \`/probe\` it… ✓  Recording the decision: \`/lemma best-tour = ${route(leader)}\`  \`/persist\``);
   if (N <= 10) {
     const opt = bruteForce(cities);
-    const gap = ((bestLen - opt) / opt) * 100;
-    console.log(`  brute-force optimum = ${opt.toFixed(1)}   gap ${gap.toFixed(2)}%  ${gap < 1e-6 ? "✓ reached the optimum" : ""}`);
+    const gap = ((leaderLen - opt) / opt) * 100;
+    console.log(`${F}: Length ${leaderLen.toFixed(1)} — brute-force optimum is ${opt.toFixed(1)} (gap ${gap.toFixed(2)}%)${gap < 1e-6 ? "  ✓ the room found the optimal tour" : ""}.`);
   } else {
-    console.log(`  (N>10 — brute force skipped; this is the best the metaheuristic found)`);
+    console.log(`${F}: Length ${leaderLen.toFixed(1)} (N>10 — brute force skipped; best the room found).`);
   }
-  console.log(`\nA room runs this SAME loop collectively: humans + AI agents propose, /estimate or /poll`);
-  console.log(`(trust-weighted) scores, /probe converges. See Collective_Optimization.md.`);
+  console.log(`\nThat's Collective_Optimization.md run as a room: many proposers explore in parallel, a`);
+  console.log(`trust-weighted score selects, the agent cools the temperature, /probe converges.`);
 }
 
 main();
