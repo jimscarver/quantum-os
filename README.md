@@ -23,6 +23,8 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
 10. Use `/request name` to signal you need a named lemma; the holder sees a prompt and can `/pass name peer` to transfer it directly — no token strings to copy.
 
+Beyond evaluation, a room is a full collaboration space: take **group decisions** (`/poll`, `/estimate`, the `/probe` consensus check, trust-weighted `/gov` liquid democracy); invite **AI agent members** — a trust-governed *facilitator*, *scribe*, and *skeptic* that join as full peers and run on a Claude subscription ([Developer Guide](Developer_Guide.md)); and run the room as a **[collective optimizer](Collective_Optimization.md)** (`/facil optimize <problem>`, or watch the [demo](OptimizationDemo.md)). New here? Start with the **[User Guide](User_Guide.md)**.
+
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
 
 **Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
