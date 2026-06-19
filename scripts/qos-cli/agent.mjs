@@ -54,6 +54,8 @@ Options:
   --ai-backend <b>   api (default; needs ANTHROPIC_API_KEY, pay-as-you-go credits) or
                      claude-code (shells out to the local \`claude\` CLI = your Claude
                      subscription, no API credits — must be installed + logged in).
+  --about <url>      Link to the room's about page, shown in intro/help
+                     (default: the QuantumOS MyRoom page).
   --ai-model <m>     Model. api default: claude-haiku-4-5-20251001;
                      claude-code default: the CLI's configured model.
   --verbose          Log every inbound message + suppressed nudges.
@@ -82,6 +84,7 @@ export function parseArgs(argv) {
     else if (x === "--ai") a.ai = true;
     else if (x === "--ai-backend") a.aiBackend = argv[++i];
     else if (x === "--ai-model") a.aiModel = argv[++i];
+    else if (x === "--about") a.about = argv[++i];
     else if (x === "--verbose") a.verbose = true;
     else if (x === "--help" || x === "-h") a.help = true;
   }
@@ -109,6 +112,7 @@ export async function run(args) {
   const role = resolveRole(roleKey);
   if (!role) { console.error(`[agent] unknown --role "${args.role}". Known: ${Object.keys(ROLES).join(", ")}`); process.exit(1); return; }
   const CMD = role.cmd;                                   // command prefix, e.g. "facil"
+  const ABOUT_URL = args.about ?? "https://github.com/jimscarver/quantum-os/blob/main/MyRoom.md";
   const TAG = `[${CMD}]`;                                 // log tag
   const aliases = [...new Set([CMD, role.name])];         // command spellings, e.g. facil|facilitator
   const aliasAlt = aliases.map(escapeRe).join("|");
@@ -279,9 +283,9 @@ export async function run(args) {
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down.`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
-  const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing.`;
+  const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing. About this room: ${ABOUT_URL}`;
   // Self-introduce to a newly-identified human peer, once per peer per run (direct
   // message, so existing members aren't re-pinged each time someone joins).
   function introduceTo(id) {
