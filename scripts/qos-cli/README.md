@@ -197,12 +197,15 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
   [--ai] [--ai-backend api|claude-code] [--state ./.qos-agent]
 ```
 
-**Run a persistent trio** (detached, on a Claude subscription): `bash run-agents.sh`
-launches facilitator + scribe + skeptic with the `claude-code` backend and stable
-per-role identities (logs/pids under `.agents/`); `bash stop-agents.sh` stops them.
-Vary it by passing a room then roles: `bash run-agents.sh <room> facilitator skeptic`.
-(nohup'd, so they survive closing the terminal; use tmux/screen or a service to
-survive logout/reboot.)
+**Run the persistent room** (detached, on a Claude subscription): `bash run-agents.sh`
+launches the agents (facilitator + scribe + skeptic + greeter) on the `claude-code`
+backend with stable per-role identities, **plus the memory daemon** (`qos-daemon.mjs`)
+so lemmas/gov persist and re-serve to joiners — room state (e.g. `/lemma` ballots)
+survives when every browser leaves. Logs/pids under `.agents/`; `bash stop-agents.sh`
+stops all of it. Vary the agents by passing a room then roles
+(`bash run-agents.sh <room> facilitator skeptic`); `NO_MEMORY=1 bash run-agents.sh`
+skips the daemon. (nohup'd, so they survive closing the terminal; use tmux/screen or a
+service to survive logout/reboot.)
 
 **Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
 nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to

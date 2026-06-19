@@ -32,6 +32,21 @@ for role in "${ROLES[@]}"; do
   sleep 1
 done
 
+# Memory daemon — persists lemmas / gov and re-serves them to joiners, so room
+# state (e.g. /lemma ballots) survives when every browser leaves. Set NO_MEMORY=1
+# to skip. Seeded lemmas live in ./.qos-memory and reload automatically.
+if [ -z "${NO_MEMORY:-}" ]; then
+  mpidf=".agents/memory.pid"
+  if [ -f "$mpidf" ] && kill -0 "$(cat "$mpidf")" 2>/dev/null; then
+    echo "• memory already running (pid $(cat "$mpidf"))"
+  else
+    nohup node qos-daemon.mjs --room "$ROOM" --name memory --state ./.qos-memory \
+      >> ".agents/memory.log" 2>&1 &
+    echo $! > "$mpidf"
+    echo "✓ started memory (pid $!) → scripts/qos-cli/.agents/memory.log"
+  fi
+fi
+
 echo
 echo "Tail:  tail -f scripts/qos-cli/.agents/*.log"
 echo "Stop:  bash scripts/qos-cli/stop-agents.sh"
