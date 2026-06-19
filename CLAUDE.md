@@ -291,6 +291,19 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 - **`peer.ts`**: On receiving the `"peers"` list after reconnect, skip peers where the WebRTC data channel is still open — avoids tearing down a working connection
 - **`peer.ts` presence eviction (stale-room fix)**: an *ungraceful* drop (killed tab, network loss) sends no `leave`, and the connection often never reaches `"failed"`. So `declarePeerGone` fires `onPeerLeft` on **data-channel `onclose`** (the reliable signal for a clean tab-close) and on connection state `"failed"`/`"closed"`; `"disconnected"` starts an 8s grace timer (`disconnectTimers`) and evicts only if it doesn't recover to `"connected"`. `declarePeerGone` is idempotent (a had-connection guard), so the channel-close and state-change paths can't double-fire
 - **`app.ts`**: `onPeerLeft` is debounced 6 seconds via `pendingLeaves: Map<string, timer>` and is idempotent (one pending-leave per peer). If the peer rejoins within the window, suppress both "left" and "joined" messages silently
+- **Background-tab recovery + presence polish**: `peer.ts` `wake()` (reconnect now, reset the throttled backoff; floor lowered to 1.5s) is called on `visibilitychange`/`focus`/`pageshow`/`online`, so peers return instantly after a tab switch instead of "eventually"; `app.ts` adds a peer to the roster on **`onChannelOpen`** too (not just signaling-join), so a remote-initiated peer (e.g. an agent that dialed us) shows up; agents are flagged **🤖** in the roster via `peerAgents` (from the `name` envelope's `agent:<role>`); the status line shows a live `connected · N peers` / `reconnecting…`; the "joined" line waits for the peer's **name** (`pendingJoins`, 5s id fallback) so it reads "Jim joined", not a raw id
+
+### Room agents + collective optimization (`scripts/qos-cli`)
+
+Headless **agent daemons** join a room as full peers (Node; `werift` + `ws`), reusing `QOSPeer` (`qospeer.mjs`) + dyncap identity. The generalized daemon is **`agent.mjs`**; `facilitator.mjs` is a thin back-compat shim (`--role facilitator`). `scripts/qos-cli` is **outside the pnpm workspace**, so it doesn't affect the TS/Rust CI — test with `node --check` + the `*.selftest.mjs`/`loopback.mjs`/`optimize-demo.mjs` scripts.
+
+- **Roles** (`agent-roles.mjs`): `facilitator`, `scribe`, `greeter`, `skeptic`. A role = default name + command prefix (`cmd`) + AI `persona` + a `duties` map (intro/greet/namePrompt/silentQuarter/dominator/discrepancy/stimulate/synthesize). Adding one = a single registry entry (`resolveRole`/`dutiesOf`). Run: `node agent.mjs --room <cap> --role <r> [--ai --ai-backend claude-code]`.
+- **AI advisor** (`facilitator-advisor.mjs`, `makeAdvisor`): backends `api` (Anthropic Messages API, `ANTHROPIC_API_KEY`) or **`claude-code`** (shells out to the local `claude` CLI = a Claude Pro/Max subscription, **no API credits**). Modes: `ask`, `stimulate`, `synthesize`, `optimize`. Persona + `cmd` are per-role.
+- **Trust governance** (`gov.mjs` — faithful port of `gov.ts` `trustLevels`): the agent ingests `gov-*`/`group-*`/`sync-gov`, computes its own standing, and **scales its post budget by trust level** (`min(--budget, level)`); a ⅔ censure-discredit makes it stand down. Agents are rated/governed, **not** raters.
+- **Multi-agent coexistence**: agents tag their `name` envelope with `agent:<role>`; **lead election** (lowest peerId among agents sharing a duty) de-dups shared proactive duties (intro is same-role-scoped, so each role self-introduces); posts count **collectively** against a human fair-share.
+- **Commands** (user-invoked, relayed by the browser as chat — `handleCommand` relays `facil`/`facilitator`/`scribe`/`skeptic`/`greeter`): `/<cmd>` (present?), `/<cmd> help`, `/<cmd> ask <q>`, **`/<cmd> optimize <problem>`**, `/<cmd> trust`, `/<cmd> off|on`. Replies bypass the nudge throttle; per-peer self-introductions mention the command + `MyRoom`.
+- **Reliability**: `qospeer.mjs` has a 30s ping/pong **keepalive** (reconnects a dead/zombie signaling socket — without it a long-running agent goes deaf to new joiners). Persistent identity + greet-state under `--state ./.qos-<role>`. **`run-agents.sh` / `stop-agents.sh`** launch/stop a detached trio.
+- **Collective optimization** (`Collective_Optimization.md`): the room run as a quantum-annealing-style optimizer — propose → score (`/poll`/`/estimate`, trust-weighted) → anneal → `/probe` → `/lemma`. `/facil optimize` (advisor `optimize` mode) facilitates a round; **`optimize-demo.mjs`** is a runnable room-session demo (named participants + a Facilitator → brute-force TSP optimum). Honest scope: a metaheuristic, **not** an instant/optimal NP solver (`OptimizationDemo.md`).
 
 ---
 
@@ -406,7 +419,13 @@ On failure: `gh run view <run-id> --log-failed`
 | `Consensus.md` | Reference doc for the joiner-local consensus probe — protocol, trust model, BFT comparison |
 | `Group_Decisions.md` | Map of group-decision processes the interface supports — built (poll / probe / rdv / channel / lemma) and sketched (quorum, weighted, quadratic, delegation, sortition, consent, conviction), each mapped to a primitive |
 | `RhoQuDemo.md` | End-user walkthrough of `/rhoqu` — atomic swap with conditional accept, dining philosophers, multisig with persistence |
-| `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect, onPeerJoined/Left |
+| `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect + `wake()`, onPeerJoined/Left/ChannelOpen |
+| `scripts/qos-cli/agent.mjs` | Generalized room-agent daemon — roles, duties, lead election, trust standing, advisor wiring, commands (ask/optimize/trust/off/on). `facilitator.mjs` is a shim |
+| `scripts/qos-cli/agent-roles.mjs` | Role registry (facilitator/scribe/greeter/skeptic) — `resolveRole`/`dutiesOf`; add a role here |
+| `scripts/qos-cli/facilitator-advisor.mjs` | AI advisor `makeAdvisor` — backends `api`/`claude-code`, modes ask/stimulate/synthesize/optimize, per-role persona |
+| `scripts/qos-cli/gov.mjs` | Port of `gov.ts` `trustLevels`/`discreditedMembers` so an agent computes its own trust standing |
+| `scripts/qos-cli/qospeer.mjs` | Node `QOSPeer` transport (werift+ws) + 30s signaling keepalive; shared by agents + the memory daemon |
+| `scripts/qos-cli/optimize-demo.mjs` | Runnable collective-optimization demo (room session on TSP → optimum); see `Collective_Optimization.md` |
 | `packages/browser/src/zfa.ts` | Browser-side ZFA helpers (validateCapability, twistStats, …) |
 | `packages/browser/index.html` | Layout, CSS, sidebar structure |
 | `packages/signaling/src/server.ts` | Signaling relay, rate limiting, relay auth |
