@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 
 ROOM="${1:-cap:room:05214747236101414325074505234721}"
 shift || true
-ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic)
+ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic greeter)
 
 command -v node >/dev/null || { echo "node not found — install Node 18+."; exit 1; }
 [ -d node_modules ] || { echo "Run 'npm install' in scripts/qos-cli first."; exit 1; }
