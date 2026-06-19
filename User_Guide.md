@@ -44,7 +44,9 @@ Use the lightest process that fits:
 - a formal group issue + weighted vote → `/gov issue`, then `/gov vote`
 
 → **[Group Decisions](Group_Decisions.md)** (the whole family, and when to use each) ·
-**[Consensus](Consensus.md)** (the `/probe` protocol and its threat model).
+**[Consensus](Consensus.md)** (the `/probe` protocol and its threat model) ·
+**[Collective Optimization](Collective_Optimization.md)** (running these as an annealing loop to
+*optimize*, not just decide — with a runnable [demo](OptimizationDemo.md)).
 
 ## 5. Record the decision
 A decision only outlives the session if it's written down: `/lemma <statement>` mints it;
