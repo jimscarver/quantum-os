@@ -159,6 +159,16 @@ The loopback test spins an in-process signaling relay and two peers that
 connect and exchange a chat — exercising the full handshake + data channel
 locally (needs `ws` + `werift`).
 
+```bash
+node optimize-demo.mjs   # collective-annealing demo on a classic problem (TSP)
+```
+
+Runs the collective-optimization loop (generate → score → anneal → converge) on a
+small Travelling Salesman instance and checks the result against the brute-force
+optimum — the same loop a room runs collectively. No deps. See
+[`OptimizationDemo.md`](../../OptimizationDemo.md) and
+[`Collective_Optimization.md`](../../Collective_Optimization.md).
+
 ## Verified
 
 - **Offline:** ZFA layer, dyncap sign/verify, and `loopback.mjs` (werift↔werift
