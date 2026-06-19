@@ -51,11 +51,31 @@ no preamble. You know:
 
 Answer only the question asked. If you don't know, say so briefly.`;
 
+// `/<cmd> optimize` — facilitate a collective-optimization round (the room as a
+// quantum-annealing-style optimizer; see Collective_Optimization.md).
+const optimizeKnowledge = (cmd) => `You are facilitating a COLLECTIVE-OPTIMIZATION round in a small
+collaborative QuantumOS chat room — the room as a quantum-annealing-style optimizer. The loop is:
+frame → generate candidates → score (cheap, trust-weighted) → select & anneal (narrow each round) →
+converge. Given the problem and the recent discussion, reply with three short parts, plainly and with
+no preamble:
+1. OBJECTIVE — restate the goal + key constraints in one line.
+2. CANDIDATES — propose 2 to 4 concrete candidate solutions, ONE LINE EACH; OR, if candidates are
+   already on the table in the discussion, refine/combine the leading ones (explore wide early,
+   sharpen the leaders later — that narrowing IS the annealing). Keep them compact.
+3. NEXT — suggest the single next step to score them: usually \`/estimate <metric>\` for a number
+   (cost, value, risk, story points) or \`/poll\` (approval or ranked) for preference; then \`/probe\`
+   to confirm convergence and \`/lemma\`+\`/persist\` to record the winner.
+Be brief and concrete. This is a metaheuristic — aim for a strong solution, not a proof of optimality.`;
+
 const transcriptText = (transcript) =>
   (transcript || []).map((m) => `${m.name}: ${m.text}`).join("\n").slice(-3000);
 
 function userPrompt(mode, ctx) {
   const t = transcriptText(ctx.transcript);
+  if (mode === "optimize") {
+    const ctxLine = t ? `\n\nRecent discussion (candidates / scores so far):\n${t}` : "";
+    return `Optimization problem: "${ctx.problem}"${ctxLine}\n\nFacilitate the next step of the round.`;
+  }
   if (mode === "ask") {
     const ctxLine = t ? `\n\nRecent room context (for reference):\n${t}` : "";
     return `A participant asks: "${ctx.question}"${ctxLine}\n\nAnswer briefly.`;
@@ -96,7 +116,12 @@ function callClaudeCLI({ claudeBin, model, system, prompt, log, timeoutMs = 45_0
 export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.ANTHROPIC_API_KEY, model = null, claudeBin = "claude", persona = null, cmd = "facil", roleName = "facilitator", log = () => {} } = {}) {
   backend = (backend === "cli" || backend === "claude") ? "claude-code" : (backend || "api");
   // System prompt = role persona (or the facilitator default) + shared norms/knowledge.
-  const sysFor = (mode) => { const who = persona || DEFAULT_PERSONA; return mode === "ask" ? `${who}\n\n${askKnowledge(cmd)}` : `${who}\n\n${NUDGE_NORMS}`; };
+  const sysFor = (mode) => {
+    const who = persona || DEFAULT_PERSONA;
+    if (mode === "ask") return `${who}\n\n${askKnowledge(cmd)}`;
+    if (mode === "optimize") return `${who}\n\n${optimizeKnowledge(cmd)}`;
+    return `${who}\n\n${NUDGE_NORMS}`;
+  };
   const apiModel = model || "claude-haiku-4-5-20251001";    // api backend default
   const cliModel = model || null;                            // claude-code: null = CLI's own default
   let enabled, label;
@@ -112,7 +137,7 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
       if (!enabled) return null;
       const system = sysFor(mode);
       const prompt = userPrompt(mode, ctx);
-      const max_tokens = mode === "ask" ? 256 : 160;
+      const max_tokens = mode === "optimize" ? 400 : mode === "ask" ? 256 : 160;
       let text = null;
       if (backend === "claude-code") {
         text = await callClaudeCLI({ claudeBin, model: cliModel, system, prompt, log });
@@ -129,7 +154,7 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
         } catch (e) { log(`[facil] advisor error: ${e?.message ?? e}`); return null; }
       }
       if (!text || /^NONE\b/i.test(text)) return null;
-      return text.slice(0, mode === "ask" ? 700 : 400);   // ask answers may be a few sentences; nudges stay terse
+      return text.slice(0, mode === "optimize" ? 1400 : mode === "ask" ? 700 : 400);   // optimize is a 3-part round; ask a few sentences; nudges terse
     },
   };
 }
