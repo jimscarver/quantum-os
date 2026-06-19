@@ -40,8 +40,8 @@ export class QOSPeer {
   // cap, and resets to 3s once a connection opens cleanly. Prevents a tab that
   // keeps getting dropped (e.g. background-throttled, killed by the server
   // heartbeat) from hammering the signaling server every few seconds.
-  private _reconnectDelay = 3000;
-  private static readonly RECONNECT_MIN = 3000;
+  private _reconnectDelay = 1500;
+  private static readonly RECONNECT_MIN = 1500;   // fast first retry; backoff still protects the server on sustained failure
   private static readonly RECONNECT_MAX = 30000;
   // Live-call media: the local mic/cam stream shared into all connections, and a
   // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
@@ -112,6 +112,9 @@ export class QOSPeer {
       this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
     }
   }
+
+  /// Whether the signaling WebSocket is currently open (used to label connection status).
+  isSignalingUp(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
 
   /// Send data to a specific peer via their data channel.
   send(targetPeerId: string, data: unknown): boolean {
