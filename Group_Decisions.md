@@ -8,6 +8,8 @@ This is a vision/map doc. For the built poll mechanics see `CLAUDE.md` (the
 *Group polls* section); for the consensus probe see [`Consensus.md`](Consensus.md).
 For the *composition and closure-quality* side — room roles, the closure checklist, and how a
 room reaches a good decision without groupthink — see [`Room_Best_Practices.md`](Room_Best_Practices.md).
+To chain these tools into an annealing loop and *optimize* (not just decide), see
+[`Collective_Optimization.md`](Collective_Optimization.md).
 
 ---
 
