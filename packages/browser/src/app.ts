@@ -711,6 +711,13 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
                          : "#555";
 }
 
+// "connected · N peers" — the live count lets you watch peers drop and reconnect
+// (e.g. after a tab switch) instead of a static "connected".
+function connectedLabel(): string {
+  const n = peers.size;
+  return `connected · ${n} peer${n === 1 ? "" : "s"}`;
+}
+
 function renderChatLine(line: ChatLine): void {
   const div = document.createElement("div");
   div.className = `msg${line.kind === "system" ? " system-line" : ""}`;
@@ -1010,6 +1017,9 @@ function insertRef(ref: string): void {
 function renderPeers(): void {
   if (!isUiActive()) return;
   peerCount.textContent = String(peers.size);
+  // Keep the connection status' peer count live, so peers visibly drop and return
+  // (only while signaling is up — don't clobber a real "reconnecting…").
+  if (qpeer?.isSignalingUp()) setStatus("connected", connectedLabel());
   peerList.innerHTML = "";
   if (qpeer) {
     const li = document.createElement("li");
@@ -3413,7 +3423,7 @@ function connect(): void {
     onSignalingOpen() {
       const prev = activeRoom; setActiveRoom(ctx);
       try {
-        setStatus("connected", `connected · ${signalingUrl}`);
+        setStatus("connected", connectedLabel());
         if (isUiActive()) {
           msgInput.disabled = false;
           sendBtn.disabled = false;
@@ -6196,7 +6206,16 @@ async function init(): Promise<void> {
   // keepalive (peers drop) and clamps our reconnect timer (they return only slowly).
   // Kick every room's signaling the instant the tab is visible / focused / back
   // online, so peers reconnect immediately instead of "eventually".
-  const wakeAllRooms = (): void => { for (const ctx of rooms.values()) ctx.qpeer?.wake(); };
+  const wakeAllRooms = (): void => {
+    for (const ctx of rooms.values()) ctx.qpeer?.wake();
+    // Flash "reconnecting…" so the recovery is visible; renderPeers / onSignalingOpen
+    // restore "connected · N peers" as channels reopen (guarded so a real signaling
+    // drop isn't masked, and the fallback only clears once signaling is actually up).
+    if (qpeer?.isSignalingUp()) {
+      setStatus("connecting", "reconnecting…");
+      setTimeout(() => { if (qpeer?.isSignalingUp()) setStatus("connected", connectedLabel()); }, 2500);
+    }
+  };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") wakeAllRooms(); });
   window.addEventListener("pageshow", wakeAllRooms);
   window.addEventListener("focus", wakeAllRooms);
