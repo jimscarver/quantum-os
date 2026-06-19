@@ -95,6 +95,24 @@ export class QOSPeer {
     this.disconnectTimers.clear();
   }
 
+  /// Recover promptly after a background-throttled / frozen tab returns to the
+  /// foreground. Browsers throttle hidden tabs (starving WebRTC consent-freshness)
+  /// and clamp our reconnect setTimeout, so peers drop and come back only slowly.
+  /// Called from a visibilitychange/focus handler: if signaling is dead, reconnect
+  /// NOW (cancel the throttled backoff and reset it); if it's alive, re-join so the
+  /// server re-sends the peer list and we re-establish any channels that lapsed.
+  wake(): void {
+    if (this._disconnected) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+      this._reconnectDelay = QOSPeer.RECONNECT_MIN;        // reset backoff — we're foreground again
+      void this._reconnectSignaling();
+    } else if (ws.readyState === WebSocket.OPEN) {
+      this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
+    }
+  }
+
   /// Send data to a specific peer via their data channel.
   send(targetPeerId: string, data: unknown): boolean {
     const ch = this.channels.get(targetPeerId);

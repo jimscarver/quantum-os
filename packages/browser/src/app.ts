@@ -6192,6 +6192,16 @@ async function init(): Promise<void> {
   setActiveRoom(firstRoom);
   uiActiveRoom = firstRoom;
 
+  // Background tabs get throttled/frozen by the browser, which starves WebRTC's
+  // keepalive (peers drop) and clamps our reconnect timer (they return only slowly).
+  // Kick every room's signaling the instant the tab is visible / focused / back
+  // online, so peers reconnect immediately instead of "eventually".
+  const wakeAllRooms = (): void => { for (const ctx of rooms.values()) ctx.qpeer?.wake(); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") wakeAllRooms(); });
+  window.addEventListener("pageshow", wakeAllRooms);
+  window.addEventListener("focus", wakeAllRooms);
+  window.addEventListener("online", wakeAllRooms);
+
   // Restore saved name
   myNameEl.value = myName;
   myNameEl.addEventListener("input", () => {
