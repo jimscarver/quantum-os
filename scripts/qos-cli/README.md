@@ -240,7 +240,10 @@ Agents are **rated/governed, not raters** — they don't autonomously `/gov trus
 **Telling it's there / commands.** Because it's mostly silent, say `/facil` (or
 "anyone here?", or just "hi") and it replies — that's how you confirm it's
 present. `/facil help` lists what it does; `/facil ask <question>` gets a brief AI
-answer about the room, facilitation, or decisions (needs `--ai`); `/facil off` /
+answer about the room, facilitation, or decisions (needs `--ai`); `/facil optimize
+<objective + constraints>` facilitates an annealing-style optimization round —
+proposes candidates and the next `/estimate`/`/poll` step (needs `--ai`; see
+[`Collective_Optimization.md`](../../Collective_Optimization.md)); `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 

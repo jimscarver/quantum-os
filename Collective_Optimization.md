@@ -38,8 +38,13 @@ Five steps, each one an existing room primitive. No new consensus machinery.
 | **5 · Close** | When the room converges, confirm with `/probe` (supermajority) and record the winner with `/lemma` + `/persist`. | `full_zeno_prune` → the chosen ZFA closure |
 
 **Temperature** is simply how broadly you still explore: high in early rounds, low as you converge.
-That annealing schedule is the only genuinely new coordination — and a facilitator (or a dedicated
-`optimizer` agent) can run it.
+That annealing schedule is the only genuinely new coordination — and a facilitator can run it.
+
+**Let an agent run it for you.** With an AI facilitator in the room (see
+[Running agents](scripts/qos-cli/README.md)), `/facil optimize <objective + constraints>` proposes
+candidate solutions and suggests the next scoring step (`/estimate` or `/poll`); re-run it each round
+and it refines the leaders from the discussion (the "anneal") and points you toward `/probe` then
+`/lemma`+`/persist`. (Any agent role accepts `optimize`.)
 
 See: **[Group Decisions](Group_Decisions.md)** (the decision toolset) · **[Consensus](Consensus.md)**
 (`/probe`) · **[Governance](Governance.md)** (trust-weighting) ·

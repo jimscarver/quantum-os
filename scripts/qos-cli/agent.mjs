@@ -118,6 +118,7 @@ export async function run(args) {
   const aliasAlt = aliases.map(escapeRe).join("|");
   const cmdRe = new RegExp(`^/(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
   const askStripRe = new RegExp(`^/(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
+  const optStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
   const bareNameRe = new RegExp(`^(?:${aliasAlt})\\??$`, "i");
   const anyoneHereRe = new RegExp(`\\b(any\\s?(one|body)|${aliasAlt})\\b[^?]*\\b(here|there|around|online|present|listening)\\b\\??`, "i");
   const greetingRe = /^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/;
@@ -283,7 +284,7 @@ export async function run(args) {
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
   const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing. About this room: ${ABOUT_URL}`;
   // Self-introduce to a newly-identified human peer, once per peer per run (direct
@@ -302,6 +303,18 @@ export async function run(args) {
     const text = await advisor.advise("ask", { question: q, transcript: recentMsgs.slice(-12).map((mm) => ({ name: mm.name, text: mm.text })) });
     reply(text || `Hmm, I don't have a good answer to that one. \`/${CMD} help\` for what I can do.`, null, 0);
   }
+  // Facilitate one step of a collective-optimization round (the room as a quantum-
+  // annealing-style optimizer). Stateless: re-reads the recent discussion each call,
+  // proposes/refines candidates, and suggests the next scoring step (/estimate or
+  // /poll → /probe → /lemma). See Collective_Optimization.md.
+  async function handleOptimize(problem) {
+    if (!problem) { reply(`Give me something to optimize — \`/${CMD} optimize <objective + constraints>\` (e.g. "pick a sprint plan: ship auth in 2 weeks, 2 engineers"). I'll propose candidates and a way to score them.`, "opthelp", 12_000); return; }
+    if (!advisor.enabled) { reply(`I'd need AI mode for that — start me with \`--ai\` (\`--ai-backend claude-code\` for a Claude subscription, or set \`ANTHROPIC_API_KEY\`). For now, \`/${CMD} help\`.`, "optnoai", 20_000); return; }
+    if (!cooled("optimize", 6_000)) return;
+    cooldown.set("optimize", Date.now());
+    const text = await advisor.advise("optimize", { problem, transcript: recentMsgs.slice(-16).map((mm) => ({ name: mm.name, text: mm.text })) });
+    reply(text || `Hmm, I couldn't frame that one. Try \`/${CMD} optimize <objective + constraints>\`.`, null, 0);
+  }
   function handleCommand(text) {
     const raw = String(text ?? "").trim();
     const lc = raw.toLowerCase();
@@ -313,6 +326,7 @@ export async function run(args) {
       if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText(), "agstatus", 20_000); return true; }
       if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
       if (sub === "ask") { handleAsk(raw.replace(askStripRe, "").trim()); return true; }
+      if (sub === "optimize" || sub === "opt") { handleOptimize(raw.replace(optStripRe, "").trim()); return true; }
       reply(helpText(), "aghelp", 25_000); return true;
     }
     if (bareNameRe.test(lc) || anyoneHereRe.test(lc)) { reply(statusText(), "agstatus", 20_000); return true; }
