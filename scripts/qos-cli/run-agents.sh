@@ -29,7 +29,7 @@ for role in "${ROLES[@]}"; do
     --state "./.qos-$role" >> ".agents/$role.log" 2>&1 &
   echo $! > "$pidf"
   echo "✓ started $role (pid $!) → scripts/qos-cli/.agents/$role.log"
-  sleep 1
+  sleep 3   # stagger joins so the burst doesn't trip the free signaling server's rate limit
 done
 
 # Memory daemon — persists lemmas / gov and re-serves them to joiners, so room
@@ -40,6 +40,7 @@ if [ -z "${NO_MEMORY:-}" ]; then
   if [ -f "$mpidf" ] && kill -0 "$(cat "$mpidf")" 2>/dev/null; then
     echo "• memory already running (pid $(cat "$mpidf"))"
   else
+    sleep 3   # let the role agents settle before the memory daemon joins
     nohup node qos-daemon.mjs --room "$ROOM" --name memory --state ./.qos-memory \
       >> ".agents/memory.log" 2>&1 &
     echo $! > "$mpidf"
