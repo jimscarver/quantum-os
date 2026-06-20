@@ -13,7 +13,9 @@ cd "$(dirname "$0")"
 
 ROOM="${1:-cap:room:05214747236101414325074505234721}"
 shift || true
-ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic greeter)
+# Default roles: facilitator greets newcomers ("hi") and requests a name itself, so
+# no separate greeter is needed. Pass roles explicitly to override (e.g. add greeter).
+ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic)
 
 command -v node >/dev/null || { echo "node not found — install Node 18+."; exit 1; }
 [ -d node_modules ] || { echo "Run 'npm install' in scripts/qos-cli first."; exit 1; }

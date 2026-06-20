@@ -328,6 +328,7 @@
 
     /* Live call */
     .call-bar { border-bottom:1px solid #1a1a1a; background:#0a0f0f; padding:0.6rem 1rem; display:flex; flex-direction:column; gap:0.5rem; }
+    .call-bar[hidden] { display:none; }   /* `display:flex` above otherwise overrides the [hidden] attribute */
     .call-tiles { display:flex; flex-wrap:wrap; gap:0.5rem; }
     .call-tile { position:relative; width:160px; height:120px; background:#000; border:1px solid #234; border-radius:6px; overflow:hidden; }
     .call-tile video { width:100%; height:100%; object-fit:cover; background:#000; }
