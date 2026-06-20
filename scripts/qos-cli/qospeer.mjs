@@ -188,6 +188,22 @@ export class QOSPeer {
   }
 
   async _handleOffer(fromId, sdp) {
+    // Renegotiation on a LIVE connection — e.g. a browser peer started a call and
+    // added mic/cam, re-offering on the existing connection. Answer on the existing
+    // pc; NEVER tear down a working data channel (the old bug: `_newPC` closes it,
+    // so starting a call dropped every agent). Data-only node peers just answer
+    // without media; if werift can't renegotiate (glare/unsupported), keep the
+    // channel and ignore the offer rather than dropping the peer.
+    const existing = this.connections.get(fromId);
+    if (existing && this.channels.get(fromId)?.readyState === "open") {
+      try {
+        await existing.setRemoteDescription({ type: "offer", sdp });
+        const answer = await existing.createAnswer();
+        await existing.setLocalDescription(answer);
+        this._signal({ type: "answer", roomId: this.config.roomId, from: this.peerId, to: fromId, sdp: existing.localDescription?.sdp ?? answer.sdp });
+      } catch (e) { this.config.onError?.(e); }
+      return;
+    }
     const pc = this._newPC(fromId);
     if (pc.onDataChannel?.subscribe) pc.onDataChannel.subscribe((ch) => this._setupChannel(fromId, ch));
     else pc.ondatachannel = (ev) => this._setupChannel(fromId, ev.channel);

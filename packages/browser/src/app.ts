@@ -6134,6 +6134,11 @@ function removeTile(key: string): void {
 }
 
 function addRemoteStream(peerId: string, stream: MediaStream): void {
+  // Ignore media from AI agents (data-only peers). They don't really stream — werift
+  // loops our own audio back, which (a) plays as a strong echo when you're "alone" in
+  // a call and (b) spuriously raises the call bar so the Leave button is always up.
+  // Humans only.
+  if (peerAgents.has(peerId)) return;
   let v = callTiles.get(peerId);
   if (!v) v = makeTile(peerId, peerLabel(peerId));
   if (v.srcObject !== stream) v.srcObject = stream;
