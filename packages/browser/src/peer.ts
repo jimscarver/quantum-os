@@ -37,6 +37,11 @@ export class QOSPeer {
   private _disconnected = false;   // true after explicit disconnect()
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _stableTimer: ReturnType<typeof setTimeout> | null = null;
+  // Peers that are data-only (AI agents): never push call media to them. They have no
+  // speaker/headset, can echo our audio back through their WebRTC stack, and the call
+  // renegotiation needlessly churns their connection. Populated by the app from its
+  // agent map.
+  readonly dataOnly = new Set<string>();
   // Reconnect backoff: doubles on each failed attempt up to a cap, with ±50% jitter
   // (so concurrent peers/tabs desync instead of retrying in lock-step). The free
   // signaling server rate-limits; a fixed/instant retry makes a dropped tab re-hammer
@@ -147,6 +152,7 @@ export class QOSPeer {
   addLocalMedia(stream: MediaStream): void {
     this.localStream = stream;
     for (const [peerId, pc] of this.connections) {
+      if (this.dataOnly.has(peerId)) continue;   // agents never get call media
       for (const track of stream.getTracks()) {
         if (!pc.getSenders().some((s) => s.track === track)) pc.addTrack(track, stream);
       }
@@ -415,8 +421,9 @@ export class QOSPeer {
       this.channels.set(peerId, ch);
       this.config.onChannelOpen?.(peerId);
       console.log(`[qos-peer] data channel open with ${peerId}`);
-      // If a call is already in progress, push our media to the newcomer.
-      if (this.localStream) {
+      // If a call is already in progress, push our media to the newcomer (but never
+      // to data-only agents — they'd echo it back and churn on the renegotiation).
+      if (this.localStream && !this.dataOnly.has(peerId)) {
         const pc = this.connections.get(peerId);
         if (pc) {
           for (const t of this.localStream.getTracks()) {

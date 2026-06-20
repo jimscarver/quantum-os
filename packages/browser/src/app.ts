@@ -3478,7 +3478,8 @@ function connect(): void {
           if (status.startsWith("  · refused")) return;
           const nm = String(d.name ?? "");
           peerNames.set(from, nm);
-          if (typeof d.agent === "string" && d.agent.trim()) peerAgents.set(from, d.agent.trim()); else peerAgents.delete(from);
+          if (typeof d.agent === "string" && d.agent.trim()) { peerAgents.set(from, d.agent.trim()); qpeer?.dataOnly.add(from); }
+          else { peerAgents.delete(from); qpeer?.dataOnly.delete(from); }
           renderPeers();
           if (nm.trim()) announceJoin(from);   // real name → show "<name> joined" now (else the timeout shows the id)
           if (status) addMessage("", `${peerLabel(from)} ${status.trim()}`, "system");
@@ -6145,6 +6146,11 @@ function addRemoteStream(peerId: string, stream: MediaStream): void {
   showCallBar();
 }
 
+// Always request the browser's acoustic echo canceller (+ noise suppression / auto
+// gain). `audio: true` *usually* enables AEC, but being explicit guards against a
+// driver/profile that left it off — one cause of hearing yourself.
+const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
 async function startCall(): Promise<void> {
   if (!qpeer) { addMessage("", "connect to a room before starting a call", "system"); return; }
   if (inCall) return;
@@ -6153,12 +6159,12 @@ async function startCall(): Promise<void> {
     return;
   }
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });
   } catch (videoErr) {
     // Many devices have no camera (desktops), or video is blocked while audio is
     // allowed — retry audio-only before giving up.
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
       addMessage("", "🎙 camera unavailable — starting an audio-only call", "system");
     } catch (audioErr) {
       const e = audioErr as DOMException;
