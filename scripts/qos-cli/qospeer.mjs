@@ -21,13 +21,28 @@ export class QOSPeer {
     this.channels = new Map();            // remoteId -> data channel
     this._disconnected = false;
     this._reconnectTimer = null;
+    this._reconnectAttempts = 0;
   }
 
   connect() {
     this._disconnected = false;
-    this._openSignaling().catch(() => {
-      if (!this._disconnected) this._reconnectTimer = setTimeout(() => this._reconnect(), 3000);
-    });
+    this._openSignaling().catch(() => this._scheduleReconnect());
+  }
+
+  // Reconnect with EXPONENTIAL BACKOFF + JITTER, single-flight. The free signaling
+  // server rate-limits: a fixed-interval reconnect makes N agents re-hammer it in
+  // lock-step → "rate limit exceeded" → drop → storm. Backoff (3s→6→12→24→cap 60s)
+  // gives the limit time to clear; ±50% jitter desyncs the agents so they don't all
+  // retry at once. `_reconnectAttempts` only resets once a connection stays up ≥15s
+  // (see `_openSignaling`), so a connect-then-immediately-dropped (rate-limited)
+  // cycle keeps backing off instead of resetting to 3s and storming again.
+  _scheduleReconnect() {
+    if (this._disconnected || this._reconnectTimer) return; // single-flight
+    const base = Math.min(3000 * 2 ** this._reconnectAttempts, 60000);
+    const delay = Math.round(base * (0.5 + Math.random()));
+    this._reconnectAttempts++;
+    this.config.onReconnectScheduled?.(delay);
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this._reconnect(); }, delay);
   }
 
   disconnect() {
@@ -61,6 +76,12 @@ export class QOSPeer {
       ws.on("open", () => resolve());
       ws.on("error", (e) => reject(e));
     });
+    // Only treat the connection as healthy (and reset the backoff) once it has stayed
+    // up ≥15s. A rate-limited server opens then immediately drops us; without this gate
+    // each such cycle would reset the backoff to 3s and re-storm.
+    const stableTimer = setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.OPEN) this._reconnectAttempts = 0;
+    }, 15000);
     ws.on("message", (raw) => {
       let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
       this._handleSignal(msg);
@@ -81,9 +102,10 @@ export class QOSPeer {
     }, 30000);
     ws.on("close", () => {
       clearInterval(heartbeat);
+      clearTimeout(stableTimer);
       if (this._disconnected) return;
       this.config.onSignalingClose?.();
-      this._reconnectTimer = setTimeout(() => this._reconnect(), 3000);
+      this._scheduleReconnect();
     });
     this._signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
     this.config.onSignalingOpen?.();
@@ -92,7 +114,7 @@ export class QOSPeer {
   async _reconnect() {
     if (this._disconnected) return;
     try { await this._openSignaling(); }
-    catch { this._reconnectTimer = setTimeout(() => this._reconnect(), 5000); }
+    catch { this._scheduleReconnect(); }
   }
 
   _handleSignal(msg) {

@@ -167,7 +167,8 @@ async function main() {
   const peer = new QOSPeer({
     signalingUrl: args.signal, roomId, peerId: identity.peerId,
     onSignalingOpen: () => console.log("[daemon] signaling connected; joined room"),
-    onSignalingClose: () => console.warn("[daemon] signaling dropped — reconnecting"),
+    onSignalingClose: () => console.warn("[daemon] signaling dropped"),
+    onReconnectScheduled: (ms) => console.warn(`[daemon] reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => console.log(`[daemon] peer ${id.slice(0, 12)}… joined`),
     onPeerLeft: (id) => console.log(`[daemon] peer ${id.slice(0, 12)}… left`),
     onError: (e) => console.error("[daemon]", e?.message ?? e),

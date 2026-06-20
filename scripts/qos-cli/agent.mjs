@@ -341,7 +341,8 @@ export async function run(args) {
   const peer = new QOSPeer({
     signalingUrl: args.signal, roomId, peerId: identity.peerId,
     onSignalingOpen: () => console.log(`${TAG} signaling connected; joined room`),
-    onSignalingClose: () => console.warn(`${TAG} signaling dropped — reconnecting`),
+    onSignalingClose: () => console.warn(`${TAG} signaling dropped`),
+    onReconnectScheduled: (ms) => console.warn(`${TAG} reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
     onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); },
     onError: (e) => console.error(TAG, e?.message ?? e),
