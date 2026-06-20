@@ -36,13 +36,18 @@ export class QOSPeer {
   private config: PeerConfig;
   private _disconnected = false;   // true after explicit disconnect()
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  // Reconnect backoff: starts at 3s, doubles on each sustained failure up to a
-  // cap, and resets to 3s once a connection opens cleanly. Prevents a tab that
-  // keeps getting dropped (e.g. background-throttled, killed by the server
-  // heartbeat) from hammering the signaling server every few seconds.
+  private _stableTimer: ReturnType<typeof setTimeout> | null = null;
+  // Reconnect backoff: doubles on each failed attempt up to a cap, with ±50% jitter
+  // (so concurrent peers/tabs desync instead of retrying in lock-step). The free
+  // signaling server rate-limits; a fixed/instant retry makes a dropped tab re-hammer
+  // it → "rate limit exceeded" → drop → storm. CRUCIAL: the backoff only RESETS to the
+  // floor after a connection stays up ≥ STABLE_MS — a rate-limited open-then-instant-
+  // close must keep backing off, not reset to the floor every cycle and re-storm (the
+  // old bug: resetting on `open` alone).
   private _reconnectDelay = 1500;
-  private static readonly RECONNECT_MIN = 1500;   // fast first retry; backoff still protects the server on sustained failure
+  private static readonly RECONNECT_MIN = 1500;
   private static readonly RECONNECT_MAX = 30000;
+  private static readonly STABLE_MS = 15000;   // a connection must survive this long to reset the backoff
   // Live-call media: the local mic/cam stream shared into all connections, and a
   // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
   private localStream: MediaStream | null = null;
@@ -75,17 +80,13 @@ export class QOSPeer {
     if (!validateCapability(this.config.roomId)) {
       console.warn(`[qos-peer] roomId ZFA check failed (may be cached token): ${this.config.roomId}`);
     }
-    this._openSignaling().catch(() => {
-      if (!this._disconnected) {
-        // Server unreachable (e.g. cold start) — retry same as reconnect path
-        this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
-      }
-    });
+    this._openSignaling().catch(() => this._scheduleReconnect());
   }
 
   disconnect(): void {
     this._disconnected = true;
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    if (this._stableTimer) clearTimeout(this._stableTimer);
     this.signal({ type: "leave", roomId: this.config.roomId, peerId: this.peerId });
     for (const pc of this.connections.values()) pc.close();
     this.ws?.close();
@@ -198,8 +199,13 @@ export class QOSPeer {
       ws.onerror = (e) => reject(e);
     });
 
-    // Clean open — reset the reconnect backoff.
-    this._reconnectDelay = QOSPeer.RECONNECT_MIN;
+    // Reset the backoff only once the connection PROVES stable (≥ STABLE_MS). A
+    // rate-limited server opens then immediately drops us; resetting on `open` alone
+    // would relaunch the storm at the floor delay every cycle.
+    if (this._stableTimer) clearTimeout(this._stableTimer);
+    this._stableTimer = setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.OPEN) this._reconnectDelay = QOSPeer.RECONNECT_MIN;
+    }, QOSPeer.STABLE_MS);
 
     ws.onmessage = (event) => {
       try {
@@ -211,15 +217,26 @@ export class QOSPeer {
     };
 
     ws.onclose = () => {
+      if (this._stableTimer) { clearTimeout(this._stableTimer); this._stableTimer = null; }
       if (this._disconnected) return;
-      console.warn(`[qos-peer] signaling disconnected — reconnecting in ${this._reconnectDelay / 1000}s`);
       this.config.onSignalingClose?.();
-      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
+      this._scheduleReconnect();
     };
 
     // Join the room
     this.signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
     this.config.onSignalingOpen?.();
+  }
+
+  /// Schedule a reconnect with exponential backoff + ±50% jitter, single-flight.
+  /// Grows the delay each call; the stability timer in `_openSignaling` resets it
+  /// once a connection has lasted ≥ STABLE_MS.
+  private _scheduleReconnect(): void {
+    if (this._disconnected || this._reconnectTimer) return;
+    this._reconnectDelay = Math.min(this._reconnectDelay * 2, QOSPeer.RECONNECT_MAX);
+    const delay = Math.round(this._reconnectDelay * (0.5 + Math.random()));
+    console.warn(`[qos-peer] signaling disconnected — reconnecting in ${(delay / 1000).toFixed(1)}s`);
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; void this._reconnectSignaling(); }, delay);
   }
 
   private async _reconnectSignaling(): Promise<void> {
@@ -228,9 +245,7 @@ export class QOSPeer {
       await this._openSignaling();
       console.log("[qos-peer] signaling reconnected");
     } catch {
-      this._reconnectDelay = Math.min(this._reconnectDelay * 2, QOSPeer.RECONNECT_MAX);
-      console.warn(`[qos-peer] signaling reconnect failed — retrying in ${this._reconnectDelay / 1000}s`);
-      this._reconnectTimer = setTimeout(() => this._reconnectSignaling(), this._reconnectDelay);
+      this._scheduleReconnect();
     }
   }
 
