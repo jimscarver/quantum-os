@@ -89,15 +89,17 @@ export class QOSPeer {
     // Heartbeat. The free signaling server can drop an idle/half-open socket WITHOUT a
     // clean close, which would leave us a zombie — still connected to current peers but
     // blind to every new joiner (no offer reaches us, so we never appear in their peer
-    // list and never get to greet them). Ping every 30s; if a pong hasn't arrived by the
-    // next tick, terminate so the "close" handler reconnects (which re-joins and re-fetches
-    // the peer list, reconnecting to anyone we missed).
-    let isAlive = true;
-    ws.on("pong", () => { isAlive = true; });
+    // list and never get to greet them). Ping every 30s; terminate only after TWO
+    // consecutive missed pongs (~60s of silence) so the "close" handler reconnects.
+    // Tolerating a single missed pong matters: the free server is often slow/sleepy and
+    // a one-off late pong used to false-terminate a perfectly good connection every few
+    // minutes — that was the residual leave/rejoin churn after the storm was fixed.
+    let missed = 0;
+    ws.on("pong", () => { missed = 0; });
     const heartbeat = setInterval(() => {
       if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
-      if (!isAlive) { try { ws.terminate(); } catch {} return; }
-      isAlive = false;
+      if (missed >= 2) { try { ws.terminate(); } catch {} return; }
+      missed++;
       try { ws.ping(); } catch {}
     }, 30000);
     ws.on("close", () => {
