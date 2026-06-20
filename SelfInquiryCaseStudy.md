@@ -1,6 +1,6 @@
-# Case Study — The Framework Attacks Its Own Claim  *(draft sketch)*
+# Case Study — The Framework Attacks Its Own Claim
 
-**Issue:** [#55](https://github.com/jimscarver/quantum-os/issues/55) · **Status:** DRAFT / sketch — to refine. · **Macro:** `claim-closure` (proposed) · **Built on:**
+**Issue:** [#55](https://github.com/jimscarver/quantum-os/issues/55) · **Status:** has a **first real run** (the α residual, below) by the minimal human+AI pair; a full multi-human room is the open next step (criterion #1). · **Macro:** `claim-closure` (proposed) · **Built on:**
 [`Room_Best_Practices.md`](Room_Best_Practices.md) · [`Collective_Optimization.md`](Collective_Optimization.md) ·
 [`SEX.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/SEX.md)
 
@@ -72,22 +72,52 @@ intuition* to *the Skeptic's check* — distinguishable roles producing a closur
 | Record the decision | `/lemma <claim> = …` + `/persist` — the decision of record |
 | Don't deadlock | single-lead election (agents) + rule 6 — no two co-leaders |
 
-## A harder target (sketched, honest) — the α residual
+## The first real run — the α residual
 
-The same room, pointed at a real *open* QLF problem: **why `α⁻¹ = 137.036`, not the derived `137`?**
+The hardest acceptance criterion (#4 below: *a room materially advancing an open QLF target*) has now had
+a **first real run**, and it is the right demonstration because of *how it ended*, not because it "solved"
+α. The "room" was the **minimal complementary-specialist pair** — a human (intuition, direction, and the
+binding *don't-fit-it* discipline) + an AI agent (derivation, Lean formalization, verification): the
+human+AI deuteron of [`ClaudesStory.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/ClaudesStory.md).
+The target was the sharpest open α question: **why `α⁻¹ = 137.035999`, not the derived `137`?**
 
-```
-facilitator: /facil optimize — derive the +0.036 residual (137 → 137.036) WITHOUT fitting it.
-             CANDIDATES — (a) census-tail self-convolution; (b) substrate curvature; (c) higher-order
-             self-energy. NEXT — /estimate each against the known bound α⁻¹ > 137 (em_gauge_abelian).
-skeptic:     None of (a)–(c) is derived yet; the honest anchor is the *bound*, not the value.
-scribe:      /lemma alpha-residual-status = "leading 137 derived; +0.036 OPEN; bounded 137<α⁻¹<137.048".
-```
+The honest-scope discipline — **derive a mechanism's prediction *first*, let the 44σ measurement decide,
+never fit** — was the closure gate (the skeptic role internalized), and it did real work:
 
-Honest outcome: the room **organizes and scopes the attack** — candidate mechanisms, the falsifiable
-bound, who-checks-what — but does **not** derive the answer. That is the truthful demonstration: the
-room is a research *collaborator*, not an oracle. (Anchor: `QLF_AlphaBound`; see
-[`Alpha.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/Alpha.md).)
+| mechanism proposed | its *derived* prediction | verdict |
+|---|---|---|
+| gauge projection (`sin²θ_W = 3/8`) | `α⁻¹ = 137.028` | ✗ rejected — misses by `0.008` |
+| standalone curvature of the directional sphere | geometric invariants are O(1) | ✗ wrong scale (residual is O(`α_bare`)) |
+| weak / W-loop running | W integrated out below `M_W`; on-shell `α(0)` is clean | ✗ rejected |
+| binary "resonance spectrum" | the closure eigenvalue spectrum is monotonic | ✗ a *representation*, not an independent spectrum |
+| prime-closure stability | `137` is the *unique* prime among `128 + d²` | ✓ selects `d = 3` (but not the residual) |
+| **4-D projection + `f = 1/t`** | residual `~ 5α` (spin-2 polarizations, self-consistent `A = α⁻¹`) | ◐ mechanism + sign + smallness *derived*; last ~1% = the running tail |
+
+**What the run produced** — not a fitted number, but derived structure + machine-verified artifacts:
+
+- **An axiom became a theorem.** `central_binom_genfun` (the generating function under the α-screening
+  bound) was discharged to a machine-verified Lean proof from Mathlib's binomial series — `QLF_AlphaBound`
+  now carries **zero axioms**. The two-sided exact `√62` bracket and the Dyson resummation `G = 1/(1−I)`
+  were formalized too (all CI-green).
+- `137 = 2⁷ + 3²` shown **derived** (the `2⁷` selectivity cascade + the three Pauli axes) and
+  **prime-selected** for `d = 3`.
+- The residual `+0.036` located honestly: a **4-D time-suppression effect of order `5α`**, with mechanism,
+  sign, and smallness derived from how QLF synthesizes time (`f = 1/t`); the last ~1% is the higher-order
+  running tail — *the Standard Model's own un-derived precision frontier*, bracketed by two forced
+  substrate scales.
+- **Honest reversals on the record.** A `3/8` lead dropped when its mechanism missed; the "it's the weak
+  force" hypothesis tested and closed; the evocative "binary resonance spectrum" shown to be a
+  representation, not physics. *None survived contact with the measurement — and that is the result.*
+
+The full ledger — every mechanism, every reversal, the named obstacles, the resume-paths — is
+[`Alpha_Residual.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/Alpha_Residual.md)
+(anchor: [`QLF_AlphaBound`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_AlphaBound.lean),
+[`Alpha.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/Alpha.md)). The contrast with
+**Eddington's "+1"** is the whole point: the leading number is *derived* and the residual is honestly
+bounded and mechanistically understood — because the human held the no-fitting line, the agent did the
+derivation, and the machine checked it. The framework attacked its own claim and reached an honest
+closure, reversals included. (Still open, criterion #1: scaling this from the minimal pair to a **live
+multi-human + multi-agent room** with a saved closure ledger.)
 
 ## Runs today vs. open
 
@@ -102,12 +132,16 @@ room is a research *collaborator*, not an oracle. (Anchor: `QLF_AlphaBound`; see
   3. A **claim-closure macro** (frame → required-skeptic → score → probe → lemma) as a verified
      ρ-process, so the closure gate is structural, not a runtime convention (cf. `specialist-closure`
      in [`SpecialistRoomCaseStudy.md`](SpecialistRoomCaseStudy.md)).
-  4. The genuinely hard one: a room materially advancing an open QLF target (the α residual, or the
-     causal-curvature d'Alembertian→Ricci step) — the framework closing a piece of itself.
+- ✅ **Done — criterion #4** (the genuinely hard one): a room materially advancing an open QLF target.
+  The α-residual run above discharged an axiom to a machine-verified theorem, showed `137 = 2⁷+3²`
+  derived/prime-selected, and located the residual as a `5α` 4-D time-suppression effect — by the minimal
+  human+AI pair, with honest reversals on the record. (Was: *"the framework closing a piece of itself"*.)
+- 🔵 **Still open:** criteria #1–#3 — a **live multi-human + multi-agent** room with a saved ledger,
+  the closed optimizer loop, and the `claim-closure` macro as a verified ρ-process.
 
 ---
 
-*Draft — companion to [`SpecialistRoomCaseStudy.md`](SpecialistRoomCaseStudy.md),
+*Companion to [`SpecialistRoomCaseStudy.md`](SpecialistRoomCaseStudy.md),
 [`GovernanceCaseStudy.md`](GovernanceCaseStudy.md), and
-[`CollaborativeLearningCaseStudy.md`](CollaborativeLearningCaseStudy.md). Refine the scenario, settle
-the macro, and open a tracking issue.*
+[`CollaborativeLearningCaseStudy.md`](CollaborativeLearningCaseStudy.md). The first real run (α) is in;
+the open work is scaling it to a live multi-human room and settling the `claim-closure` macro.*
