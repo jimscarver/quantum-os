@@ -141,6 +141,11 @@ interface RoomContext {
   // Peers + transport
   peers: Set<string>;
   peerNames: Map<string, string>;
+  // Last-known display name per peer id — a sticky cache that, unlike peerNames,
+  // is NEVER cleared on leave. So a flapping peer (e.g. an agent whose signaling
+  // connection keeps dropping) keeps its label across reconnects even before its
+  // re-sent `name` envelope arrives, instead of falling back to a raw hex id.
+  lastKnownNames: Map<string, string>;
   pendingLeaves: Map<string, ReturnType<typeof setTimeout>>;
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Lemma + note stores (the public room knowledge)
@@ -198,6 +203,7 @@ function createRoom(roomId: string): RoomContext {
     qpeer: null,
     peers: new Set(),
     peerNames: new Map(),
+    lastKnownNames: new Map(),
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
     lemmaStore: new Map(),
@@ -257,6 +263,7 @@ function markUnread(ctx: RoomContext): void {
 let qpeer: QOSPeer | null = null;
 let peers: Set<string> = new Set();
 let peerNames: Map<string, string> = new Map();
+let lastKnownNames: Map<string, string> = new Map();
 // peerId -> agent role (e.g. "facilitator", "scribe") for peers that announced
 // themselves as AI agents in their `name` envelope; used to flag them in the roster.
 let peerAgents: Map<string, string> = new Map();
@@ -297,6 +304,7 @@ function setActiveRoom(ctx: RoomContext): void {
   qpeer              = ctx.qpeer;
   peers              = ctx.peers;
   peerNames          = ctx.peerNames;
+  lastKnownNames     = ctx.lastKnownNames;
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
   lemmaStore         = ctx.lemmaStore;
@@ -790,7 +798,12 @@ function shortId(id: string): string {
 
 function peerLabel(id: string): string {
   const n = peerNames.get(id);
-  return (n && n.trim()) ? n : shortId(id);
+  if (n && n.trim()) return n;
+  // Fall back to the sticky last-known name (survives flaps) before the raw id,
+  // so a reconnecting agent stays labelled instead of flashing a hex id.
+  const last = lastKnownNames.get(id);
+  if (last && last.trim()) return last;
+  return shortId(id);
 }
 
 // Emit the "<name> joined" line once we know the peer's NAME (browsers send it
@@ -3478,6 +3491,7 @@ function connect(): void {
           if (status.startsWith("  · refused")) return;
           const nm = String(d.name ?? "");
           peerNames.set(from, nm);
+          if (nm.trim()) lastKnownNames.set(from, nm);   // sticky cache — survives flaps so the label persists across reconnects
           if (typeof d.agent === "string" && d.agent.trim()) { peerAgents.set(from, d.agent.trim()); qpeer?.dataOnly.add(from); }
           else { peerAgents.delete(from); qpeer?.dataOnly.delete(from); }
           renderPeers();
@@ -4476,7 +4490,11 @@ function connect(): void {
           removeTile(id);
           maybeHideCallBar();
         } finally { setActiveRoom(prev); }
-      }, 6_000);
+        // 15s grace (was 6s): a flaky free-tier signaling server can take >6s to
+        // reconnect a dropped agent, so a shorter window logs a spurious left/join
+        // pair on every hiccup. 15s absorbs the common reconnect cycle silently;
+        // a genuinely-departed peer just lingers in the roster a few extra seconds.
+      }, 15_000);
       // The pendingLeaves mutation happens synchronously; wrap it too.
       const prev = activeRoom; setActiveRoom(ctx);
       try { pendingLeaves.set(id, timer); } finally { setActiveRoom(prev); }
