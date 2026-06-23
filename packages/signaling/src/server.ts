@@ -17,6 +17,10 @@ type SignalMsg =
 const RATE_LIMIT = 20;       // max messages per window per connection
 const RATE_WINDOW_MS = 1_000; // window size in ms
 
+// Build marker — surfaced at GET / so a deploy can be confirmed from outside
+// (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
+const BUILD = "2026-06-23-heartbeat-2miss";
+
 export class SignalingServer {
   private wss: WebSocketServer;
   private rooms = new Map<string, Room>();
@@ -31,7 +35,7 @@ export class SignalingServer {
     // HTTP server handles both health checks (GET /) and WS upgrades.
     const http = createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", rooms: this.rooms.size }));
+      res.end(JSON.stringify({ status: "ok", build: BUILD, rooms: this.rooms.size }));
     });
     this.wss = new WebSocketServer({ server: http, maxPayload: 65_536 });
     this._http = http;
