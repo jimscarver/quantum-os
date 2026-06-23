@@ -45,23 +45,28 @@ export class SignalingServer {
       console.log(`[quantum-os signaling] listening on ws://0.0.0.0:${this.port}`);
     });
 
-    // Ping every 25s to keep Fly.io proxy from closing idle WebSocket connections.
-    // Browsers respond to protocol-level pings automatically with pongs.
+    // Ping every 30s to keep the proxy from closing idle WebSocket connections.
+    // Browsers (and the Node `ws` client) respond to protocol-level pings automatically.
+    // Terminate only after TWO consecutive missed pongs (~60s of silence), NOT one: a
+    // free/throttled host is often slow or sleepy, and a single late pong used to
+    // false-terminate a perfectly good connection — dropping every peer at once and
+    // producing the correlated join/leave churn. This mirrors the agent's own heartbeat
+    // (`qospeer.mjs`), which was hardened the same way for the same reason.
     const heartbeat = setInterval(() => {
       for (const ws of this.wss.clients) {
-        const w = ws as WebSocket & { _alive?: boolean };
-        if (w._alive === false) { w.terminate(); continue; }
-        w._alive = false;
-        w.ping();
+        const w = ws as WebSocket & { _missed?: number };
+        if ((w._missed ?? 0) >= 2) { w.terminate(); continue; }
+        w._missed = (w._missed ?? 0) + 1;
+        try { w.ping(); } catch { /* socket already closing */ }
       }
-    }, 25_000);
+    }, 30_000);
     this.wss.on("close", () => clearInterval(heartbeat));
   }
 
   private onConnect(ws: WebSocket): void {
-    const w = ws as WebSocket & { _alive?: boolean };
-    w._alive = true;
-    w.on("pong", () => { w._alive = true; });
+    const w = ws as WebSocket & { _missed?: number };
+    w._missed = 0;
+    w.on("pong", () => { w._missed = 0; });
 
     this.rateMap.set(ws, { count: 0, windowStart: Date.now() });
 
