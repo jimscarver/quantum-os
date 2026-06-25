@@ -42,6 +42,7 @@ Use the lightest process that fits:
 - agree a number (estimate, budget, points) → `/estimate`
 - *"are we actually agreed?"* on join → `/probe` (chain-weighted supermajority; losing peers are ignored for sync, not overruled)
 - a formal group issue + weighted vote → `/gov issue`, then `/gov vote`
+- a hard topic that needs structure → **`/facil chair <topic>`**: an AI facilitator chairs the room through **define → alternatives → evaluate → disagreements → agreements → closure** as the *single neutral leader* (best practice: one leader, never a computer *and* a human leader at once), and records a decision of record at the end. Steer it with `/facil next`/`back`/`close`/`cancel`.
 
 → **[Group Decisions](Group_Decisions.md)** (the whole family, and when to use each) ·
 **[Consensus](Consensus.md)** (the `/probe` protocol and its threat model).
