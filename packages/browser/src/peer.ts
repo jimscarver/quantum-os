@@ -200,9 +200,23 @@ export class QOSPeer {
     const ws = new WebSocket(this.config.signalingUrl);
     this.ws = ws;
 
+    // CONNECT-TIMEOUT WATCHDOG. A hung/half-open signaling socket can fire NEITHER
+    // `onopen` NOR `onerror`: the server accepts the TCP then never completes the WS
+    // handshake (e.g. a free-tier signaling server that died mid-flight). Without a
+    // bound this connect promise never settles, so `_openSignaling` hangs forever and
+    // the peer wedges — alive but permanently disconnected, never rescheduling a
+    // reconnect (the post-open heartbeat cannot help, because `onopen` never fired).
+    // Bound the handshake: if `onopen` hasn't arrived within CONNECT_TIMEOUT_MS, close
+    // the socket and reject so the caller (`connect`/`_reconnectSignaling`) reschedules
+    // with backoff. Self-heals the wedge a hard signaling-server drop used to cause.
+    const CONNECT_TIMEOUT_MS = 20000;
     await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve();
-      ws.onerror = (e) => reject(e);
+      const t = setTimeout(() => {
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error("signaling connect timeout"));
+      }, CONNECT_TIMEOUT_MS);
+      ws.onopen = () => { clearTimeout(t); resolve(); };
+      ws.onerror = (e) => { clearTimeout(t); reject(e); };
     });
 
     // Reset the backoff only once the connection PROVES stable (≥ STABLE_MS). A
