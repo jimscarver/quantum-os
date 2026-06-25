@@ -345,7 +345,7 @@ export async function run(args) {
     if (chair) { reply(`A deliberation is already in progress: **${chair.topic}** (phase *${chair.phase}*). \`/${CMD} status\`, \`/${CMD} next\`, \`/${CMD} close\`, or \`/${CMD} cancel\`.`, "chairbusy", 8_000); return; }
     if (!topic) { reply(`Start a facilitated deliberation — \`/${CMD} chair <topic or question>\`. I'll chair it through define → alternatives → evaluate → disagreements → agreements → closure, then record the decision. One leader (best practice): I chair, you all deliberate; \`/${CMD} next\` to move on.`, "chairhelp", 12_000); return; }
     if (!advisor.enabled) { reply(`I'd need AI mode to chair — start me with \`--ai\` (\`--ai-backend claude-code\` for a Claude subscription, or set \`ANTHROPIC_API_KEY\`).`, "chairnoai", 20_000); return; }
-    chair = { topic: topic.slice(0, 200), phaseIdx: 0, phase: PHASES[0], startedAt: Date.now(), phaseStartedAt: Date.now(), collected: Object.fromEntries(COLLECT_PHASES.map((p) => [p, []])), synthesis: {} };
+    chair = { topic: topic.slice(0, 200), phaseIdx: 0, phase: PHASES[0], startedAt: Date.now(), phaseStartedAt: Date.now(), collected: Object.fromEntries(COLLECT_PHASES.map((p) => [p, []])), synthesis: {}, busy: false };
     console.log(`${TAG} chair: started "${chair.topic}"`);
     reply(PHASE_PROMPT.define(chair.topic), null, 0);
   }
@@ -358,24 +358,38 @@ export async function run(args) {
     chair.synthesis[phase] = s;
     reply(`**${cap(phase)}** — ${s}`, null, 0);
   }
-  // Participant readiness signal → the one chair performs the transition.
+  // Participant readiness signal → the one chair performs the transition. Guarded so a
+  // fast double `/<cmd> next` (or next+close) can't race two async transitions and skip
+  // a phase: while a synthesis/closure is mid-flight (`chair.busy`), further steps wait.
+  const chairBusyReply = () => reply(`One moment — I'm still wrapping up *${chair.phase}*.`, "chairbusy2", 4_000);
   async function advanceChair() {
     if (!chair) { reply(`No deliberation in progress — start one with \`/${CMD} chair <topic>\`.`, "chairnone", 8_000); return; }
-    await synthesizePhase(chair.phase);
-    if (chair.phaseIdx >= COLLECT_PHASES.length - 1) { await closeChair(); return; }
-    chair.phaseIdx += 1; chair.phase = PHASES[chair.phaseIdx]; chair.phaseStartedAt = Date.now();
-    reply(PHASE_PROMPT[chair.phase](chair.topic), null, 0);
+    if (chair.busy) { chairBusyReply(); return; }
+    chair.busy = true;
+    try {
+      await synthesizePhase(chair.phase);
+      if (chair.phaseIdx >= COLLECT_PHASES.length - 1) { await doClose(); return; }   // chair = null after
+      chair.phaseIdx += 1; chair.phase = PHASES[chair.phaseIdx]; chair.phaseStartedAt = Date.now();
+      reply(PHASE_PROMPT[chair.phase](chair.topic), null, 0);
+    } finally { if (chair) chair.busy = false; }
   }
   function backChair() {
     if (!chair) { reply(`No deliberation in progress.`, "chairnone", 8_000); return; }
+    if (chair.busy) { chairBusyReply(); return; }
     if (chair.phaseIdx === 0) { reply(`Already at the first phase (*define*).`, "chairback", 6_000); return; }
     chair.phaseIdx -= 1; chair.phase = PHASES[chair.phaseIdx]; delete chair.synthesis[chair.phase]; chair.phaseStartedAt = Date.now();
     reply(`↩ Reopening phase *${chair.phase}*. ${PHASE_PROMPT[chair.phase](chair.topic)}`, null, 0);
   }
-  // Closure: produce a decision of record from the per-phase syntheses, post it, and
-  // persist a receipt (the ZFA-closed record of the deliberation).
   async function closeChair() {
     if (!chair) { reply(`No deliberation in progress — start one with \`/${CMD} chair <topic>\`.`, "chairnone", 8_000); return; }
+    if (chair.busy) { chairBusyReply(); return; }
+    chair.busy = true;
+    try { await doClose(); } finally { if (chair) chair.busy = false; }
+  }
+  // Closure: produce a decision of record from the per-phase syntheses, post it, and
+  // persist a receipt (the ZFA-closed record of the deliberation). Assumes chair set +
+  // busy held by the caller.
+  async function doClose() {
     const c = chair;
     // a direct `/<cmd> close` mid-phase still captures the current phase (skip if `next` already did)
     if (c.phase !== "closure" && !c.synthesis[c.phase] && (c.collected[c.phase]?.length)) await synthesizePhase(c.phase);
