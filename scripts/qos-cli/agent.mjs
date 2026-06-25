@@ -119,6 +119,7 @@ export async function run(args) {
   const cmdRe = new RegExp(`^/(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
   const askStripRe = new RegExp(`^/(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
   const optStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
+  const chairStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:chair|deliberate)\\b\\s*`, "i");
   const bareNameRe = new RegExp(`^(?:${aliasAlt})\\??$`, "i");
   const anyoneHereRe = new RegExp(`\\b(any\\s?(one|body)|${aliasAlt})\\b[^?]*\\b(here|there|around|online|present|listening)\\b\\??`, "i");
   const greetingRe = /^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/;
@@ -176,6 +177,26 @@ export async function run(args) {
   const realName = (n) => (typeof n === "string" && n.trim()) ? n.trim() : null;   // "" / blank ⇒ no name
   const nameOf = (id) => realName(peerNames.get(id)) ?? realName(known[id]?.name) ?? short(id);
   const hasName = (id) => !!(realName(peerNames.get(id)) ?? realName(known[id]?.name));
+
+  // ---- chaired deliberation (the single-leader `/<cmd> chair` mode) ----
+  // The agent becomes the ONE neutral chair of a structured deliberation and walks the
+  // room through six phases, recording a decision of record at closure. Best practice
+  // (Jim's EIES finding): exactly one leader — a computer chair *or* a human leader,
+  // never both (the two compete and stymie consensus). So when chairing, the agent IS
+  // the single leader; `/<cmd> next` is a participant *readiness signal* the chair acts
+  // on, not a second leader. Phase prompts/syntheses ride the un-throttled reply() path.
+  const PHASES = ["define", "alternatives", "evaluate", "disagreements", "agreements", "closure"];
+  const COLLECT_PHASES = PHASES.slice(0, 5);   // define..agreements gather input; closure finalizes
+  const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
+  const PHASE_PROMPT = {
+    define: (topic) => `🪑 **Deliberation: ${topic}**\nPhase 1 — *define*: what exactly are we deciding, and what's in scope? I'll chair (one leader, best practice); you all deliberate. Anyone: \`/${CMD} next\` when ready · \`/${CMD} cancel\` to stop.`,
+    alternatives: () => `Phase 2 — *alternatives*: what are the options? Put candidates on the table — no judging yet. \`/${CMD} next\` when ready.`,
+    evaluate: () => `Phase 3 — *evaluate*: weigh the options — pros, cons, and the criteria that matter. \`/${CMD} next\` when ready.`,
+    disagreements: () => `Phase 4 — *disagreements*: where do we genuinely disagree? Name the cruxes. \`/${CMD} next\` when ready.`,
+    agreements: () => `Phase 5 — *agreements*: what do we agree on? Let's converge. \`/${CMD} next\` to close and record the decision.`,
+  };
+  let chair = null;   // { topic, phaseIdx, phase, startedAt, phaseStartedAt, collected:{phase:[{name,text}]}, synthesis:{phase:str} }
+  const chairStatusSuffix = () => chair ? ` · 🪑 deliberation in progress: **${chair.topic}** (phase *${chair.phase}*, ${(chair.collected[chair.phase]?.length ?? 0)} notes) — \`/${CMD} next\` / \`/${CMD} close\` / \`/${CMD} cancel\`.` : "";
 
   // ---- trust-governed membership (PR B) ----
   // The agent is an ordinary trust-weighted member: the room governs its voice via
@@ -284,7 +305,7 @@ export async function run(args) {
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} chair <topic>\`${askHint} (chair a structured deliberation → define · alternatives · evaluate · disagreements · agreements · closure, then record the decision; \`/${CMD} next\`/\`back\`/\`close\`/\`cancel\` to steer) · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
   const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing. About this room: ${ABOUT_URL}`;
   // Self-introduce to a newly-identified human peer, once per peer per run (direct
@@ -315,6 +336,85 @@ export async function run(args) {
     const text = await advisor.advise("optimize", { problem, transcript: recentMsgs.slice(-16).map((mm) => ({ name: mm.name, text: mm.text })) });
     reply(text || `Hmm, I couldn't frame that one. Try \`/${CMD} optimize <objective + constraints>\`.`, null, 0);
   }
+
+  // Begin a chaired deliberation: the agent becomes the single neutral chair (see the
+  // chaired-deliberation note above). Walks define → alternatives → evaluate →
+  // disagreements → agreements → closure, advancing on `/<cmd> next`, and records a
+  // decision-of-record receipt at closure.
+  async function handleChair(topic) {
+    if (chair) { reply(`A deliberation is already in progress: **${chair.topic}** (phase *${chair.phase}*). \`/${CMD} status\`, \`/${CMD} next\`, \`/${CMD} close\`, or \`/${CMD} cancel\`.`, "chairbusy", 8_000); return; }
+    if (!topic) { reply(`Start a facilitated deliberation — \`/${CMD} chair <topic or question>\`. I'll chair it through define → alternatives → evaluate → disagreements → agreements → closure, then record the decision. One leader (best practice): I chair, you all deliberate; \`/${CMD} next\` to move on.`, "chairhelp", 12_000); return; }
+    if (!advisor.enabled) { reply(`I'd need AI mode to chair — start me with \`--ai\` (\`--ai-backend claude-code\` for a Claude subscription, or set \`ANTHROPIC_API_KEY\`).`, "chairnoai", 20_000); return; }
+    chair = { topic: topic.slice(0, 200), phaseIdx: 0, phase: PHASES[0], startedAt: Date.now(), phaseStartedAt: Date.now(), collected: Object.fromEntries(COLLECT_PHASES.map((p) => [p, []])), synthesis: {}, busy: false };
+    console.log(`${TAG} chair: started "${chair.topic}"`);
+    reply(PHASE_PROMPT.define(chair.topic), null, 0);
+  }
+  // Synthesize the phase being left (neutral summary), post it, and stash it for closure.
+  async function synthesizePhase(phase) {
+    const collected = chair.collected[phase] ?? [];
+    if (!collected.length) { chair.synthesis[phase] = "(nothing recorded)"; reply(`**${cap(phase)}** — nothing was recorded for this phase.`, null, 0); return; }
+    const text = await advisor.advise("chair", { phase, topic: chair.topic, transcript: collected.map((m) => ({ name: m.name, text: m.text })) });
+    const s = (text || "(no synthesis)").trim();
+    chair.synthesis[phase] = s;
+    reply(`**${cap(phase)}** — ${s}`, null, 0);
+  }
+  // Participant readiness signal → the one chair performs the transition. Guarded so a
+  // fast double `/<cmd> next` (or next+close) can't race two async transitions and skip
+  // a phase: while a synthesis/closure is mid-flight (`chair.busy`), further steps wait.
+  const chairBusyReply = () => reply(`One moment — I'm still wrapping up *${chair.phase}*.`, "chairbusy2", 4_000);
+  async function advanceChair() {
+    if (!chair) { reply(`No deliberation in progress — start one with \`/${CMD} chair <topic>\`.`, "chairnone", 8_000); return; }
+    if (chair.busy) { chairBusyReply(); return; }
+    chair.busy = true;
+    try {
+      await synthesizePhase(chair.phase);
+      if (chair.phaseIdx >= COLLECT_PHASES.length - 1) { await doClose(); return; }   // chair = null after
+      chair.phaseIdx += 1; chair.phase = PHASES[chair.phaseIdx]; chair.phaseStartedAt = Date.now();
+      reply(PHASE_PROMPT[chair.phase](chair.topic), null, 0);
+    } finally { if (chair) chair.busy = false; }
+  }
+  function backChair() {
+    if (!chair) { reply(`No deliberation in progress.`, "chairnone", 8_000); return; }
+    if (chair.busy) { chairBusyReply(); return; }
+    if (chair.phaseIdx === 0) { reply(`Already at the first phase (*define*).`, "chairback", 6_000); return; }
+    chair.phaseIdx -= 1; chair.phase = PHASES[chair.phaseIdx]; delete chair.synthesis[chair.phase]; chair.phaseStartedAt = Date.now();
+    reply(`↩ Reopening phase *${chair.phase}*. ${PHASE_PROMPT[chair.phase](chair.topic)}`, null, 0);
+  }
+  async function closeChair() {
+    if (!chair) { reply(`No deliberation in progress — start one with \`/${CMD} chair <topic>\`.`, "chairnone", 8_000); return; }
+    if (chair.busy) { chairBusyReply(); return; }
+    chair.busy = true;
+    try { await doClose(); } finally { if (chair) chair.busy = false; }
+  }
+  // Closure: produce a decision of record from the per-phase syntheses, post it, and
+  // persist a receipt (the ZFA-closed record of the deliberation). Assumes chair set +
+  // busy held by the caller.
+  async function doClose() {
+    const c = chair;
+    // a direct `/<cmd> close` mid-phase still captures the current phase (skip if `next` already did)
+    if (c.phase !== "closure" && !c.synthesis[c.phase] && (c.collected[c.phase]?.length)) await synthesizePhase(c.phase);
+    const material = COLLECT_PHASES.filter((p) => c.synthesis[p]).map((p) => `${cap(p)}: ${c.synthesis[p]}`);
+    const decisionText = await advisor.advise("chair", { phase: "closure", topic: c.topic, transcript: material.map((line) => ({ name: "", text: line })) });
+    const decision = (decisionText || "(no decision recorded — too little input)").trim();
+    c.synthesis.closure = decision;
+    const ts = Date.now();
+    const slug = c.topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "topic";
+    const receipt = { topic: c.topic, startedAt: c.startedAt, closedAt: ts, chair: identity.peerId, chairName: myName, phases: c.synthesis };
+    try {
+      const recPath = path.join(stateDir, "rooms", roomHex, "deliberations", `${ts}-${slug}.json`);
+      writeJSON(recPath, receipt);
+      const idxPath = path.join(stateDir, "rooms", roomHex, "deliberations.json");
+      const idx = readJSON(idxPath, []); idx.push({ topic: c.topic, closedAt: ts, file: `deliberations/${ts}-${slug}.json` }); writeJSON(idxPath, idx);
+      console.log(`${TAG} chair: recorded → ${recPath}`);
+    } catch (e) { console.error(`${TAG} chair: receipt write failed:`, e?.message ?? e); }
+    chair = null;
+    reply(`✅ **Decision of record — ${c.topic}**\n${decision}\n_(recorded — \`/lemma\` to enter it as a room decision of record)_`, null, 0);
+  }
+  function cancelChair() {
+    if (!chair) { reply(`No deliberation in progress.`, "chairnone", 8_000); return; }
+    const t = chair.topic; chair = null;
+    reply(`🛑 Deliberation **${t}** cancelled — nothing recorded.`, null, 0);
+  }
   function handleCommand(text) {
     const raw = String(text ?? "").trim();
     const lc = raw.toLowerCase();
@@ -323,10 +423,15 @@ export async function run(args) {
       const sub = m[1] ?? "";
       if (sub === "off" || sub === "mute" || sub === "quiet") { muted = true; reply(`Muted — I'll stay quiet. Say \`/${CMD} on\` to bring me back.`, "agmute", 0); return true; }
       if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/${CMD} help\` for what I do.`, "agmute", 0); return true; }
-      if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText(), "agstatus", 20_000); return true; }
+      if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText() + chairStatusSuffix(), "agstatus", 20_000); return true; }
       if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
       if (sub === "ask") { handleAsk(raw.replace(askStripRe, "").trim()); return true; }
       if (sub === "optimize" || sub === "opt") { handleOptimize(raw.replace(optStripRe, "").trim()); return true; }
+      if (sub === "chair" || sub === "deliberate") { handleChair(raw.replace(chairStripRe, "").trim()); return true; }
+      if (sub === "next" || sub === "advance") { advanceChair(); return true; }
+      if (sub === "back") { backChair(); return true; }
+      if (sub === "close" || sub === "decide") { closeChair(); return true; }
+      if (sub === "cancel" || sub === "abort") { cancelChair(); return true; }
       reply(helpText(), "aghelp", 25_000); return true;
     }
     if (bareNameRe.test(lc) || anyoneHereRe.test(lc)) { reply(statusText(), "agstatus", 20_000); return true; }
@@ -411,6 +516,11 @@ export async function run(args) {
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
         introduceTo(from);   // covers a human who chats before announcing a name
         if (handleCommand(d.text)) break;
+        // collect normal chat into an active chaired deliberation (skip agents + slash-commands)
+        if (chair && !isAgentPeer(from)) {
+          const txt = String(d.text ?? "");
+          if (!txt.trim().startsWith("/")) (chair.collected[chair.phase] ??= []).push({ name: nameOf(from), text: txt.slice(0, 280) });
+        }
         if (!isAgentPeer(from) && !hasName(from)) setTimeout(() => maybeNamePrompt(from), 2_000);
         checkDominator();
         break;

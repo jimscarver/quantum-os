@@ -246,9 +246,25 @@ present. `/facil help` lists what it does; `/facil ask <question>` gets a brief 
 answer about the room, facilitation, or decisions (needs `--ai`); `/facil optimize
 <objective + constraints>` facilitates an annealing-style optimization round —
 proposes candidates and the next `/estimate`/`/poll` step (needs `--ai`; see
-[`Collective_Optimization.md`](../../Collective_Optimization.md)); `/facil off` /
+[`Collective_Optimization.md`](../../Collective_Optimization.md)); `/facil chair
+<topic>` chairs a structured deliberation (needs `--ai`; see below); `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
+
+**Chaired deliberation (`/facil chair <topic>`, needs `--ai`).** The facilitator
+becomes the room's **single neutral chair** and walks the group through six phases —
+**define → alternatives → evaluate → disagreements → agreements → closure** — posting
+a short neutral synthesis at each step and recording a **decision of record** at the
+end. Steer it with `/facil next` (a *participant readiness signal* — anyone can send it;
+the one chair performs the transition), `/facil back` (reopen the previous phase),
+`/facil close` (jump to closure), and `/facil cancel`. `/facil status` shows the current
+phase. The closure receipt is written under
+`<state>/rooms/<room>/deliberations/<ts>-<slug>.json` (with a `deliberations.json`
+index); `/lemma` it to enter the decision as a room decision of record. **One leader by
+design:** Jim's EIES research found a computer leader *and* a human leader at once
+stymies consensus, so the chair is the single leader for the session — don't run it on
+top of a separately human-led topic. It follows best-practice facilitation (neutral
+framing, equal airtime, surface disagreement before converging).
 
 **Many facilitators, each speaks only for itself.** A room may have more than one
 facilitator (or none) — `/facil` is broadcast, so each present facilitator replies
@@ -271,7 +287,8 @@ Deterministic behaviours (no AI):
 **AI advisor (`--ai`, opt-in).** With `--ai`, a pluggable advisor
 ([`facilitator-advisor.mjs`](facilitator-advisor.mjs)) adds two judgment behaviours —
 *stimulate* (re-engage after a lull, invite the quieter voices) and *disagreement →
-agreement* (name the crux + a path forward) — plus the `/facil ask` answer. It is
+agreement* (name the crux + a path forward) — plus the `/facil ask`, `/facil optimize`,
+and `/facil chair` flows. It is
 **advisory only**: it proposes a nudge that the same throttle gates, and is called
 *only when a post would be allowed*, so usage stays bounded. The daemon is fully
 functional without it. Two backends (`--ai-backend`):

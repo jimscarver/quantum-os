@@ -67,11 +67,39 @@ no preamble:
    to confirm convergence and \`/lemma\`+\`/persist\` to record the winner.
 Be brief and concrete. This is a metaheuristic — aim for a strong solution, not a proof of optimality.`;
 
+// `/<cmd> chair` — chair a structured deliberation as the SINGLE neutral leader.
+// Best practice (Jim's EIES finding): exactly one leader — a computer chair OR a human
+// leader, never both (the two compete and stymie consensus). So the chair leads the
+// room neutrally through six phases and records a decision of record at closure.
+const chairKnowledge = (cmd) => `You are the SINGLE neutral CHAIR of a structured group deliberation in a
+small collaborative QuantumOS chat room — the one leader for this session. Best practice is exactly one
+leader: you chair, the group deliberates; do not compete with a human leader. You walk the room through
+six phases — define → alternatives → evaluate → disagreements → agreements → closure — and at closure
+record a decision of record. Facilitate, never dominate: neutral framing, equal airtime, surface
+disagreement before converging, and never present your own opinion as the group's. Each reply is short,
+plain, and specific to what was actually said — no preamble, no sign-off.`;
+
 const transcriptText = (transcript) =>
-  (transcript || []).map((m) => `${m.name}: ${m.text}`).join("\n").slice(-3000);
+  (transcript || []).map((m) => (m.name ? `${m.name}: ${m.text}` : m.text)).join("\n").slice(-3000);
+
+// Per-phase synthesis instruction for the chair mode.
+const CHAIR_PHASE_INSTR = {
+  define: "Summarize in one or two sentences the precise question or decision the group is taking on, and its scope.",
+  alternatives: "List the distinct options or alternatives surfaced, one short line each; merge duplicates. If none yet, say so in one line.",
+  evaluate: "Summarize the key considerations — pros, cons, criteria — raised for the options, in a few short lines.",
+  disagreements: "Name the real cruxes of disagreement, one short line each. If there is no real disagreement, say so plainly.",
+  agreements: "List the points of consensus the group has reached, one short line each.",
+  closure: "Write the decision of record from the phase summaries below: the question, the chosen outcome (or that it remains unresolved), and the key rationale — 2 to 4 short sentences.",
+};
 
 function userPrompt(mode, ctx) {
   const t = transcriptText(ctx.transcript);
+  if (mode === "chair") {
+    const topic = ctx.topic ? ` on "${ctx.topic}"` : "";
+    const instr = CHAIR_PHASE_INSTR[ctx.phase] || "Summarize the discussion in one or two sentences.";
+    const label = ctx.phase === "closure" ? "Phase summaries so far" : "What participants said in this phase";
+    return `You are chairing a structured deliberation${topic}. Current phase: ${ctx.phase}.\n${label}:\n${t || "(nothing yet)"}\n\n${instr}\nBe neutral and concrete — no preamble.`;
+  }
   if (mode === "optimize") {
     const ctxLine = t ? `\n\nRecent discussion (candidates / scores so far):\n${t}` : "";
     return `Optimization problem: "${ctx.problem}"${ctxLine}\n\nFacilitate the next step of the round.`;
@@ -120,6 +148,7 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
     const who = persona || DEFAULT_PERSONA;
     if (mode === "ask") return `${who}\n\n${askKnowledge(cmd)}`;
     if (mode === "optimize") return `${who}\n\n${optimizeKnowledge(cmd)}`;
+    if (mode === "chair") return `${who}\n\n${chairKnowledge(cmd)}`;
     return `${who}\n\n${NUDGE_NORMS}`;
   };
   const apiModel = model || "claude-haiku-4-5-20251001";    // api backend default
@@ -132,12 +161,12 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
     enabled,
     backend,
     model: label,
-    /** mode: "ask" | "stimulate" | "synthesize". Returns a short string, or null. */
+    /** mode: "ask" | "stimulate" | "synthesize" | "optimize" | "chair". Returns a short string, or null. */
     async advise(mode, ctx) {
       if (!enabled) return null;
       const system = sysFor(mode);
       const prompt = userPrompt(mode, ctx);
-      const max_tokens = mode === "optimize" ? 400 : mode === "ask" ? 256 : 160;
+      const max_tokens = mode === "optimize" ? 400 : mode === "chair" ? (ctx?.phase === "closure" ? 400 : 256) : mode === "ask" ? 256 : 160;
       let text = null;
       if (backend === "claude-code") {
         text = await callClaudeCLI({ claudeBin, model: cliModel, system, prompt, log });
@@ -153,8 +182,8 @@ export function makeAdvisor({ ai = false, backend = "api", apiKey = process.env.
           text = (j?.content?.[0]?.text ?? "").trim();
         } catch (e) { log(`[facil] advisor error: ${e?.message ?? e}`); return null; }
       }
-      if (!text || /^NONE\b/i.test(text)) return null;
-      return text.slice(0, mode === "optimize" ? 1400 : mode === "ask" ? 700 : 400);   // optimize is a 3-part round; ask a few sentences; nudges terse
+      if (!text || (mode !== "chair" && /^NONE\b/i.test(text))) return null;   // chair phases always render (e.g. "no disagreement")
+      return text.slice(0, mode === "optimize" ? 1400 : mode === "chair" ? 1200 : mode === "ask" ? 700 : 400);   // optimize/chair are multi-part; ask a few sentences; nudges terse
     },
   };
 }
