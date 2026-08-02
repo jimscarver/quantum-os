@@ -90,7 +90,7 @@ rooms/<roomhex>/lemmas.json   # { name: { twists, who, cap?, dyncap? } }
 rooms/<roomhex>/currencies.json
 rooms/<roomhex>/chains.json   # dyncap TOFU pins (fork detection survives restart)
 rooms/<roomhex>/series.json   # note terms-series { "USD~hash": { baseCurrency, termsHash, terms, issuer, dyncap? } }
-rooms/<roomhex>/groups.json   # governance groups { groupId: { members, delegations, topicDelegations, issues, treasury?, kudos? } }
+rooms/<roomhex>/groups.json   # governance groups { groupId: { members (each with anchor?), delegations, topicDelegations, issues, treasury?, kudos?, vaults? } }
 rooms/<roomhex>/retracted.json     # canonical lemma names + "group:<id>" retracted by their owner (tombstones)
 rooms/<roomhex>/transcript.jsonl   # one JSON line per inbound message
 ```
@@ -111,7 +111,11 @@ live `note-series` additionally requires the sender to be the currency's issuer
 (`group-open` / `group-member` admin-gated / `gov-delegate` self-signed /
 `group-issue` / `group-vote` / `group-meta`), and honors a creator's group
 disband (`retract` → tombstone), so groups + delegations + treasury/kudos
-currencies survive when every browser leaves. Polls and the per-group inbox
+currencies survive when every browser leaves. It also ingests **`gov-vault`**
+(a member's password-encrypted identity, keyed by a public handle) and carries
+`vaults` through `sync-gov`, so a member can recover their identity with
+`/login <handle>` after every browser has left — first-write-wins by handle,
+same-anchor overwrite, ciphertext the daemon can't read. Polls and the per-group inbox
 (`group-msg`) are ephemeral and not persisted. Held notes/receipts are never
 gossiped, so the daemon never stores private bearer value.
 

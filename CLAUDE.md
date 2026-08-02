@@ -38,6 +38,7 @@ quantum-os/
 │   │       ├── notes.ts    Promissory note primitives (mint, split, merge, parseNoteLabel, denomination)
 │   │       ├── rendezvous.ts  N-party rendezvous protocol (Proposal/Row/CommitRow types, conservationCheck, cyclicSwap)
 │   │       ├── dyncap.ts   Hash-only dynamic capabilities (sign/verify envelopes; SHA-256 only)
+│   │       ├── vault.ts    Password-encrypted identity vault (PBKDF2 → AES-GCM over the dyncap seed; /password, /login)
 │   │       ├── probe.ts    Discrepancy probe — chain-weighted supermajority tally on join
 │   │       ├── polls.ts    Group polls — pure approval + ranked-choice (IRV) tally over content-hash option ids
 │   │       ├── rhoqu.ts    RhoQu macro parser + transpiler (process / new / | / if / on / for → /command strings)
@@ -170,6 +171,12 @@ Outbound wired in: `signedBroadcast` and `signedSend` are drop-in wrappers repla
 Currently signed: `name`, `lemma`, `note-declare`, `sync-lemmas`, `sync-currencies`. `LemmaEntry` and `KnownCurrency` gained an optional `dyncap?: DyncapField` field so sync-forwarded entries carry the original author's chain step. Inner-entry verification against the original author's anchor (cross-peer lookup) is a future revision.
 
 Trust ceiling: TOFU at first contact + chain-tamper / replay / fork detection. Cannot mathematically verify the seed (hash-only). Race condition if a clone broadcasts before the real holder. Cross-room continuity not provided. See SECURITY.md for full threat enumeration.
+
+### Identity recovery (`/password` / `/login` — `vault.ts` + `app.ts` + `gov.ts`)
+
+The dyncap seed is the whole identity; `vault.ts` makes it portable without leaving the hash-only model. `encryptVault`/`decryptVault` seal `{ seed, name }` with **PBKDF2-SHA256 (210k) → AES-256-GCM**, emitting `qos-vault:v1:<salt>:<iv>:<ct>` — the app's only `crypto.subtle` AES (SHA-256 stays dyncap's). `/password` produces it (password via a masked dialog, never an inline command arg, so no secret hits the chat log / broadcast) and, for each group you're a member of, replicates it via a self-signed **`gov-vault`** envelope carried on `sync-gov` (the memory daemon persists it inside `groups.json`). `/login <handle>` fetches the ciphertext from synced group state and decrypts; a bare `/login` restores from a pasted (or this browser's saved) string. Both commands are excluded from the `qlf` broadcast.
+
+Group scoping is anchor-bound: `Member` gained `anchor`, `isMember`/`isAdmin`/`memberKeyFor` match by anchor as well as peerId, and `reconcileGroups`/`rekeyMember` (in `gov.ts`) move a returning member (recovered seed, fresh peerId) — plus every peerId-keyed reference (delegations, trust, censures, creator) — onto the live peerId, only ever on a **dyncap-verified** anchor. `Group.vaults: Record<handle, VaultRecord>` is first-write-wins by handle, overwrite only by the same anchor (publisher must be a member and `fromAnchor === vault.anchor`). Pure p2p — no server, no username registry; the daemon holds ciphertext it can't read. Confidentiality is exactly the password's strength (offline-crackable by any ciphertext holder). See SECURITY.md.
 
 ### Multi-room with per-room Markov blankets (`/room` — `app.ts`)
 

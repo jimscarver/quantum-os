@@ -17,6 +17,14 @@ details live. It doesn't repeat those docs — follow the links for depth.
 `/name <you>` sets your display name so people (and the agents) know who's talking.
 `/help` lists every command in the app.
 
+Your identity is a per-browser key, so by default clearing storage or switching
+browsers makes you a stranger. `/password` protects it with a password — and, if
+you're in a group, replicates an *encrypted* copy into the group (pure peer-to-peer,
+no server). In a new browser, rejoin the group and `/login <handle>` — or paste the
+recovery string `/password` gave you — to return as the *same* person, trust and
+roles intact. The password is the only thing that decrypts it, so choose a strong
+one. → **[Security](SECURITY.md)**
+
 ## 2. Discuss & brainstorm
 Quality closure comes from **complementary roles** — Proposer, Skeptic, Integrator,
 Evidence-keeper, Operator, Boundary-keeper — and a few turn-taking rules: don't
@@ -67,6 +75,7 @@ A decision only outlives the session if it's written down: `/lemma <statement>` 
 | To… | Use | Learn more |
 |---|---|---|
 | set your name | `/name <you>` | `/help` |
+| keep / recover your identity | `/password` · `/login <handle>` | [Security](SECURITY.md) |
 | run a good discussion | roles + turn-taking | [Room Best Practices](Room_Best_Practices.md) |
 | add an AI helper | `agent.mjs --role …` | [Agents](scripts/qos-cli/README.md) |
 | rate · delegate · hold to account | `/gov trust` · `/gov delegate` · `/gov censure` | [Governance](Governance.md) |

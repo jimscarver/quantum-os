@@ -180,9 +180,13 @@ vote, add a member / issue, set up treasury, or disband.
 
 Wire envelopes (all dyncap-signed, synced on join via `sync-gov`, tombstone-aware):
 `group-open`, `group-member` (admin-gated), `group-issue`, `group-vote`,
-`gov-delegate`, `gov-trust`, and `gov-censure` (all self-signed — only you set
-your own delegate / trust ratings / censures). Votes themselves are plain `/poll`
-envelopes. The headless memory daemon can persist `group-*` later (Phase 2).
+`gov-delegate`, `gov-trust`, `gov-censure` (all self-signed — only you set
+your own delegate / trust ratings / censures), and `gov-vault` (a member's
+password-encrypted identity for `/login <handle>` recovery — self-signed,
+first-write-wins by handle; see [Security](SECURITY.md)). Votes themselves are
+plain `/poll` envelopes. The headless memory daemon persists `group-*` and the
+member `anchor` / `vaults` fields, so membership and recovery survive when every
+browser leaves.
 
 ---
 
