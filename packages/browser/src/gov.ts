@@ -12,7 +12,19 @@
 export type Role = "admin" | "member";
 export type IssueStatus = "open" | "closed";
 
-export interface Member { peerId: string; role: Role; label: string; at: number }
+// `anchor` is the member's durable dyncap anchor (SHA-256(seed)), the identity
+// that survives across browsers — recorded so membership follows the *identity*,
+// not the ephemeral per-tab peerId. Optional for backward compatibility with
+// groups created before identity recovery; self-asserted when the member signs.
+export interface Member { peerId: string; role: Role; label: string; at: number; anchor?: string }
+
+// A member's password-encrypted identity, replicated in the group so they can
+// recover it (with the password) by rejoining the group's room in a new browser.
+// `blob` is a `qos-vault:v1:…` string (vault.ts); keyed in Group.vaults by a
+// public, user-chosen `handle` (what the recovering user types). `anchor` binds
+// the vault to the identity inside it (first-write-wins by handle, overwrite
+// only by the same anchor — the lemma squatting rule).
+export interface VaultRecord { handle: string; anchor: string; blob: string; at: number }
 export interface Delegation { delegate: string; at: number }      // delegator -> { delegate }
 export interface Issue { id: string; title: string; by: string; at: number; status: IssueStatus; pollId?: string }
 
@@ -45,6 +57,10 @@ export interface Group {
   // notes held privately by each member.
   treasury?: string;
   kudos?: string;
+  // Members' password-encrypted identities, handle -> VaultRecord, replicated so
+  // a member can recover their identity in a new browser (see VaultRecord). The
+  // ciphertext is safe to hold/serve; the password is the only decryption gate.
+  vaults?: Record<string, VaultRecord>;
   issues: Issue[];
 }
 
@@ -64,12 +80,68 @@ export function issueId(title: string): string {
   return h.toString(36);
 }
 
-export function isMember(g: Group, peerId: string): boolean { return peerId in g.members; }
-export function isAdmin(g: Group, peerId: string): boolean {
-  return peerId === g.creator || g.members[peerId]?.role === "admin";
+// Resolve an identity (a live peerId, and optionally its verified dyncap anchor)
+// to the member's map key. Prefers a direct peerId hit; falls back to matching a
+// member by durable `anchor` — so a member who recovered their identity in a new
+// browser (new peerId, same anchor) is still recognized until `rekeyMember` moves
+// their record onto the new peerId.
+export function memberKeyFor(g: Group, peerId: string, anchor?: string): string | undefined {
+  if (g.members[peerId]) return peerId;
+  if (anchor) return Object.keys(g.members).find((k) => g.members[k].anchor === anchor);
+  return undefined;
 }
-export function memberLabel(g: Group, peerId: string): string {
-  return g.members[peerId]?.label ?? peerId.slice(0, 8);
+export function isMember(g: Group, peerId: string, anchor?: string): boolean {
+  return memberKeyFor(g, peerId, anchor) !== undefined;
+}
+export function isAdmin(g: Group, peerId: string, anchor?: string): boolean {
+  if (peerId === g.creator) return true;
+  const k = memberKeyFor(g, peerId, anchor);
+  return !!k && (k === g.creator || g.members[k]?.role === "admin");
+}
+export function memberLabel(g: Group, peerId: string, anchor?: string): string {
+  const k = memberKeyFor(g, peerId, anchor);
+  return (k && g.members[k]?.label) || peerId.slice(0, 8);
+}
+
+// Move a member's record (and every peerId-keyed reference to them) onto a new
+// peerId — used when a member returns on a new browser with the same durable
+// anchor but a fresh ephemeral peerId. Deterministic; keeps delegations, trust,
+// censures, and the creator pointer consistent so vote resolution stays correct.
+export function rekeyMember(g: Group, oldId: string, newId: string): void {
+  if (oldId === newId || !g.members[oldId]) return;
+  const remap = (id: string): string => (id === oldId ? newId : id);
+
+  const m = g.members[oldId];
+  delete g.members[oldId];
+  m.peerId = newId;
+  g.members[newId] = m;
+
+  const nd: Record<string, Delegation> = {};
+  for (const [k, v] of Object.entries(g.delegations)) nd[remap(k)] = { ...v, delegate: remap(v.delegate) };
+  g.delegations = nd;
+
+  if (g.topicDelegations) {
+    for (const iss of Object.keys(g.topicDelegations)) {
+      const nt: Record<string, Delegation> = {};
+      for (const [k, v] of Object.entries(g.topicDelegations[iss])) nt[remap(k)] = { ...v, delegate: remap(v.delegate) };
+      g.topicDelegations[iss] = nt;
+    }
+  }
+
+  const remapRows = (rm?: Record<string, Record<string, number>>): Record<string, Record<string, number>> | undefined => {
+    if (!rm) return rm;
+    const out: Record<string, Record<string, number>> = {};
+    for (const [rater, row] of Object.entries(rm)) {
+      const nrow: Record<string, number> = {};
+      for (const [ratee, v] of Object.entries(row)) nrow[remap(ratee)] = v;
+      out[remap(rater)] = nrow;
+    }
+    return out;
+  };
+  g.trustRatings = remapRows(g.trustRatings);
+  g.censures = remapRows(g.censures);
+
+  if (g.creator === oldId) g.creator = newId;
 }
 export function findIssue(g: Group, id: string): Issue | undefined {
   return g.issues.find((i) => i.id === id || issueId(i.title) === id);

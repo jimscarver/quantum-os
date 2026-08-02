@@ -41,6 +41,8 @@ Lists all available commands.
 QLF slash commands:
   /help            — show this help
   /id              — your peer ID and ZFA proof
+  /password [show] — password-protect your identity → a recovery string
+  /login           — restore a former identity (recovery string + password)
   /room            — room capability token
   /cap [label]     — generate a new ZFA capability
   /grant [label]   — generate and share a ZFA capability token
@@ -80,6 +82,25 @@ and the creator closes it for a deterministic, joiner-local tally. `/estimate` a
 whale-resistant **median** group estimate (`new <q>` · `<number>` · `status` · `close`).
 See [Group_Decisions.md](Group_Decisions.md) for the full family of decision processes the
 interface supports.
+
+**Portable identity** — your identity is a hash-only **dyncap** anchor (`anchor = SHA-256(seed)`)
+that peers pin on first contact; by default the 32-byte seed lives only in this browser's storage,
+so clearing it or switching browsers makes you a stranger. `/password` fixes that: it encrypts the
+seed under a password (PBKDF2 → AES-GCM) and hands you a `qos-vault:v1:…` **recovery string** (the
+password is typed in a masked dialog — it never touches the chat log or a broadcast). `/login`
+restores that exact seed/anchor from the recovery string + password, so peers recognize you again.
+The recovery string is self-custody — no server holds it; anyone with the string *and* your password
+can restore your identity, so keep it private.
+
+**Group-scoped recovery (no string to carry, still pure p2p).** If you're in a group, `/password` also
+replicates your *encrypted* vault into it under your display-name handle — riding the same peer-to-peer
+`sync-gov` fabric as the rest of governance (the persistent memory peer holds it durably; no server, no
+username registry, and the ciphertext is useless without your password). Then in a fresh browser you just
+rejoin the group's room and run `/login <handle>` + password — the vault is fetched from whichever peers
+hold the group state and decrypted locally. Membership is bound to your durable **anchor** (not the
+per-tab peerId), so a recovered identity is re-recognized as the same member — trust, delegations, and
+role follow you. (Squatting is prevented first-write-wins by handle, overwrite only by the same identity;
+and one identity shouldn't run live in two browsers at once — it forks.)
 
 **Group governance** — `/gov` ports RChain's rgov onto quantum-os primitives:
 capability-scoped groups, issues, and **liquid democracy** (`/gov delegate` — standing,

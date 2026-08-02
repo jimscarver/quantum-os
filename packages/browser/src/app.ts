@@ -11,6 +11,7 @@ import { newProposalId, conservationCheck,
 import { newDynCapState, signEnvelope, verifyEnvelope,
          serializeState, deserializeState, serializeChain, deserializeChain,
          type DynCapState, type ChainEntry, type DyncapField, type VerifyResult } from "./dyncap.js";
+import { encryptVault, decryptVault, looksLikeVault } from "./vault.js";
 import { findDiscrepancies, losingPeersIn, normalizeValue,
          SAMPLE_SIZE, PROBE_WINDOW_MS,
          type Observation } from "./probe.js";
@@ -19,7 +20,7 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
-         type Group, type Issue, type Role } from "./gov.js";
+         rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1495,6 +1496,73 @@ function applyCommit(state: ProposalState, commitRows: CommitRow[]): boolean {
 // Slash command handler — returns collected output lines for broadcast
 // ---------------------------------------------------------------------------
 
+// A minimal modal for collecting secrets (passwords, recovery strings) WITHOUT
+// routing them through the chat input — so nothing sensitive lands in the chat
+// log, session log, input history, or a room broadcast. Self-contained inline
+// styles (no CSS-class dependency); resolves to the field values in order, or
+// null if cancelled. Password fields are masked (type=password).
+interface SecureField { label: string; type: "password" | "text" | "textarea"; placeholder?: string; value?: string }
+function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px";
+    const card = document.createElement("div");
+    card.style.cssText = "background:#1b1d23;color:#e8e8ea;border:1px solid #3a3d46;border-radius:10px;max-width:440px;width:100%;padding:18px 18px 14px;box-shadow:0 8px 40px rgba(0,0,0,.5);font:14px/1.5 system-ui,sans-serif";
+    const h = document.createElement("div");
+    h.textContent = title;
+    h.style.cssText = "font-weight:600;font-size:15px;margin-bottom:12px";
+    card.appendChild(h);
+
+    const inputs: (HTMLInputElement | HTMLTextAreaElement)[] = [];
+    for (const f of fields) {
+      const lab = document.createElement("label");
+      lab.textContent = f.label;
+      lab.style.cssText = "display:block;font-size:12px;opacity:.8;margin:8px 0 4px";
+      card.appendChild(lab);
+      const el = document.createElement(f.type === "textarea" ? "textarea" : "input") as HTMLInputElement | HTMLTextAreaElement;
+      if (f.type !== "textarea") (el as HTMLInputElement).type = f.type;
+      if (f.placeholder) el.placeholder = f.placeholder;
+      if (f.value) el.value = f.value;
+      el.style.cssText = "width:100%;box-sizing:border-box;background:#0f1013;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:8px 10px;font:13px/1.4 ui-monospace,monospace" + (f.type === "textarea" ? ";min-height:70px;resize:vertical" : "");
+      card.appendChild(el);
+      inputs.push(el);
+    }
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:14px";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
+    const okBtn = document.createElement("button");
+    okBtn.textContent = submitLabel;
+    okBtn.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(okBtn);
+    card.appendChild(btnRow);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    setTimeout(() => inputs[0]?.focus(), 0);
+
+    let done = false;
+    const close = (result: string[] | null) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(result);
+    };
+    const submit = () => close(inputs.map((el) => el.value));
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(null); }
+      else if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); submit(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    cancelBtn.addEventListener("click", () => close(null));
+    okBtn.addEventListener("click", submit);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
+  });
+}
+
 function handleCommand(raw: string): string[] {
   const parts = raw.slice(1).trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -1514,6 +1582,8 @@ function handleCommand(raw: string): string[] {
       sys("QLF slash commands:  (type /help <command> for details on one)");
       sys("  /help            — show this help");
       sys("  /id              — your peer ID and ZFA proof");
+      sys("  /password [show] — password-protect your identity (+ publish to your groups)");
+      sys("  /login [handle]  — restore a former identity (from a group, or a recovery string)");
       sys("  /cap [label]     — generate a new ZFA capability");
       sys("  /grant [label]   — generate and share a ZFA capability token");
       sys("  /zfa [token]     — validate a capability token");
@@ -3403,6 +3473,104 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "password": {
+      // Encrypt the current identity (the dyncap seed) under a password and
+      // hand back a recovery string. The password is collected via a masked
+      // dialog, never inline, so it never touches the chat log or a broadcast.
+      if (arg.trim().toLowerCase() === "show") {
+        const saved = localStorage.getItem("qos-vault");
+        if (saved) { sys("your saved recovery string (keep it private):"); sys(saved); }
+        else sys("no recovery string saved yet — run /password to create one");
+        break;
+      }
+      if (!dyncapState) { sys("identity not ready yet — try again in a moment"); break; }
+      void (async () => {
+        const res = await secureDialog("Set identity password", [
+          { label: "Password", type: "password", placeholder: "choose a strong password" },
+          { label: "Confirm password", type: "password" },
+        ], "Encrypt");
+        if (!res) { addMessage("", "password: cancelled", "system"); return; }
+        const [pw, confirm] = res;
+        if (!pw) { addMessage("", "password was empty — nothing changed", "system"); return; }
+        if (pw !== confirm) { addMessage("", "passwords did not match — nothing changed", "system"); return; }
+        if (!dyncapState) { addMessage("", "identity not ready", "system"); return; }
+        const anchor = dyncapState.anchor;
+        const plaintext = JSON.stringify({ v: 1, state: serializeState(dyncapState), name: myName });
+        const vault = await encryptVault(pw, plaintext);
+        localStorage.setItem("qos-vault", vault);
+        addMessage("", "🔐 identity encrypted. Save this recovery string to restore your identity in another browser (re-show later with /password show):", "system");
+        addMessage("", vault, "system");
+        addMessage("", "⚠ anyone with this string AND your password can become you — keep it private.", "system");
+        // Also replicate it into any group I'm a member of (pure p2p), so I can
+        // recover with just a handle + password after rejoining — no blob to carry.
+        const handle = canonHandle(myName);
+        const myGroups = [...groupStore.values()].filter((g) => isMember(g, myPeerId(), anchor));
+        if (myGroups.length && handle) {
+          const now = Date.now();
+          for (const g of myGroups) govPublishVault(g, { handle, anchor, blob: vault, at: now });
+          addMessage("", `↪ published to ${myGroups.length} group(s) as handle “${handle}”. In a new browser, join the group's room and run /login ${handle}.`, "system");
+        } else if (myGroups.length && !handle) {
+          addMessage("", "set a display name first — it's your recovery handle — then re-run /password to publish to your group(s).", "system");
+        }
+      })();
+      break;
+    }
+
+    case "login": {
+      // Restore a former identity. Two paths, both password-gated via a dialog
+      // (never inline): `/login <handle>` fetches the encrypted vault replicated
+      // in a joined group (pure p2p — no blob to carry); bare `/login` takes a
+      // pasted recovery string (or this browser's saved one). On success the
+      // dyncap seed is replaced, group membership re-linked to the restored
+      // anchor, and the identity re-announced so peers re-recognize this user.
+      const handleArg = canonHandle(arg);
+      void (async () => {
+        let groupVault: string | null = null;
+        if (handleArg) {
+          const hits: VaultRecord[] = [];
+          for (const g of groupStore.values()) { const v = g.vaults?.[handleArg]; if (v) hits.push(v); }
+          if (hits.length === 0) {
+            addMessage("", `no identity vault for handle “${handleArg}” in any joined group — join the group's room first, or paste your recovery string with a bare /login.`, "system");
+            return;
+          }
+          hits.sort((a, b) => b.at - a.at);   // newest wins if several groups hold it
+          groupVault = hits[0].blob;
+        }
+        const fields: SecureField[] = groupVault
+          ? [{ label: "Password", type: "password" }]
+          : [{ label: "Recovery string", type: "textarea", placeholder: "paste your qos-vault:v1:… string (blank = use this browser's saved one)" },
+             { label: "Password", type: "password" }];
+        const res = await secureDialog(groupVault ? `Restore identity “${handleArg}”` : "Restore identity", fields, "Restore");
+        if (!res) { addMessage("", "login: cancelled", "system"); return; }
+        const pw = groupVault ? res[0] : res[1];
+        const vault = groupVault ?? (res[0].trim() || localStorage.getItem("qos-vault") || "").trim();
+        if (!vault) { addMessage("", "no recovery string provided or saved on this browser", "system"); return; }
+        if (!looksLikeVault(vault)) { addMessage("", "that doesn't look like a qos-vault:v1:… recovery string", "system"); return; }
+        const plaintext = await decryptVault(pw, vault);
+        if (!plaintext) { addMessage("", "wrong password or corrupt recovery string", "system"); return; }
+        let parsed: { state?: string; name?: string };
+        try { parsed = JSON.parse(plaintext) as { state?: string; name?: string }; }
+        catch { addMessage("", "recovery string is corrupt", "system"); return; }
+        if (!parsed.state) { addMessage("", "recovery string is missing identity data", "system"); return; }
+        const restored = await deserializeState(parsed.state, activeRoom.roomId);
+        if (!restored) { addMessage("", "recovery string is corrupt (bad seed)", "system"); return; }
+        dyncapState = restored;
+        saveDyncap();
+        if (typeof parsed.name === "string" && parsed.name.trim()) {
+          myName = parsed.name.trim();
+          myNameEl.value = myName;
+          localStorage.setItem("qos-name", myName);
+        }
+        localStorage.setItem("qos-vault", vault); // keep it available on this browser too
+        reconcileGroups(myPeerId(), restored.anchor);   // re-link my group membership to the restored anchor
+        renderPeers();
+        if (qpeer) signedBroadcast({ kind: "name", name: myName });
+        addMessage("", `✓ identity restored — anchor ${restored.anchor.slice(0, 16)}…${myName ? ` (${myName})` : ""}`, "system");
+        addMessage("", "peers who knew this identity — and groups you belong to — will re-recognize you as it re-announces.", "system");
+      })();
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -3494,6 +3662,9 @@ function connect(): void {
           if (nm.trim()) lastKnownNames.set(from, nm);   // sticky cache — survives flaps so the label persists across reconnects
           if (typeof d.agent === "string" && d.agent.trim()) { peerAgents.set(from, d.agent.trim()); qpeer?.dataOnly.add(from); }
           else { peerAgents.delete(from); qpeer?.dataOnly.delete(from); }
+          // Stamp/reconcile this identity's anchor onto any group membership, so a
+          // member returning on a new browser (same anchor, new peerId) is re-linked.
+          reconcileGroups(from, (d.dyncap as DyncapField | undefined)?.anchor);
           renderPeers();
           if (nm.trim()) announceJoin(from);   // real name → show "<name> joined" now (else the timeout shows the id)
           if (status) addMessage("", `${peerLabel(from)} ${status.trim()}`, "system");
@@ -4334,6 +4505,28 @@ function connect(): void {
           saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
+        if (d.kind === "gov-vault") {
+          // A member publishes their own password-encrypted identity into the
+          // group so they can recover it in a new browser. Self-signed: the
+          // publisher's verified anchor must equal the vault's anchor. FWW by
+          // handle; only the same anchor may overwrite (with a newer `at`).
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const g = groupStore.get(String(d.groupId ?? ""));
+          const fromAnchor = (d.dyncap as DyncapField | undefined)?.anchor;
+          if (!g || !isMember(g, from, fromAnchor)) return;
+          const handle = canonHandle(String(d.handle ?? ""));
+          const blob = String(d.blob ?? "");
+          const anchor = String(d.anchor ?? "");
+          const at = typeof d.at === "number" ? d.at : Date.now();
+          if (!handle || anchor.length !== 64 || !looksLikeVault(blob) || fromAnchor !== anchor) return;
+          g.vaults ??= {};
+          const cur = g.vaults[handle];
+          if (cur && (cur.anchor !== anchor || at <= cur.at)) return;   // squat-proof: same-anchor, newer-only
+          g.vaults[handle] = { handle, anchor, blob, at };
+          saveGroups(); renderGroups(); refreshGroupCard(g);
+          return;
+        }
         if (d.kind === "group-issue") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -4533,7 +4726,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -4779,6 +4972,14 @@ function handleFileChunk(from: string, d: Record<string, unknown>): void {
 const CMD_HELP: Record<string, string[]> = {
   help: ["/help — list all commands.", "/help <command> — detailed help for one command (e.g. /help note)."],
   id: ["/id — show your peer ID and its ZFA proof (twist counts, spectral gap)."],
+  password: ["/password — encrypt your identity (the dyncap seed behind your anchor) under a password and get a qos-vault:v1:… recovery string.",
+             "Prompts for the password in a masked dialog — it never enters the chat. Keeps your current anchor, so restoring it elsewhere is still you.",
+             "If you're in any groups, it also replicates the encrypted vault into them (pure p2p) under your display-name handle — so you can recover with just /login <handle> after rejoining, no string to carry.",
+             "/password show — re-display the recovery string saved on this browser.",
+             "The vault is ciphertext (safe for peers to hold); only your password decrypts it. Don't run the same identity live in two browsers at once (it forks)."],
+  login: ["/login <handle> — restore a former identity from the encrypted vault replicated in a group you've rejoined (pure p2p, no blob to carry). Prompts only for the password.",
+          "/login — restore from a recovery string instead: paste your qos-vault:v1:… string (or leave blank to use this browser's saved one) + password.",
+          "On success your seed/anchor and display name are restored, your group membership is re-linked to the restored identity, and it's re-announced so peers recognize you again. Wrong password fails cleanly with no change."],
   cap: ["/cap [label] — mint a new random ZFA capability token, local only (not broadcast).", "e.g. /cap alice-read"],
   grant: ["/grant [label] — mint a ZFA capability token AND broadcast it to the room.", "e.g. /grant moderator"],
   zfa: ["/zfa <token> — validate a cap:label:hex capability; shows ZFA balance, spectral gap, twist counts."],
@@ -4831,6 +5032,8 @@ interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
   { name: "help",    template: "/help",       desc: "show all commands" },
   { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
+  { name: "password", template: "/password",  desc: "password-protect your identity (+ publish to groups)" },
+  { name: "login",   template: "/login ",     desc: "restore identity: /login <handle> (from group) or paste a string" },
   { name: "cap",     template: "/cap ",       desc: "generate a new ZFA capability" },
   { name: "grant",   template: "/grant ",     desc: "generate + share a capability token" },
   { name: "zfa",     template: "/zfa ",       desc: "validate a capability token" },
@@ -5188,7 +5391,8 @@ function mergeGroupFromSync(raw: unknown): boolean {
   const r = raw as Record<string, unknown>;
   const id = String(r.id ?? "");
   if (!id || isRetracted("group", id)) return false;
-  const inMembers = (r.members && typeof r.members === "object") ? r.members as Record<string, { peerId?: string; role?: string; label?: string; at?: number }> : {};
+  const inMembers = (r.members && typeof r.members === "object") ? r.members as Record<string, { peerId?: string; role?: string; label?: string; at?: number; anchor?: string }> : {};
+  const inVaults = (r.vaults && typeof r.vaults === "object") ? r.vaults as Record<string, { handle?: string; anchor?: string; blob?: string; at?: number }> : {};
   const inDeleg = (r.delegations && typeof r.delegations === "object") ? r.delegations as Record<string, { delegate?: string; at?: number }> : {};
   const inTopic = (r.topicDelegations && typeof r.topicDelegations === "object") ? r.topicDelegations as Record<string, Record<string, { delegate?: string; at?: number }>> : {};
   const inIssues = Array.isArray(r.issues) ? r.issues as Array<Record<string, unknown>> : [];
@@ -5196,7 +5400,9 @@ function mergeGroupFromSync(raw: unknown): boolean {
   const existing = groupStore.get(id);
   if (!existing) {
     const members: Group["members"] = {};
-    for (const [pid, m] of Object.entries(inMembers)) members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at: typeof m.at === "number" ? m.at : 0 };
+    for (const [pid, m] of Object.entries(inMembers)) members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at: typeof m.at === "number" ? m.at : 0, ...(typeof m.anchor === "string" && m.anchor.length === 64 ? { anchor: m.anchor } : {}) };
+    const vaults: NonNullable<Group["vaults"]> = {};
+    for (const [h, v] of Object.entries(inVaults)) if (typeof v.blob === "string" && looksLikeVault(v.blob) && typeof v.anchor === "string" && v.anchor.length === 64) vaults[canonHandle(String(v.handle ?? h))] = { handle: canonHandle(String(v.handle ?? h)), anchor: v.anchor, blob: v.blob, at: typeof v.at === "number" ? v.at : 0 };
     const delegations: Group["delegations"] = {};
     for (const [pid, dl] of Object.entries(inDeleg)) if (dl.delegate) delegations[pid] = { delegate: String(dl.delegate), at: typeof dl.at === "number" ? dl.at : 0 };
     const topicDelegations: NonNullable<Group["topicDelegations"]> = {};
@@ -5207,7 +5413,8 @@ function mergeGroupFromSync(raw: unknown): boolean {
       createdAt: typeof r.createdAt === "number" ? r.createdAt : 0, members, delegations,
       ...(Object.keys(topicDelegations).length ? { topicDelegations } : {}),
       ...(typeof r.treasury === "string" ? { treasury: r.treasury } : {}),
-      ...(typeof r.kudos === "string" ? { kudos: r.kudos } : {}), issues,
+      ...(typeof r.kudos === "string" ? { kudos: r.kudos } : {}),
+      ...(Object.keys(vaults).length ? { vaults } : {}), issues,
     });
     return true;
   }
@@ -5218,7 +5425,20 @@ function mergeGroupFromSync(raw: unknown): boolean {
   for (const [pid, m] of Object.entries(inMembers)) {
     const cur = existing.members[pid];
     const at = typeof m.at === "number" ? m.at : 0;
-    if (!cur || at > cur.at) { existing.members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at }; changed = true; }
+    const anchor = typeof m.anchor === "string" && m.anchor.length === 64 ? m.anchor : undefined;
+    if (!cur || at > cur.at) { existing.members[pid] = { peerId: pid, role: m.role === "admin" ? "admin" : "member", label: String(m.label ?? pid.slice(0, 8)), at, ...((anchor ?? cur?.anchor) ? { anchor: anchor ?? cur?.anchor } : {}) }; changed = true; }
+    else if (anchor && !cur.anchor) { cur.anchor = anchor; changed = true; }   // stamp a newly-learned anchor without a full replace
+  }
+  // Union vaults (LWW by `at`; same-anchor overwrite only — squat-proof).
+  for (const [h, v] of Object.entries(inVaults)) {
+    const handle = canonHandle(String(v.handle ?? h));
+    if (!handle || typeof v.blob !== "string" || !looksLikeVault(v.blob) || typeof v.anchor !== "string" || v.anchor.length !== 64) continue;
+    const at = typeof v.at === "number" ? v.at : 0;
+    existing.vaults ??= {};
+    const cur = existing.vaults[handle];
+    if (cur && (cur.anchor !== v.anchor || at <= cur.at)) continue;
+    existing.vaults[handle] = { handle, anchor: v.anchor, blob: v.blob, at };
+    changed = true;
   }
   for (const [pid, dl] of Object.entries(inDeleg)) {
     const cur = existing.delegations[pid];
@@ -5787,6 +6007,41 @@ function govSetCensure(g: Group, target: string, on: boolean): void {
   saveGroups(); renderGroups(); refreshGroupCard(g);
   signedBroadcast({ kind: "gov-censure", groupId: g.id, censurer: me, target, on });
 }
+// Normalize a recovery handle (the public label a user types to recover their
+// identity): trim, lowercase, collapse internal whitespace. Matches the memorable
+// display-name style so `/login <handle>` is forgiving.
+function canonHandle(s: string): string { return s.trim().toLowerCase().replace(/\s+/g, " "); }
+
+// Bind a verified identity (peerId + its durable dyncap anchor) to group
+// membership: stamp the anchor onto the member record, and if the anchor is
+// already a member under a DIFFERENT (stale) peerId — e.g. they recovered their
+// identity in a new browser — move that membership onto the live peerId so their
+// standing follows their identity. Only ever driven by a dyncap-verified anchor,
+// so it cannot hijack a membership without control of the seed. Returns true if
+// anything changed.
+function reconcileGroups(peerId: string, anchor?: string): boolean {
+  if (!anchor || !peerId) return false;
+  let changed = false;
+  for (const g of groupStore.values()) {
+    const cur = g.members[peerId];
+    if (cur) { if (cur.anchor !== anchor) { cur.anchor = anchor; changed = true; } continue; }
+    const oldKey = Object.keys(g.members).find((k) => g.members[k].anchor === anchor);
+    if (oldKey) { rekeyMember(g, oldKey, peerId); g.members[peerId].anchor = anchor; changed = true; }
+  }
+  if (changed) { saveGroups(); renderGroups(); }
+  return changed;
+}
+
+// Publish (or update) my password-encrypted identity into a group I'm a member
+// of, so I can recover it by rejoining. Self-signed; FWW-by-handle enforced on
+// receipt. Replicated via `gov-vault` + carried in `sync-gov`.
+function govPublishVault(g: Group, rec: VaultRecord): void {
+  g.vaults ??= {};
+  g.vaults[rec.handle] = rec;
+  saveGroups(); renderGroups(); refreshGroupCard(g);
+  signedBroadcast({ kind: "gov-vault", groupId: g.id, handle: rec.handle, anchor: rec.anchor, blob: rec.blob, at: rec.at });
+}
+
 function govNewIssue(g: Group, title: string): Issue {
   const iid = issueId(title);
   let iss = g.issues.find((i) => i.id === iid);

@@ -267,6 +267,7 @@ async function main() {
         issues: Array.isArray(raw.issues) ? raw.issues : [],
         ...(typeof raw.treasury === "string" ? { treasury: raw.treasury } : {}),
         ...(typeof raw.kudos === "string" ? { kudos: raw.kudos } : {}),
+        ...(raw.vaults && typeof raw.vaults === "object" ? { vaults: raw.vaults } : {}),
       });
       return true;
     }
@@ -287,6 +288,16 @@ async function main() {
     }
     if (typeof raw.treasury === "string" && !ex.treasury) { ex.treasury = raw.treasury; changed = true; }
     if (typeof raw.kudos === "string" && !ex.kudos) { ex.kudos = raw.kudos; changed = true; }
+    // Members' encrypted identity vaults (handle -> record). LWW by `at`, same-anchor
+    // overwrite only (squat-proof). Ciphertext only — the daemon can't decrypt it.
+    for (const [h, v] of Object.entries((raw.vaults && typeof raw.vaults === "object") ? raw.vaults : {})) {
+      if (!v || typeof v.blob !== "string" || !v.blob.startsWith("qos-vault:v1:") || typeof v.anchor !== "string" || v.anchor.length !== 64) continue;
+      const at = typeof v.at === "number" ? v.at : 0;
+      const cur = (ex.vaults ??= {})[h];
+      if (cur && (cur.anchor !== v.anchor || at <= cur.at)) continue;
+      ex.vaults[h] = { handle: String(v.handle ?? h), anchor: v.anchor, blob: v.blob, at };
+      changed = true;
+    }
     return changed;
   }
 
@@ -337,6 +348,24 @@ async function main() {
         if (iid) { g.topicDelegations ??= {}; const m = (g.topicDelegations[iid] ??= {}); if (delegate === null) delete m[delegator]; else m[delegator] = { delegate, at: 0 }; if (Object.keys(m).length === 0) delete g.topicDelegations[iid]; }
         else if (delegate === null) delete g.delegations[delegator]; else g.delegations[delegator] = { delegate, at: 0 };
         persistGroups(); break;
+      }
+      case "gov-vault": {
+        // A member replicates their password-encrypted identity into the group so
+        // they can recover it in a new browser. Self-signed: sender's verified
+        // anchor must equal the vault's anchor. FWW by handle; same-anchor newer-only.
+        const g = groups.get(String(d.groupId ?? "")); if (!g) break;
+        const senderAnchor = chains.get(from)?.anchor;
+        const isMem = !!g.members?.[from] || (senderAnchor && Object.values(g.members || {}).some((m) => m.anchor === senderAnchor));
+        if (!isMem) break;
+        const handle = String(d.handle ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+        const blob = String(d.blob ?? ""); const anchor = String(d.anchor ?? "");
+        const at = typeof d.at === "number" ? d.at : 0;
+        if (!handle || anchor.length !== 64 || !blob.startsWith("qos-vault:v1:") || senderAnchor !== anchor) break;
+        g.vaults ??= {};
+        const cur = g.vaults[handle];
+        if (cur && (cur.anchor !== anchor || at <= cur.at)) break;
+        g.vaults[handle] = { handle, anchor, blob, at };
+        persistGroups(); console.log(`[daemon] +vault "${handle}"`); break;
       }
       case "group-issue": {
         const g = groups.get(String(d.groupId ?? "")); if (!g || !g.members?.[from]) break;
