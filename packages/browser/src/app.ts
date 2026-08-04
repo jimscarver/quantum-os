@@ -1592,6 +1592,7 @@ function handleCommand(raw: string): string[] {
       sys("QLF slash commands:  (type /help <command> for details on one)");
       sys("  /help            — show this help");
       sys("  /id              — your peer ID and ZFA proof");
+      sys("  /name [your name] — set the display name peers see (blank shows it)");
       sys("  /password [show] — password-protect your identity (+ publish to your groups)");
       sys("  /login [handle]  — restore a former identity (from a group, or a recovery string)");
       sys("  /cap [label]     — generate a new ZFA capability");
@@ -1641,6 +1642,21 @@ function handleCommand(raw: string): string[] {
       } else {
         sys(`peer ID: ${id}`);
       }
+      break;
+    }
+
+    case "name": {
+      // Set (or show) your display name — the label peers see in chat and the
+      // roster. Mirrors the name input field: persist + re-render + broadcast the
+      // signed `name` envelope so peers relabel you. Agents advertise this command.
+      const newName = arg.trim();
+      if (!newName) { sys(myName ? `your name is "${myName}"  (change it: /name <new name>)` : "you have no name yet — set one: /name <your name>"); break; }
+      myName = newName;
+      myNameEl.value = myName;
+      localStorage.setItem("qos-name", myName);
+      renderPeers();
+      if (qpeer) signedBroadcast({ kind: "name", name: myName });
+      sys(`✓ name set to "${myName}"`);
       break;
     }
 
@@ -4741,7 +4757,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -4987,6 +5003,9 @@ function handleFileChunk(from: string, d: Record<string, unknown>): void {
 const CMD_HELP: Record<string, string[]> = {
   help: ["/help — list all commands.", "/help <command> — detailed help for one command (e.g. /help note)."],
   id: ["/id — show your peer ID and its ZFA proof (twist counts, spectral gap)."],
+  name: ["/name <your name> — set the display name peers see in chat and the roster (same as the name field at the top).",
+         "/name — with no argument, shows your current name.",
+         "Your name is broadcast to peers (a signed `name` envelope) so they relabel you; it persists on this browser."],
   password: ["/password — encrypt your identity (the dyncap seed behind your anchor) under a password and get a qos-vault:v1:… recovery string.",
              "Prompts for the password in a masked dialog — it never enters the chat. Keeps your current anchor, so restoring it elsewhere is still you.",
              "If you're in any groups, it also replicates the encrypted vault into them (pure p2p) under your display-name handle — so you can recover with just /login <handle> after rejoining, no string to carry.",
