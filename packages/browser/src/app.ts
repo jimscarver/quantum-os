@@ -147,6 +147,12 @@ interface RoomContext {
   // connection keeps dropping) keeps its label across reconnects even before its
   // re-sent `name` envelope arrives, instead of falling back to a raw hex id.
   lastKnownNames: Map<string, string>;
+  // AI-agent role per peer id (e.g. "facilitator"), from the peer's `name`
+  // envelope `agent` tag. Like lastKnownNames this is a STICKY cache — never
+  // cleared on leave — so a flapping AI daemon keeps its 🤖 badge across
+  // reconnect flaps, instead of decaying to an unlabelled peer while its
+  // re-announced (and possibly briefly dyncap-refused) name envelope is in flight.
+  peerAgents: Map<string, string>;
   pendingLeaves: Map<string, ReturnType<typeof setTimeout>>;
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Lemma + note stores (the public room knowledge)
@@ -205,6 +211,7 @@ function createRoom(roomId: string): RoomContext {
     peers: new Set(),
     peerNames: new Map(),
     lastKnownNames: new Map(),
+    peerAgents: new Map(),
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
     lemmaStore: new Map(),
@@ -266,7 +273,9 @@ let peers: Set<string> = new Set();
 let peerNames: Map<string, string> = new Map();
 let lastKnownNames: Map<string, string> = new Map();
 // peerId -> agent role (e.g. "facilitator", "scribe") for peers that announced
-// themselves as AI agents in their `name` envelope; used to flag them in the roster.
+// themselves as AI agents in their `name` envelope; used to flag them in the
+// roster. Aliased per-room via setActiveRoom (like peerNames), and STICKY across
+// leaves (see the RoomState field) so the 🤖 badge survives reconnect flaps.
 let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -306,6 +315,7 @@ function setActiveRoom(ctx: RoomContext): void {
   peers              = ctx.peers;
   peerNames          = ctx.peerNames;
   lastKnownNames     = ctx.lastKnownNames;
+  peerAgents         = ctx.peerAgents;
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
   lemmaStore         = ctx.lemmaStore;
@@ -4679,7 +4689,12 @@ function connect(): void {
           if (pj !== undefined) { clearTimeout(pj); pendingJoins.delete(id); }
           else addMessage("", `${peerLabel(id)} left`, "system");
           peerNames.delete(id);
-          peerAgents.delete(id);
+          // NOTE: peerAgents is deliberately NOT cleared here — it is a sticky
+          // cache (like lastKnownNames). A flapping AI daemon whose signaling
+          // drops keeps its 🤖 badge across the reconnect instead of flashing an
+          // unlabelled peer; a genuinely-departed peer's stale role never renders
+          // (renderPeers only badges ids still in `peers`). It is only reset if
+          // the peer re-announces itself as a non-agent (see the `name` handler).
           removeTile(id);
           maybeHideCallBar();
         } finally { setActiveRoom(prev); }
