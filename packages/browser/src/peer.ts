@@ -26,6 +26,15 @@ const DEFAULT_ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ];
 
+// The ICE username fragment identifies an ICE session; a peer that reconnects (or
+// reloads its browser, keeping its peerId) dials in with a new one. Used to tell a
+// genuine same-session renegotiation from a reconnect under the same peerId. Null
+// if the sdp has none.
+function iceUfrag(sdp: string | null | undefined): string | null {
+  const m = /a=ice-ufrag:(\S+)/.exec(sdp ?? "");
+  return m ? m[1] : null;
+}
+
 /// A QuantumOS browser peer.
 /// Identity is a ZFA capability token — possessing the peer ID IS authorization.
 export class QOSPeer {
@@ -326,6 +335,16 @@ export class QOSPeer {
     // mid-call). Only create a fresh connection for a first-time offer — the old
     // "always recreate" behaviour would have torn down the live data channel.
     let pc = this.connections.get(fromPeerId);
+    // …but a fresh ICE session (different ice-ufrag) under a known peerId means the
+    // peer reconnected / reloaded: the stale pc's data channel is dead, and answering
+    // on it would NOT surface the peer's new data channel (`ondatachannel` doesn't
+    // re-fire on a renegotiation), so the peer would connect-but-stay-silent — no
+    // name announce, no messages, just a hex id in the roster. Rebuild a clean pc
+    // (which resurfaces the data channel) instead of renegotiating the corpse.
+    if (pc && iceUfrag(pc.remoteDescription?.sdp) && iceUfrag(pc.remoteDescription?.sdp) !== iceUfrag(sdp)) {
+      this.makingOffer.set(fromPeerId, false);
+      pc = undefined;
+    }
     if (!pc) {
       pc = this.createPeerConnection(fromPeerId);
       pc.ondatachannel = (event) => this.setupDataChannel(fromPeerId, event.channel);

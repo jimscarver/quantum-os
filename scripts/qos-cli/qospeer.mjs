@@ -12,6 +12,14 @@ import { RTCPeerConnection } from "werift";
 
 const DEFAULT_ICE = [{ urls: "stun:stun.l.google.com:19302" }];
 
+// The ICE username fragment identifies an ICE session; a peer that reconnects (or
+// reloads its browser) brings a new one. Used to tell a genuine renegotiation
+// (same ufrag) from a reconnect under the same peerId (new ufrag). Null if absent.
+function _iceUfrag(sdp) {
+  const m = /a=ice-ufrag:(\S+)/.exec(sdp ?? "");
+  return m ? m[1] : null;
+}
+
 export class QOSPeer {
   constructor(config) {
     this.config = config;                 // { signalingUrl, roomId, peerId, iceServers?, on* }
@@ -210,8 +218,20 @@ export class QOSPeer {
     // so starting a call dropped every agent). Data-only node peers just answer
     // without media; if werift can't renegotiate (glare/unsupported), keep the
     // channel and ignore the offer rather than dropping the peer.
+    //
+    // CRUCIAL — reconnect vs. renegotiation. A peer that RELOADED its browser keeps
+    // the same peerId (sessionStorage) but dials in with a BRAND-NEW ICE session
+    // (fresh ice-ufrag). If our old connection to that peerId still shows an "open"
+    // channel (the close hasn't been detected yet — racy), answering the fresh offer
+    // on the STALE pc never establishes a transport, so the reloaded peer silently
+    // never reconnects: no data channel, no name announce (it just shows as a hex
+    // id). Only treat an offer as a renegotiation when its ice-ufrag MATCHES the live
+    // connection's; a new ufrag means the peer reconnected → rebuild a clean pc.
     const existing = this.connections.get(fromId);
-    if (existing && this.channels.get(fromId)?.readyState === "open") {
+    const sameSession = existing
+      && _iceUfrag(existing.remoteDescription?.sdp) !== null
+      && _iceUfrag(existing.remoteDescription?.sdp) === _iceUfrag(sdp);
+    if (existing && sameSession && this.channels.get(fromId)?.readyState === "open") {
       try {
         await existing.setRemoteDescription({ type: "offer", sdp });
         const answer = await existing.createAnswer();
