@@ -449,7 +449,7 @@ export async function run(args) {
     onSignalingClose: () => console.warn(`${TAG} signaling dropped`),
     onReconnectScheduled: (ms) => console.warn(`${TAG} reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
-    onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); },
+    onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); nameAnnouncedAt.delete(id); },
     onError: (e) => console.error(TAG, e?.message ?? e),
     onChannelOpen: (id) => onChannelOpen(id),
     onMessage: (from, d) => onMessage(from, d),
@@ -465,12 +465,40 @@ export async function run(args) {
     return signQueue;
   }
 
+  // Our identity announcement, signed ONCE and cached so re-announces are byte-
+  // identical re-deliveries (the browser treats an identical anchor+seq+witness as
+  // idempotent, so resending never advances the seq or forks the chain). The single
+  // channel-open announce can be lost when signaling is flapping — the sign is async,
+  // and the data channel can close in that window — leaving a fresh browser with no
+  // name for us at all. `announceName` is therefore also re-fired from the tick loop
+  // (throttled per peer) so a dropped announcement self-heals instead of the agent
+  // showing as an unlabelled hex id until the next full reconnect.
+  const nameAnnouncedAt = new Map();          // peerId -> last announce ms
+  let signedNameEnv = null;
+  async function announceName(id) {
+    if (!signedNameEnv) {
+      const env = { kind: "name", name: myName, agent: roleKey };
+      try { env.dyncap = await signEnvelope(dyncapState, roomId, env); saveIdentity(); }
+      catch (e) { console.error(`${TAG} sign failed:`, e?.message ?? e); }
+      signedNameEnv = env;
+    }
+    if (peer.send(id, signedNameEnv)) nameAnnouncedAt.set(id, Date.now());
+  }
+  const ANNOUNCE_TTL = 90_000;                // re-announce a present peer at most this often
+  function reannounceStale() {
+    const now = Date.now();
+    for (const id of present) {
+      if (now - (nameAnnouncedAt.get(id) ?? 0) > ANNOUNCE_TTL) void announceName(id);
+    }
+  }
+
   function onChannelOpen(id) {
     if (id === identity.peerId) return;
     present.add(id);
     joinedAt.set(id, Date.now());
-    // announce name + our agent role so other agents recognize us
-    signedSend(id, { kind: "name", name: myName, agent: roleKey });
+    // announce name + our agent role so other agents recognize us (self-heals via
+    // reannounceStale if this delivery is lost to a signaling flap)
+    void announceName(id);
     // Self-introduction is delivered per-peer when a human identifies (see introduceTo,
     // called from onMessage) — NOT a one-time startup broadcast — so a browser that joins
     // later, or whose channel opens after a co-agent's, still reliably gets it.
@@ -591,6 +619,7 @@ export async function run(args) {
   }
 
   async function tick() {
+    reannounceStale();   // self-heal any identity announcement lost to a signaling flap
     const humans = recentHumanCount();
     if (advisor.enabled) {
       const now = Date.now();
