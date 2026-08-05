@@ -1620,6 +1620,7 @@ function handleCommand(raw: string): string[] {
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
       sys("  /share <sel> to <room>  — bridge a lemma/chat/note into another tab");
       sys("  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)");
+      sys("  /render          — animate this room (perspectives, closures, groups)");
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
@@ -3597,6 +3598,36 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "render":
+    case "animate": {
+      // Open an animation of THIS room: its perspectives (peers, you included)
+      // bound to the shared room closure, their closures (lemmas), and groups —
+      // the QLF / ER=EPR picture applied to the live room. Snapshot at open time.
+      const roomLabel = activeRoom.roomId.replace(/^cap:room:/, "").slice(0, 8);
+      const trim = (s: string) => s.slice(0, 24);
+      const selfLabel = trim(myName || "me");
+      const peerLabels = [...peers]
+        .map((p) => trim(peerNames.get(p) || p.replace(/^cap:peer:/, "").slice(0, 8)))
+        .slice(0, 48);
+      const lemmaLabels = [...lemmaStore.keys()].map(trim).slice(0, 64);
+      const chanLabels = [...channelSubscriptions].map(trim).slice(0, 24);
+      const url = new URL("render.html", location.href);
+      url.searchParams.set("room", roomLabel);
+      url.searchParams.set("self", selfLabel);
+      if (peerLabels.length) url.searchParams.set("peers", peerLabels.join("\n"));
+      if (lemmaLabels.length) url.searchParams.set("lemmas", lemmaLabels.join("\n"));
+      if (chanLabels.length) url.searchParams.set("channels", chanLabels.join("\n"));
+      url.searchParams.set("groups", String(groupStore.size));
+      const win = window.open(url.href, "_blank", "noopener");
+      if (!win) {
+        sys("couldn't open the animation — allow pop-ups for this site, then retry /render");
+      } else {
+        sys(`rendering room ${roomLabel} — ${peerLabels.length + 1} perspective(s), ` +
+            `${lemmaLabels.length} closure(s), ${groupStore.size} group(s). Snapshot; re-run to refresh.`);
+      }
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -4757,7 +4788,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -5089,6 +5120,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "room",    template: "/room ",      desc: "multi-room tabs (list|join|leave)" },
   { name: "share",   template: "/share ",     desc: "bridge a lemma/note into another room" },
   { name: "channel", template: "/channel ",   desc: "tagged messages (listen|send|list)" },
+  { name: "render",  template: "/render",     desc: "animate this room (perspectives, closures, groups)" },
   { name: "facil",   template: "/facil ",     desc: "ask/control the room facilitator (help|off|on)" },
   { name: "script",  template: "/script ",    desc: "run a sequential command chain" },
   { name: "persist", template: "/persist ",   desc: "agreed replication of public state" },

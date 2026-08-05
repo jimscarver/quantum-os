@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room — QuantumOS animation</title>
+<style>
+  :root{
+    --bg:#06070e; --bg2:#0a0c16; --panel:rgba(12,15,26,.72);
+    --border:#1c2436; --text:#e9edf7; --muted:#7b859c; --dim:#4a5468; --accent:#5ec8d8;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+  canvas#scene{position:fixed;inset:0;display:block;touch-action:none;cursor:grab}
+  canvas#scene:active{cursor:grabbing}
+  .panel{position:fixed;z-index:10;background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;backdrop-filter:blur(12px) saturate(1.2);-webkit-backdrop-filter:blur(12px) saturate(1.2);
+    box-shadow:0 10px 40px -12px #000c}
+  #hud{top:16px;left:16px;padding:14px 16px;max-width:280px}
+  #hud .room{font-size:15px;font-weight:600;letter-spacing:.2px}
+  #hud .room span{color:var(--accent);font-family:var(--mono)}
+  #hud .sub{margin-top:5px;font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--muted)}
+  .stats{display:flex;gap:14px;margin-top:11px}
+  .stat .v{font-family:var(--mono);font-size:19px;font-variant-numeric:tabular-nums;color:var(--text)}
+  .stat .k{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  #legend{bottom:16px;left:50%;transform:translateX(-50%);padding:9px 15px;display:flex;gap:16px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--muted);align-items:center;flex-wrap:wrap;justify-content:center}
+  #legend b{color:var(--text);font-weight:600}
+  #legend .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  #hint{bottom:16px;right:16px;padding:8px 12px;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  @media (max-width:640px){#hint{display:none}}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Animated view of the QuantumOS room"></canvas>
+
+<section id="hud" class="panel">
+  <div class="room">Room <span id="h-room">—</span></div>
+  <div class="sub" id="h-sub">the shared closure of its perspectives</div>
+  <div class="stats">
+    <div class="stat"><div class="v" id="h-perspectives">0</div><div class="k">Perspectives</div></div>
+    <div class="stat"><div class="v" id="h-closures">0</div><div class="k">Closures</div></div>
+    <div class="stat"><div class="v" id="h-groups">0</div><div class="k">Groups</div></div>
+  </div>
+</section>
+
+<footer id="legend" class="panel">
+  <span><span class="dot" style="background:#ffd24d;box-shadow:0 0 8px #ffd24d"></span><b>you</b></span>
+  <span><span class="dot" style="background:#5ec8d8"></span>perspective (peer)</span>
+  <span><span class="dot" style="background:#37e05a"></span>closure (lemma)</span>
+  <span><b>lines</b> = binding to the shared room closure</span>
+</footer>
+
+<aside id="hint" class="panel">Drag orbit · Scroll zoom · snapshot — re-run /render to refresh</aside>
+
+<script>
+"use strict";
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d", { alpha:false });
+const reduceMotion = matchMedia("(prefers-reduced-motion:reduce)").matches;
+let DPR = Math.min(devicePixelRatio || 1, 2), W = 0, H = 0;
+function resize(){ W=innerWidth; H=innerHeight; canvas.width=W*DPR; canvas.height=H*DPR;
+  canvas.style.width=W+"px"; canvas.style.height=H+"px"; ctx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener("resize", resize);
+
+// ---- read the room from the URL (written by the /render command) ----
+const q = new URLSearchParams(location.search);
+const list = (k) => (q.get(k) ? q.get(k).split("\n").map(s=>s.trim()).filter(Boolean) : []);
+const roomLabel = q.get("room") || "local";
+const selfName  = q.get("self")  || "me";
+const peerNames = list("peers");
+const lemmaNames= list("lemmas");
+const chanNames = list("channels");
+const groups    = parseInt(q.get("groups")||"0",10) || 0;
+
+const perspectives = [{ name: selfName, self: true }, ...peerNames.map(n=>({name:n,self:false}))];
+document.getElementById("h-room").textContent = roomLabel;
+document.getElementById("h-perspectives").textContent = perspectives.length;
+document.getElementById("h-closures").textContent = lemmaNames.length;
+document.getElementById("h-groups").textContent = groups;
+if (chanNames.length) document.getElementById("h-sub").textContent =
+  `channels: ${chanNames.slice(0,4).join(", ")}${chanNames.length>4?"…":""}`;
+
+// ---- deterministic hash → [0,1) for stable per-name colour / clock rate ----
+function hash01(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return (h>>>0)/4294967296; }
+
+// ---- visible spectrum ----
+function wavelengthRGB(wl){ let r=0,g=0,b=0;
+  if(wl<440){r=-(wl-440)/60;b=1;} else if(wl<490){g=(wl-440)/50;b=1;}
+  else if(wl<510){g=1;b=-(wl-510)/20;} else if(wl<580){r=(wl-510)/70;g=1;}
+  else if(wl<645){r=1;g=-(wl-645)/65;} else {r=1;}
+  let a=1; if(wl>700)a=Math.max(0,(780-wl)/80); else if(wl<420)a=Math.max(0,(wl-380)/40);
+  const gm=0.85; return [Math.pow(r*a,gm),Math.pow(g*a,gm),Math.pow(b*a,gm)]; }
+const BINS=56, SPR=48, sprites=[];
+for(let i=0;i<BINS;i++){ const wl=700-(i/(BINS-1))*(700-390); const [r,g,b]=wavelengthRGB(wl);
+  const c=document.createElement("canvas"); c.width=c.height=SPR; const g2=c.getContext("2d"); const cx=SPR/2;
+  const grd=g2.createRadialGradient(cx,cx,0,cx,cx,cx); const R=(r*255)|0,G=(g*255)|0,B=(b*255)|0;
+  grd.addColorStop(0,`rgba(${R},${G},${B},1)`); grd.addColorStop(.28,`rgba(${R},${G},${B},.55)`); grd.addColorStop(1,`rgba(${R},${G},${B},0)`);
+  g2.fillStyle=grd; g2.fillRect(0,0,SPR,SPR); sprites.push(c); }
+const spriteFor = t => sprites[Math.max(0,Math.min(BINS-1,(t*(BINS-1))|0))];
+function rgbFor(t){ return wavelengthRGB(700-Math.max(0,Math.min(1,t))*(700-390)); }
+const MONO='ui-monospace, Menlo, Consolas, monospace';
+
+// ---- Fibonacci-sphere placement (even 3-D spread) ----
+function fibSphere(n,radius){ const pts=[]; const gr=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<n;i++){ const y=n===1?0:1-(i/(n-1))*2; const r=Math.sqrt(Math.max(0,1-y*y)); const th=gr*i;
+    pts.push([Math.cos(th)*r*radius, y*radius, Math.sin(th)*r*radius]); } return pts; }
+
+// ---- build the scene ----
+const P = perspectives.map((p,i)=>{ const t = perspectives.length>1 ? i/(perspectives.length) : 0.6;
+  return { ...p, t: p.self?0.62:0.06+0.9*t, ph: hash01(p.name)*6.283, rate: 0.5+hash01(p.name+"r")*2.5 }; });
+const Ppos = fibSphere(P.length, 8.2);
+const L = lemmaNames.map((n)=>({ name:n, t:0.28+0.5*hash01(n), ph:hash01(n)*6.283 }));
+const Lpos = fibSphere(Math.max(1,L.length), 4.3);
+// dim background substrate (possibility field)
+const BG = fibSphere(220, 13).map((p,i)=>({ p, ph:i*0.7 }));
+
+// ---- camera ----
+const cam={az:0.7,el:0.42,dist:26}; let basis=null;
+function updateBasis(){ const ce=Math.cos(cam.el),se=Math.sin(cam.el),ca=Math.cos(cam.az),sa=Math.sin(cam.az);
+  const eye={x:cam.dist*ce*ca,y:cam.dist*se,z:cam.dist*ce*sa};
+  let fx=-eye.x,fy=-eye.y,fz=-eye.z; const fl=Math.hypot(fx,fy,fz)||1; fx/=fl;fy/=fl;fz/=fl;
+  let Rx=-fz,Rz=fx; const rl=Math.hypot(Rx,0,Rz)||1; Rx/=rl;Rz/=rl;
+  const Ux=0*fz-Rz*fy, Uy=Rz*fx-Rx*fz, Uz=Rx*fy-0*fx;
+  basis={eye,f:[fx,fy,fz],r:[Rx,0,Rz],u:[Ux,Uy,Uz]}; }
+const focal=()=>(H/2)/Math.tan((60*Math.PI/180)/2);
+function project(x,y,z){ const {eye,f,r,u}=basis; const dx=x-eye.x,dy=y-eye.y,dz=z-eye.z;
+  const cz=dx*f[0]+dy*f[1]+dz*f[2]; if(cz<=0.05) return null;
+  const cx=dx*r[0]+dy*r[1]+dz*r[2], cy=dx*u[0]+dy*u[1]+dz*u[2], fo=focal();
+  return { sx:W/2+(cx/cz)*fo, sy:H/2-(cy/cz)*fo, z:cz }; }
+
+// ---- orbit / zoom ----
+let drag=null;
+canvas.addEventListener("pointerdown",e=>{ canvas.setPointerCapture(e.pointerId); drag={x:e.clientX,y:e.clientY,az:cam.az,el:cam.el}; });
+canvas.addEventListener("pointermove",e=>{ if(!drag)return; cam.az=drag.az-(e.clientX-drag.x)*0.006;
+  cam.el=Math.max(-1.4,Math.min(1.4,drag.el+(e.clientY-drag.y)*0.006)); });
+canvas.addEventListener("pointerup",()=>{drag=null;});
+canvas.addEventListener("wheel",e=>{ e.preventDefault(); cam.dist=Math.max(12,Math.min(52,cam.dist*(1+Math.sign(e.deltaY)*0.08))); },{passive:false});
+
+let t=0;
+function frame(){ requestAnimationFrame(frame);
+  if(!reduceMotion){ t+=1; cam.az+=0.0011; }
+  updateBasis();
+  ctx.globalCompositeOperation="source-over"; ctx.fillStyle="#06070e"; ctx.fillRect(0,0,W,H);
+
+  // background substrate
+  ctx.globalCompositeOperation="lighter";
+  for(const b of BG){ const pp=project(b.p[0],b.p[1],b.p[2]); if(!pp)continue;
+    const s=(focal()/pp.z)*0.05; ctx.globalAlpha=0.10; ctx.drawImage(sprites[6],pp.sx-s,pp.sy-s,s*2,s*2); }
+  ctx.globalAlpha=1;
+
+  // room core (the shared closure) at origin
+  const core=project(0,0,0);
+  if(core){ const rad=(focal()/core.z)*0.9; const g=ctx.createRadialGradient(core.sx,core.sy,0,core.sx,core.sy,rad*4);
+    g.addColorStop(0,"rgba(120,180,255,0.25)"); g.addColorStop(1,"rgba(120,180,255,0)");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(core.sx,core.sy,rad*4,0,7); ctx.fill(); }
+
+  // binding lines: each perspective ↔ the shared room closure (centre)
+  if(core){ for(let i=0;i<P.length;i++){ const pp=project(...Ppos[i]); if(!pp)continue;
+    const [r,g,b]=rgbFor(P[i].t); const pulse=reduceMotion?0.5:0.35+0.3*Math.sin(t*0.02*P[i].rate+P[i].ph);
+    ctx.strokeStyle=`rgba(${r*255|0},${g*255|0},${b*255|0},${0.10+0.16*pulse})`; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(core.sx,core.sy); ctx.lineTo(pp.sx,pp.sy); ctx.stroke(); } }
+
+  // closures (lemmas): small closed rings on an inner shell
+  ctx.globalCompositeOperation="lighter";
+  for(let i=0;i<L.length;i++){ const pp=project(...Lpos[i]); if(!pp)continue; const s=(focal()/pp.z)*0.055;
+    ctx.globalAlpha=0.85; ctx.drawImage(spriteFor(L[i].t),pp.sx-s,pp.sy-s,s*2,s*2); L[i]._p=pp; }
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+  for(let i=0;i<L.length;i++){ const pp=L[i]._p; if(!pp)continue; const rr=(focal()/pp.z)*0.06;
+    const [r,g,b]=rgbFor(L[i].t); ctx.strokeStyle=`rgba(${r*255|0},${g*255|0},${b*255|0},0.7)`; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(pp.sx,pp.sy,rr,0,7); ctx.stroke(); }
+
+  // perspectives (peers): bright spectral nodes, self emphasised
+  ctx.globalCompositeOperation="lighter";
+  for(let i=0;i<P.length;i++){ const pp=project(...Ppos[i]); if(!pp){P[i]._p=null;continue;} P[i]._p=pp;
+    const pulse=reduceMotion?1:0.6+0.4*Math.sin(t*0.02*P[i].rate+P[i].ph);
+    const s=(focal()/pp.z)*(P[i].self?0.14:0.11)*2.4;
+    ctx.globalAlpha=(P[i].self?1:0.85)*pulse;
+    ctx.drawImage(spriteFor(P[i].self?0.5:P[i].t), pp.sx-s, pp.sy-s, s*2, s*2); }
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+
+  // self ring + labels
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  for(let i=0;i<P.length;i++){ const pp=P[i]._p; if(!pp)continue; const base=focal()/pp.z;
+    if(P[i].self){ ctx.strokeStyle="rgba(255,210,77,0.95)"; ctx.lineWidth=1.6;
+      ctx.beginPath(); ctx.arc(pp.sx,pp.sy,base*0.16,0,7); ctx.stroke(); }
+    const fs=Math.max(9,Math.min(15,base*0.095)); ctx.font=`600 ${fs.toFixed(0)}px ${MONO}`;
+    ctx.fillStyle=P[i].self?"rgba(255,224,140,0.96)":"rgba(233,237,247,0.9)";
+    ctx.fillText(P[i].name, pp.sx, pp.sy-base*0.16-9); }
+}
+resize(); frame();
+</script>
+</body>
+</html>
