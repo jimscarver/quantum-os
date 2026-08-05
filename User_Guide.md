@@ -68,6 +68,14 @@ A decision only outlives the session if it's written down: `/lemma <statement>` 
 `/persist` keeps it so late joiners (and an always-on memory daemon) still see it.
 → **[Group Decisions](Group_Decisions.md)**.
 
+## 6. Work across rooms
+Each room is its own space — its own people, lemmas, and decisions. To cooperate across
+several: `/room` opens each as a tab, and `/share <item> to <room>` copies a lemma, note, or
+message from one of your tabs into another. To link *separate* rooms (different groups), run a
+**room bridge** — one connection that stands in both and passes their channels, chat, lemmas, and
+governance to each other, so a lemma proven in one room becomes a lemma in the other.
+→ **[Room Bridges](Room_Bridges.md)**. Want to *see* a room? Type `/render`.
+
 ---
 
 ## Cheat-sheet
@@ -84,6 +92,8 @@ A decision only outlives the session if it's written down: `/lemma <statement>` 
 | check real agreement | `/probe` | [Consensus](Consensus.md) |
 | formal weighted vote | `/gov issue` · `/gov vote` | [Governance](Governance.md) |
 | record a decision | `/lemma` · `/persist` | [Group Decisions](Group_Decisions.md) |
+| cooperate across rooms | `/room` · `/share` · `bridge.mjs` | [Room Bridges](Room_Bridges.md) |
+| see the room | `/render` | — |
 
 ## See it in action
 Worked sessions, grounded in the real commands:

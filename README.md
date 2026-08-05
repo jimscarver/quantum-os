@@ -506,6 +506,14 @@ Bridge selected state from the active tab into another joined tab. The bridge is
 
 Target resolution: `<room-prefix>` prefix-matches against joined room IDs. Ambiguous matches are listed; no match errors out.
 
+### Cooperating across rooms
+
+Each room is its own Markov blanket — a self-consistent **perspective**. Information crosses between rooms only through something that stands in both. Multi-room cooperation happens at three levels:
+
+- **Many rooms, one session** — `/room` opens each room as its own tab, each an independent blanket (its own peers, lemmas, currencies, dyncap chain). Holding several tabs makes *you* the link between them.
+- **Move an item between your own tabs** — `/share <selector> to <room>` re-enacts a lemma / note / message in another of your joined rooms, signed into *that* room's chain.
+- **Link separate rooms** — the headless **room bridge** ([`scripts/qos-cli/bridge.mjs`](scripts/qos-cli/bridge.mjs)) is one perspective that stands in two or more rooms and relays each room's outputs as the others' inputs: channels and chat, plus (opt-in) durable **lemma** and **governance** state relayed verbatim so signatures carry through. That shared membership *is* the shared closure between the rooms — **ER=EPR at the collaboration layer**. See [`Room_Bridges.md`](Room_Bridges.md).
+
 ### `/channel [sub]`
 
 Name-tagged broadcast messaging with per-receiver filtering. The envelope (`kind: "channel-msg", {channel, payload}`) goes to everyone in the room; subscribed peers surface it in chat, unsubscribed peers silently drop it. Subscriptions are per-room and persist across reloads (`qos-channel-subs-{room}` in localStorage).
@@ -760,6 +768,19 @@ node qos-daemon.mjs --room "<…>" --name memory --state ./.qos-state \
 
 State persists under `--state`: `identity.json` plus
 `rooms/<roomhex>/{lemmas,currencies,chains}.json` and `transcript.jsonl`.
+
+**Bridge rooms** — share information across *separate* rooms. `bridge.mjs` is one
+perspective that stands in two or more rooms and relays each room's outputs as the
+others' inputs — channels and chat, plus (opt-in) durable lemma and governance state,
+relayed verbatim so the original signer's dyncap chain carries through. Being a member
+of both rooms *is* the shared closure between them (ER=EPR at the collaboration layer).
+
+```bash
+node bridge.mjs --room "<cap:room:…A…>" --room "<cap:room:…B…>" --lemmas --gov
+```
+
+Origin-labeled, loop-guarded (`--max-hops` + a per-item dedupe). Full docs:
+**[Room_Bridges.md](Room_Bridges.md)**.
 
 Offline self-tests cover the ZFA layer, the dyncap sign→verify chain, and a
 werift↔werift data-channel round-trip (`npm run selftest` / `dyncap-test` /
