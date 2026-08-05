@@ -431,6 +431,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect + `wake()`, onPeerJoined/Left/ChannelOpen |
 | `scripts/qos-cli/agent.mjs` | Generalized room-agent daemon — roles, duties, lead election, trust standing, advisor wiring, commands (ask/optimize/**chair**+next/back/close/cancel/trust/off/on), chaired-deliberation state machine + receipts. `facilitator.mjs` is a shim |
 | `scripts/qos-cli/agent-roles.mjs` | Role registry (facilitator/scribe/greeter/skeptic) — `resolveRole`/`dutiesOf`; add a role here |
+| `scripts/qos-cli/bridge.mjs` | Room **bridge** — one headless perspective in ≥2 rooms relaying each room's channel (`--chat` optional) outputs as the others' inputs; origin-labeled, loop-guarded (`_bridge` tag + `--max-hops`). ER=EPR at the collaboration layer (a member of both rooms IS the shared closure). See [`Room_Bridges.md`](Room_Bridges.md) |
 | `scripts/qos-cli/facilitator-advisor.mjs` | AI advisor `makeAdvisor` — backends `api`/`claude-code`, modes ask/stimulate/synthesize/optimize/**chair** (single-neutral-chair persona, per-phase synthesis + closure decision), per-role persona |
 | `scripts/qos-cli/gov.mjs` | Port of `gov.ts` `trustLevels`/`discreditedMembers` so an agent computes its own trust standing |
 | `scripts/qos-cli/qospeer.mjs` | Node `QOSPeer` transport (werift+ws) + 30s signaling keepalive; shared by agents + the memory daemon |

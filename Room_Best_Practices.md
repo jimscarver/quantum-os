@@ -217,6 +217,7 @@ form.
 - A. W. Woolley et al., *Evidence for a Collective Intelligence Factor*, **Science 330** (2010) 686.
 - J. Whitescarver, [*Collective Intelligence Best Practices*](https://docs.google.com/presentation/d/1qFK10rFcCiBO72aeSFIfII0e1TeIXDKgZqwVlP-wREk/edit) — governance-forum lightning talk (orig. RChain Governance Forum, 2018-02-17); the EIES-legacy findings and CI best practices above, and the RGOV liquid-trust model in [`Governance.md`](Governance.md). See also [collectiveintelligencecollaboratory.com](https://www.collectiveintelligencecollaboratory.com/).
 - Turoff & Hiltz (NJIT EIES) — computer-mediated collective intelligence: *"a group developing better solutions than the best individual in it."*
+- [`Room_Bridges.md`](Room_Bridges.md) — sharing information *between* rooms: a bridge perspective relaying one room's outputs as another's inputs (ER=EPR at the collaboration layer).
 - [`Group_Decisions.md`](Group_Decisions.md) — the decision *mechanics* (polls, ranked choice, `/probe` consensus).
 - [`Governance.md`](Governance.md) — liquid-democracy delegation (escalation target).
 - [`Consensus.md`](Consensus.md) — ⅔-supermajority state reconciliation.

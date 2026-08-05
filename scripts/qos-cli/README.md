@@ -145,6 +145,33 @@ node pushlemma.mjs --room "<cap|url>" --lemma-name foo --twists "^v<>/\+-"
 
 It stays connected for `--linger` ms (default 12000) to reach peers, then leaves.
 
+## Bridge rooms — share inputs/outputs across perspectives (`bridge.mjs`)
+
+A room is a Markov blanket: peers inside share a closure, peers outside see
+nothing. `bridge.mjs` is one perspective that stands in **two or more rooms at
+once** and relays each room's channel outputs as the others' inputs — the
+QuantumOS realization of ER=EPR at the collaboration layer (a member of both
+rooms *is* the shared closure between them). See [`../../Room_Bridges.md`](../../Room_Bridges.md).
+
+```bash
+# Every channel message in one room becomes an input to the other:
+node bridge.mjs --room "cap:room:…A…" --room "cap:room:…B…" --name team-bridge
+
+# Restrict to named channels, and also relay chat:
+node bridge.mjs --room <A> --room <B> --channel decisions --channel alerts --chat
+
+# Hub over three rooms:
+node bridge.mjs --room <A> --room <B> --room <C> --channel status
+```
+
+Rooms may be bare caps or full app URLs; at least two distinct rooms are
+required. Every relayed message is prefixed with its origin room label
+(`[R1:abc123] …`) so provenance is never lost. Loops are prevented by a
+per-bridge tag plus a `--max-hops` counter (default 1). Options: `--room`
+(repeatable), `--channel <name>` (repeatable; default all), `--chat`,
+`--name`, `--signal <url>`, `--max-hops <n>`. Like the daemon, it only relays
+what is live — run it long-lived for a standing link (it auto-reconnects).
+
 ## Verify offline (no network, no deps)
 
 ```bash

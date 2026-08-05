@@ -1,0 +1,81 @@
+# Room Bridges — sharing information among perspectives, across rooms
+
+Companion to [`Room_Best_Practices.md`](Room_Best_Practices.md) (quality closure *within* a room) and [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md). This document is about the layer above: how information flows *between* rooms as the inputs and outputs of distinct perspectives.
+
+---
+
+## The idea
+
+A [QuantumOS](README.md) room is a **Markov blanket**: the peers inside it share a live closure (a common capability token, a common set of lemmas, currencies, and chat), and peers outside see nothing. Each room is one **perspective** — a self-consistent local world, in the sense of the [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework)'s many-observers reading (every observer's local information defines its own coherent relative world).
+
+Two perspectives share information the same way two histories do in QLF: one perspective's **output becomes another's input** only through something that stands in both. That something is a **bridge** — a peer that is a member of two (or more) rooms at once. The bridge's simultaneous membership *is* the shared closure between the rooms. In QLF terms this is **ER=EPR at the collaboration layer**:
+
+> `SharedClosure A B := achieves_ZFA (A ++ B)` ([`ER_EPR_QLF`](https://github.com/jimscarver/quantum-logical-framework/blob/main/ER_EPR_QLF.md)) — entanglement is a shared closure between two histories; a bridge is that shared closure between two rooms.
+
+It is the exact analogue of [`MultiParticle.py`](https://github.com/jimscarver/quantum-logical-framework/blob/main/MultiParticle.py): two independent histories expand until their causal cones intersect, and the **interaction manifold** — the events they share — is where a joint closure (entanglement) can form. A room bridge is that interaction manifold, made operational.
+
+## Inputs and outputs are channels
+
+Information already travels inside a room on **channels** — the app's `/channel send <name> <text>` broadcasts a `{ kind: "channel-msg", channel, payload }` envelope, and peers `/channel listen <name>` to receive it. A channel is a named input/output port of a perspective. A bridge is simply a peer that:
+
+- **subscribes** to a room's channel outputs, and
+- **re-emits** them as inputs to the other rooms it stands in.
+
+Chat can be bridged too (`--chat`), but channels are the disciplined path: they carry named, intentional inputs/outputs rather than all conversation.
+
+## The bridge tool
+
+[`scripts/qos-cli/bridge.mjs`](scripts/qos-cli/bridge.mjs) is a headless perspective that joins several rooms and relays their outputs as each other's inputs. It reuses the same `QOSPeer` WebRTC/signaling core as every other headless peer, and lives outside the pnpm workspace, so it does not touch the TS/Rust CI.
+
+```bash
+cd scripts/qos-cli
+npm install                     # ws + werift (once)
+
+# Bridge two rooms — every channel message in one becomes an input to the other:
+node bridge.mjs \
+  --room "cap:room:…A…" \
+  --room "cap:room:…B…" \
+  --name "team-bridge"
+
+# Restrict to specific channels, and also relay chat:
+node bridge.mjs --room <A> --room <B> --channel decisions --channel alerts --chat
+
+# Bridge three rooms (a hub perspective):
+node bridge.mjs --room <A> --room <B> --room <C> --channel status
+```
+
+Rooms may be given as bare caps (`cap:room:…`) or as full app URLs (`…/#room=cap%3Aroom%3A…`). At least two distinct rooms are required. Every relayed message is prefixed with its **origin room label** (`[R1:abc123] …`) so each perspective sees where the input came from — provenance is never dropped.
+
+Options: `--room` (repeatable, ≥2), `--channel <name>` (repeatable; default: all channels), `--chat`, `--name <label>`, `--signal <wss url>`, `--max-hops <n>` (default 1).
+
+## Loop prevention
+
+Rooms can be bridged into cycles (A↔B↔C↔A), and the same human may sit in two bridged rooms. To keep a message from echoing forever, every forwarded envelope carries:
+
+- `_bridge` — this bridge's unique id, so a bridge never re-relays its own output; and
+- `_hops` — a hop counter, dropped once it reaches `--max-hops` (default 1: a message crosses at most one bridge, which is what you want for a simple two-room link).
+
+A short recent-forward dedupe window additionally absorbs bursts, so a flurry in one room cannot storm the mesh.
+
+## Because rooms have no server, run a bridge like a daemon
+
+QuantumOS rooms are pure peer-to-peer — the signaling server only routes WebRTC handshakes; there is no server-side room and no history. A bridge, like [`qos-daemon.mjs`](scripts/qos-cli/README.md), only relays what is live: a message crosses only if the bridge is connected to both rooms at the moment it is sent. For a standing link between two ongoing rooms, run the bridge as a long-lived process (it auto-reconnects with backoff, inherited from `QOSPeer`). Pair it with a memory daemon in each room if you also want the room's state to survive everyone leaving.
+
+## Best practice
+
+- **Name the ports, not the firehose.** Prefer bridging a few named channels (`--channel decisions`) over `--chat`; a bridge is an intentional information contract between groups, not a merge of two conversations.
+- **One bridge per link.** Two bridges spanning the same pair of rooms double every message; use a single bridge and let `--max-hops` bound multi-room topologies.
+- **Provenance stays visible.** The `[origin]` prefix means a receiving room always knows an input is imported, not native — keep it.
+- **A bridge is a capability, not a backdoor.** It can only relay between rooms whose capability tokens it holds. Possessing both tokens *is* the authorization to connect them — the same object-capability rule as joining a single room ([`SECURITY.md`](SECURITY.md)). Do not run a bridge into a room you were not given the cap to.
+- **Closure still happens per room.** A bridge shares inputs and outputs; it does not merge the rooms. Each perspective still reaches its own group closure ([`Room_Best_Practices.md`](Room_Best_Practices.md)) over the inputs it now has.
+
+## Honest scope
+
+`bridge.mjs` relays channel and chat envelopes — the live input/output layer. It does not (yet) bridge lemma/currency/gov state stores; for durable cross-room state, a bridge would forward the relevant `sync-*` envelopes, which is the natural next step. The QLF ER=EPR framing is a faithful analogy for *how* information becomes shared (a mutual closure through a member of both), not a claim that the two rooms become one entangled quantum state.
+
+## Related
+
+- [`Room_Best_Practices.md`](Room_Best_Practices.md) — reaching quality closure within a single room.
+- [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md) — the headless-peer tools (`qos-cli`, `qos-daemon`, `agent`, `bridge`).
+- [`MyRoom.md`](MyRoom.md) — running your own room.
+- QLF: [`ER_EPR_QLF.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/ER_EPR_QLF.md), [`MultiParticle.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/MultiParticle.md) — entanglement as a shared closure; the two-history interaction manifold this bridge realizes.
