@@ -40,6 +40,9 @@ node bridge.mjs \
 # Restrict to specific channels, and also relay chat:
 node bridge.mjs --room <A> --room <B> --channel decisions --channel alerts --chat
 
+# Also bridge durable state — lemmas and governance/groups:
+node bridge.mjs --room <A> --room <B> --lemmas --gov
+
 # Bridge three rooms (a hub perspective):
 node bridge.mjs --room <A> --room <B> --room <C> --channel status
 ```
@@ -47,6 +50,19 @@ node bridge.mjs --room <A> --room <B> --room <C> --channel status
 Rooms may be given as bare caps (`cap:room:…`) or as full app URLs (`…/#room=cap%3Aroom%3A…`). At least two distinct rooms are required. Every relayed message is prefixed with its **origin room label** (`[R1:abc123] …`) so each perspective sees where the input came from — provenance is never dropped.
 
 Options: `--room` (repeatable, ≥2), `--channel <name>` (repeatable; default: all channels), `--chat`, `--name <label>`, `--signal <wss url>`, `--max-hops <n>` (default 1).
+
+## Bridging durable state — lemmas and governance
+
+Channels and chat are the *live* input/output layer. Two opt-in flags bridge a room's **durable** state as well:
+
+- **`--lemmas`** relays every published lemma (`kind:"lemma"`) between rooms, and — when the bridge joins a room and a peer or memory daemon serves it the room's existing set (`sync-lemmas`) — imports each of those lemmas into the other rooms. So a lemma proven in one room becomes a lemma in the other.
+- **`--gov`** relays group and governance mutations (`group-open`, `group-member`, `group-meta`, `group-msg`, `group-issue`, `group-vote`, `gov-delegate`, `gov-trust`, `gov-censure`, `gov-vault`) and imports existing groups (`sync-gov`). A group whose id (a capability token) is shared across two bridged rooms stays in sync — membership, delegations, issues, and votes cross the bridge.
+
+**Signatures carry through.** Lemma and governance envelopes are signed with the sender's dynamic capability (`dyncap`). The bridge relays them **verbatim** — it never rewrites their content — so the *original signer's* anchor and chain travel with the envelope. Receivers accept forwarded entries on the forwarder's trust (a receiver cannot re-derive the witness without the seed; see `dyncap.ts`), exactly as they already accept a peer's `sync-*` replay. Provenance for state is therefore the signer's anchor, not an origin prefix — the bridge adds no origin tag to signed state (that would break the signature).
+
+**Durable dedupe.** Each state item is relayed at most once per bridge run (lemmas keyed by name + cap; mutations by their dyncap witness), so a later `sync-*` cannot echo a lemma back around the mesh.
+
+**Persistence still wants a daemon.** A bridge only relays what is live; a peer that joins a room *after* an import will not see it unless a [memory daemon](scripts/qos-cli/README.md) is holding that room's state. Run a daemon per room for durable cross-room state, and a bridge to keep them in step.
 
 ## Loop prevention
 
@@ -71,7 +87,7 @@ QuantumOS rooms are pure peer-to-peer — the signaling server only routes WebRT
 
 ## Honest scope
 
-`bridge.mjs` relays channel and chat envelopes — the live input/output layer. It does not (yet) bridge lemma/currency/gov state stores; for durable cross-room state, a bridge would forward the relevant `sync-*` envelopes, which is the natural next step. The QLF ER=EPR framing is a faithful analogy for *how* information becomes shared (a mutual closure through a member of both), not a claim that the two rooms become one entangled quantum state.
+`bridge.mjs` relays the live input/output layer (channels, chat) and — opt-in — durable **lemma** and **governance/group** state, verbatim so signatures carry through. It deliberately does **not** bridge **currency/note transfers** (`note-pass`/`note-redeem`/`note-receipt`): those are targeted, conservation-checked value moves, and relaying them across rooms would double-spend or misroute value — currencies belong to one room's ledger. (A room's currency *declarations* could be bridged read-only in a future revision; transfers should not.) Because receivers cannot re-derive a forwarded envelope's witness (`dyncap.ts`), bridged state inherits the *forwarder's* trust — run bridges you and your counterparts trust, and only into rooms whose caps you hold. The QLF ER=EPR framing is a faithful analogy for *how* information becomes shared (a mutual closure through a member of both), not a claim that the two rooms become one entangled quantum state.
 
 ## Related
 

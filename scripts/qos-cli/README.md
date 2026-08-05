@@ -160,17 +160,27 @@ node bridge.mjs --room "cap:room:…A…" --room "cap:room:…B…" --name team-
 # Restrict to named channels, and also relay chat:
 node bridge.mjs --room <A> --room <B> --channel decisions --channel alerts --chat
 
+# Also bridge durable state — lemmas and governance/groups:
+node bridge.mjs --room <A> --room <B> --lemmas --gov
+
 # Hub over three rooms:
 node bridge.mjs --room <A> --room <B> --room <C> --channel status
 ```
 
 Rooms may be bare caps or full app URLs; at least two distinct rooms are
-required. Every relayed message is prefixed with its origin room label
-(`[R1:abc123] …`) so provenance is never lost. Loops are prevented by a
-per-bridge tag plus a `--max-hops` counter (default 1). Options: `--room`
-(repeatable), `--channel <name>` (repeatable; default all), `--chat`,
-`--name`, `--signal <url>`, `--max-hops <n>`. Like the daemon, it only relays
-what is live — run it long-lived for a standing link (it auto-reconnects).
+required. Chat/channel messages are prefixed with their origin room label
+(`[R1:abc123] …`) so provenance is never lost. With **`--lemmas`** the bridge
+relays published lemmas and imports each room's existing set (`sync-lemmas`);
+with **`--gov`** it relays group/governance mutations and imports existing
+groups (`sync-gov`). These signed envelopes are relayed **verbatim** so the
+original signer's dyncap chain carries through (receivers accept forwarded
+entries on the forwarder's trust). Loops are prevented by a per-bridge tag plus
+a `--max-hops` counter (default 1) and a durable per-item dedupe for state.
+Options: `--room` (repeatable), `--channel <name>` (repeatable; default all),
+`--chat`, `--lemmas`, `--gov`, `--name`, `--signal <url>`, `--max-hops <n>`.
+Like the daemon, it only relays what is live — run it long-lived for a standing
+link (it auto-reconnects), and pair it with a memory daemon per room for
+durable cross-room state. See [`../../Room_Bridges.md`](../../Room_Bridges.md).
 
 ## Verify offline (no network, no deps)
 

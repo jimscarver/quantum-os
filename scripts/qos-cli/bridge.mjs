@@ -17,10 +17,21 @@
 // relay ordinary chat. Loops are prevented by tagging forwarded envelopes with
 // this bridge's id and a hop count.
 //
+// Durable state can be bridged too (opt-in):
+//   --lemmas  relay published lemmas (`kind:"lemma"`) AND import a room's
+//             existing lemma set when the bridge joins (`sync-lemmas`).
+//   --gov     relay group/governance mutations (`group-*`, `gov-*`) AND import
+//             existing groups (`sync-gov`).
+// These envelopes are signed (dyncap); the bridge relays them VERBATIM so the
+// original signer's anchor/chain carries through — receivers accept forwarded
+// entries on the forwarder's trust (dyncap.ts: witness is not re-hashed by
+// receivers). Structured envelopes are never text-mangled; provenance for them
+// is the signer's own anchor, not an origin prefix.
+//
 // Usage:
 //   node bridge.mjs --room <A> --room <B> [--room <C> …] \
-//     [--channel <name>]… [--chat] [--name <label>] [--signal <wss url>] \
-//     [--max-hops <n>]
+//     [--channel <name>]… [--chat] [--lemmas] [--gov] \
+//     [--name <label>] [--signal <wss url>] [--max-hops <n>]
 //
 // Rooms may be given as bare caps (cap:room:…) or as full app URLs
 // (…/#room=cap%3Aroom%3A…). At least two rooms are required.
@@ -42,22 +53,34 @@ Options:
   --room <cap|url>   A room to bridge (repeatable; at least two required).
   --channel <name>   Only relay this channel (repeatable). Default: all channels.
   --chat             Also relay ordinary chat messages between rooms.
+  --lemmas           Relay published lemmas + import each room's lemma set.
+  --gov              Relay group/governance mutations + import existing groups.
   --name <label>     Display name announced in each room (default "room-bridge").
   --signal <url>     Signaling server (default ${DEFAULT_SIGNAL}).
   --max-hops <n>     Drop envelopes already relayed n times (default 1).
   --help             Show this help.
 
-Each relayed message is prefixed with its origin room label so every
-perspective sees where the input came from.`;
+Chat/channel messages are prefixed with their origin room label. Lemma and
+governance envelopes are relayed verbatim (signed), so their provenance is the
+original signer's anchor.`;
+
+// Signed governance / group state mutations (relayed verbatim under --gov).
+const GOV_KINDS = new Set([
+  "group-open", "group-member", "group-meta", "group-msg",
+  "group-issue", "group-vote",
+  "gov-delegate", "gov-trust", "gov-censure", "gov-vault",
+]);
 
 function parseArgs(argv) {
-  const a = { rooms: [], channels: [], chat: false, name: "room-bridge",
-              signal: DEFAULT_SIGNAL, maxHops: 1, help: false };
+  const a = { rooms: [], channels: [], chat: false, lemmas: false, gov: false,
+              name: "room-bridge", signal: DEFAULT_SIGNAL, maxHops: 1, help: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === "--room") a.rooms.push(argv[++i]);
     else if (v === "--channel") a.channels.push(argv[++i]);
     else if (v === "--chat") a.chat = true;
+    else if (v === "--lemmas") a.lemmas = true;
+    else if (v === "--gov") a.gov = true;
     else if (v === "--name") a.name = argv[++i];
     else if (v === "--signal") a.signal = argv[++i];
     else if (v === "--max-hops") a.maxHops = Math.max(0, parseInt(argv[++i], 10) || 0);
@@ -109,7 +132,7 @@ async function main() {
     cap, label: roomLabel(cap, i), peerId: generateCapability("peer"), peer: null, open: 0,
   }));
 
-  // Recent-forward dedupe so a burst can't echo-storm across the mesh.
+  // Short-window dedupe for chat/channel bursts (transient, time-boxed).
   const seen = new Map();               // key -> timestamp
   const SEEN_TTL = 8000;
   function firstTime(key) {
@@ -119,33 +142,70 @@ async function main() {
     seen.set(key, now);
     return true;
   }
+  // Durable dedupe for state items — a given lemma/mutation is relayed once per
+  // bridge lifetime (prevents a later sync-* echoing it back through the mesh).
+  const seenState = new Set();
+  function firstState(key) {
+    if (seenState.has(key)) return false;
+    if (seenState.size > 20000) seenState.clear();   // bounded
+    seenState.add(key);
+    return true;
+  }
+
+  const others = (src) => nodes.filter((n) => n !== src && n.peer);
+  function push(src, out, hops) {           // stamp + broadcast to the other rooms
+    out._bridge = BRIDGE_ID;
+    out._hops = hops + 1;
+    for (const dst of others(src)) dst.peer.broadcast(out);
+  }
+  function stripMeta(d) { const c = { ...d }; delete c._bridge; delete c._hops; return c; }
 
   // Relay one inbound envelope from `src` to every OTHER room.
   function relay(src, d) {
     const hops = typeof d._hops === "number" ? d._hops : 0;
     if (d._bridge === BRIDGE_ID) return;          // our own echo — never re-relay
     if (hops >= args.maxHops) return;             // hop limit reached
+    const kind = d.kind;
+    const dstLabels = others(src).map((n) => n.label).join(",");
+    const log = (what) => console.log(`[bridge] ${src.label} → ${dstLabels}  ${what}`);
 
-    let out = null;
-    if (d.kind === "channel-msg" && allowChannel(d.channel)) {
-      out = { kind: "channel-msg", channel: d.channel,
-              payload: `[${src.label}] ${d.payload}` };
-    } else if (d.kind === "chat" && args.chat) {
-      out = { kind: "chat", text: `[${src.label}] ${d.text}` };
+    // --- text: transform with an origin prefix (unsigned) ---
+    if (kind === "channel-msg" && allowChannel(d.channel)) {
+      const out = { kind: "channel-msg", channel: d.channel, payload: `[${src.label}] ${d.payload}` };
+      if (!firstTime(`ch|${src.cap}|${d.channel}|${d.payload}`)) return;
+      push(src, out, hops); log(`#${d.channel}: ${String(d.payload).slice(0, 80)}`); return;
     }
-    if (!out) return;
-
-    const key = `${src.cap}|${out.kind}|${out.channel ?? ""}|${out.payload ?? out.text}`;
-    if (!firstTime(key)) return;
-
-    out._bridge = BRIDGE_ID;
-    out._hops = hops + 1;
-    for (const dst of nodes) {
-      if (dst === src || !dst.peer) continue;
-      dst.peer.broadcast(out);
+    if (kind === "chat" && args.chat) {
+      const out = { kind: "chat", text: `[${src.label}] ${d.text}` };
+      if (!firstTime(`chat|${src.cap}|${d.text}`)) return;
+      push(src, out, hops); log(`chat: ${String(d.text).slice(0, 80)}`); return;
     }
-    const what = out.kind === "chat" ? "chat" : `#${out.channel}`;
-    console.log(`[bridge] ${src.label} → ${nodes.filter(n => n !== src).map(n => n.label).join(",")}  ${what}: ${(out.payload ?? out.text).slice(0, 80)}`);
+
+    // --- lemmas: verbatim (keep dyncap so the signer's chain carries through) ---
+    if (args.lemmas && kind === "lemma") {
+      if (!firstState(`lemma|${d.name}|${d.cap ?? ""}`)) return;
+      push(src, stripMeta(d), hops); log(`lemma ${d.name}`); return;
+    }
+    if (args.lemmas && kind === "sync-lemmas" && Array.isArray(d.entries)) {
+      for (const e of d.entries) {
+        if (!e || !e.name) continue;
+        if (!firstState(`lemma|${e.name}|${e.cap ?? ""}`)) continue;
+        const lem = { kind: "lemma", name: e.name, twists: e.twists, cap: e.cap, who: e.who,
+                      ...(e.dyncap ? { dyncap: e.dyncap } : {}) };
+        push(src, lem, hops);
+      }
+      log(`lemmas import (${d.entries.length})`); return;
+    }
+
+    // --- governance: verbatim signed mutations + group import ---
+    if (args.gov && GOV_KINDS.has(kind)) {
+      if (!firstState(`${kind}|${d.dyncap?.witness ?? JSON.stringify(d)}`)) return;
+      push(src, stripMeta(d), hops); log(`${kind} ${d.groupId ?? ""}`.trim()); return;
+    }
+    if (args.gov && kind === "sync-gov" && Array.isArray(d.groups)) {
+      if (!firstState(`sync-gov|${d.dyncap?.witness ?? d.groups.map((g) => g.id).join(",")}`)) return;
+      push(src, stripMeta(d), hops); log(`gov import (${d.groups.length} groups)`); return;
+    }
   }
 
   for (const node of nodes) {
@@ -173,7 +233,7 @@ async function main() {
 
   console.log(`[bridge] bridging ${nodes.length} rooms as "${args.name}"  ` +
               `channels=${channelAllow.size ? [...channelAllow].join(",") : "all"}  ` +
-              `chat=${args.chat}  maxHops=${args.maxHops}`);
+              `chat=${args.chat}  lemmas=${args.lemmas}  gov=${args.gov}  maxHops=${args.maxHops}`);
   console.log(`[bridge] rooms: ${nodes.map(n => n.label).join("  ")}`);
   console.log("[bridge] a message that closes in one room becomes an input to the others. Ctrl-C to stop.");
 
