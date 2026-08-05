@@ -35,6 +35,13 @@ is to make your **own** room and share its URL only with people you trust:
 No one without the link can find your room — it's as private as your sharing, and it won't
 attract the drive-by chaos a published room does.
 
+## See your room
+
+Type **`/render`** in the room to open an animation of it — your perspectives (everyone connected)
+bound to the shared room closure, plus your closures (lemmas) and groups. Not sure what a command
+does? Ask a room agent: **`/facil ask "how do I …"`** — it knows QuantumOS and will name the command.
+To share information *between* rooms, see [Room Bridges](Room_Bridges.md).
+
 ## Learn more / get help
 
 - **What it is & how to use it:** [README](https://github.com/jimscarver/quantum-os) ·

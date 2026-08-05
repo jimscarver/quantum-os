@@ -31,6 +31,8 @@ quantum-os/
 ├── packages/
 │   ├── browser/            Vite + TypeScript browser app (GitHub Pages)
 │   │   ├── index.html      Layout + CSS (sidebar, chat, share row)
+│   │   ├── public/
+│   │   │   └── render.html Room animation (the `/render` command) — self-contained canvas, deploys to /quantum-os/render.html
 │   │   └── src/
 │   │       ├── app.ts      All UI logic, slash commands, lemma/note/rdv stores, peer callbacks
 │   │       ├── peer.ts     QOSPeer class — WebRTC + signaling WebSocket
@@ -430,10 +432,12 @@ On failure: `gh run view <run-id> --log-failed`
 | `Group_Decisions.md` | Map of group-decision processes the interface supports — built (poll / probe / rdv / channel / lemma) and sketched (quorum, weighted, quadratic, delegation, sortition, consent, conviction), each mapped to a primitive |
 | `RhoQuDemo.md` | End-user walkthrough of `/rhoqu` — atomic swap with conditional accept, dining philosophers, multisig with persistence |
 | `packages/browser/src/peer.ts` | WebRTC connection, signaling reconnect + `wake()`, onPeerJoined/Left/ChannelOpen |
+| `packages/browser/public/render.html` | The `/render` room animation — self-contained canvas (no deps), reads the room's live state (perspective/closure names, group/channel counts) from URL params and draws perspectives bound to the shared room closure, closures (lemmas), and groups. Deploys to `/quantum-os/render.html` |
+| `Room_Bridges.md` | Sharing information among perspectives *across rooms* — the bridge model (a member of both rooms is the shared closure, ER=EPR), what `bridge.mjs` relays (channels/chat/lemmas/gov), signed-verbatim relay, loop prevention, and honest scope |
 | `scripts/qos-cli/agent.mjs` | Generalized room-agent daemon — roles, duties, lead election, trust standing, advisor wiring, commands (ask/optimize/**chair**+next/back/close/cancel/trust/off/on), chaired-deliberation state machine + receipts. `facilitator.mjs` is a shim |
 | `scripts/qos-cli/agent-roles.mjs` | Role registry (facilitator/scribe/greeter/skeptic) — `resolveRole`/`dutiesOf`; add a role here |
 | `scripts/qos-cli/bridge.mjs` | Room **bridge** — one headless perspective in ≥2 rooms relaying each room's outputs as the others' inputs: channels (default) + `--chat`, plus durable state `--lemmas` (published lemmas + `sync-lemmas` import) and `--gov` (`group-*`/`gov-*` mutations + `sync-gov` import). Signed state relayed **verbatim** so the signer's dyncap chain carries through; origin-labeled text, loop-guarded (`_bridge` tag + `--max-hops` + durable per-item dedupe). ER=EPR at the collaboration layer (a member of both rooms IS the shared closure). See [`Room_Bridges.md`](Room_Bridges.md) |
-| `scripts/qos-cli/facilitator-advisor.mjs` | AI advisor `makeAdvisor` — backends `api`/`claude-code`, modes ask/stimulate/synthesize/optimize/**chair** (single-neutral-chair persona, per-phase synthesis + closure decision), per-role persona |
+| `scripts/qos-cli/facilitator-advisor.mjs` | AI advisor `makeAdvisor` — backends `api`/`claude-code`, modes ask/stimulate/synthesize/optimize/**chair** (single-neutral-chair persona, per-phase synthesis + closure decision), per-role persona. The **`ask`** knowledge (`askKnowledge`) makes the agent an **expert on QuantumOS itself** — room model + full slash-command set (incl. `/render`) + docs — so `/facil ask` names the exact command. Keep it in sync when adding commands |
 | `scripts/qos-cli/gov.mjs` | Port of `gov.ts` `trustLevels`/`discreditedMembers` so an agent computes its own trust standing |
 | `scripts/qos-cli/qospeer.mjs` | Node `QOSPeer` transport (werift+ws) + 30s signaling keepalive; shared by agents + the memory daemon |
 | `scripts/qos-cli/optimize-demo.mjs` | Runnable collective-optimization demo (room session on TSP → optimum); see `Collective_Optimization.md` |
