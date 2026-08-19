@@ -12,10 +12,23 @@
 ///
 /// Pauli closure is not a stronger second condition; it IS the SU(2)-scalar-
 /// return reading of half-spin closure. Count balance is the same closure
-/// read as a Hermitian-pair multiset count. Neither implies the other in
-/// isolation; both together are the unique characterisation of a closed
-/// half-spin process. The 8-twist alphabet is the SU(2) generator set up to
-/// sign (≅ unit quaternions; see HALF-SPIN-ZFA-EMBEDDING.md §6).
+/// read as a Hermitian-pair multiset count.
+///
+/// The implication runs **one way**, and this comment used to say it ran
+/// neither way. Count balance *entails* Pauli closure, for every history
+/// including cross-axis interleavings — that is QLF's machine-verified
+/// keystone `count_balanced_pauli_closed` (lean/QLF_TwistAlphabet.lean), so
+/// the non-abelian face follows from the abelian one and is not an
+/// independent requirement. The converse genuinely fails: `^^` folds to
+/// σ_y² = I, which is Pauli closed, while its counts are (2,0,0,0).
+///
+/// So checking both is not wrong, just redundant in one direction, and the
+/// redundancy is worth keeping — it is a live cross-check that this kernel
+/// and the Lean proof still agree. What must not be inferred from the
+/// conjunction is that two independent things are being demanded.
+///
+/// The 8-twist alphabet is the SU(2) generator set up to sign (≅ unit
+/// quaternions; see HALF-SPIN-ZFA-EMBEDDING.md §6).
 ///
 /// Mirrors the QLF Python core (`twist_core.py`) and the Rust crate
 /// (`crates/zfa-core/src/pauli.rs`).
