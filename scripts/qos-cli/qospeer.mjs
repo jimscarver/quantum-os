@@ -11,6 +11,10 @@ import WebSocket from "ws";
 import { RTCPeerConnection } from "werift";
 
 const DEFAULT_ICE = [{ urls: "stun:stun.l.google.com:19302" }];
+// How long a connection may sit in ICE "disconnected" before we tear it down.
+// Long enough to ride out a real network blip, short enough that a departed peer
+// cannot leave an SCTP association retransmitting forever. See `_newPC`.
+const DISCONNECT_GRACE_MS = 30_000;
 
 // The ICE username fragment identifies an ICE session; a peer that reconnects (or
 // reloads its browser) brings a new one. Used to tell a genuine renegotiation
@@ -178,7 +182,26 @@ export class QOSPeer {
       this._signal({ type: "ice", roomId: this.config.roomId, from: this.peerId, to: remoteId, candidate: candidate.toJSON ? candidate.toJSON() : candidate });
     });
     const stateEvt = pc.connectionStateChange ?? pc.iceConnectionStateChange;
-    if (stateEvt?.subscribe) stateEvt.subscribe((s) => { if (s === "failed") { this._cleanup(remoteId); this.config.onPeerLeft?.(remoteId); } });
+    // Teardown on BOTH terminal states. werift never escalates "disconnected" to
+    // "failed" — its ICE layer has no consent-freshness timer — so a peer that
+    // vanishes silently (browser closed, lid shut, wifi dropped) parks here forever.
+    // Cleaning up only on "failed" left `pc.close()` uncalled, so the SCTP transport
+    // was never stopped and its association retransmitted its unacked queue at full
+    // speed, re-encrypting every chunk through pure-JS DTLS — one zombie peer pegged
+    // a core indefinitely. "disconnected" can also be a recoverable blip, so give it
+    // a grace period and re-check that the SAME pc is still stuck before dropping it.
+    if (stateEvt?.subscribe) stateEvt.subscribe((s) => {
+      if (s === "failed") { this._cleanup(remoteId); this.config.onPeerLeft?.(remoteId); }
+      else if (s === "disconnected") {
+        setTimeout(() => {
+          if (this.connections.get(remoteId) !== pc) return;                       // already replaced/cleaned
+          const now = pc.connectionState ?? pc.iceConnectionState;
+          if (now !== "disconnected") return;                                      // recovered
+          this._cleanup(remoteId);
+          this.config.onPeerLeft?.(remoteId);
+        }, DISCONNECT_GRACE_MS).unref?.();
+      }
+    });
     this.connections.set(remoteId, pc);
     return pc;
   }
@@ -260,8 +283,14 @@ export class QOSPeer {
   }
 
   _cleanup(peerId) {
-    try { this.connections.get(peerId)?.close(); } catch {}
+    const pc = this.connections.get(peerId);
+    // Drop the maps FIRST so a re-entrant cleanup (close() can itself fire a state
+    // change) cannot double-close the same pc.
     this.connections.delete(peerId);
     this.channels.delete(peerId);
+    // close() is async — it awaits sctpTransport.stop(), which is the step that stops
+    // the retransmit timer. Fire-and-forget is fine here, but surface the rejection
+    // rather than letting a failed teardown vanish (and leave the association live).
+    try { Promise.resolve(pc?.close()).catch((e) => this.config.onError?.(e)); } catch {}
   }
 }
