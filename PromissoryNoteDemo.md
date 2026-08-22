@@ -4,7 +4,7 @@ A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [qua
 
 > All bearer state stays private. The note token itself never appears in a broadcast — only Alice and the holders of derived pieces ever see the bytes. Currency declarations and grant announcements *are* public, so the room knows what currencies exist and who issues them.
 
-The lifecycle vocabulary — **TokenMint → Mint → Transfer → Redeem** — is borrowed from **Patrick Maguire's [DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)**. DarkWow implements it as a privacy-preserving DeFi contract on a Halo2 / Pallas zk-rollup; quantum-os implements the same algebraic shape over a per-room WebRTC data channel, with **conservation enforced by ZFA twist balance** instead of Pedersen commitments — no zk circuits, no global ledger.
+The lifecycle vocabulary — **TokenMint → Mint → Transfer → Redeem** — is borrowed from **Patrick Mockridge's [DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)**. DarkWow implements it as a privacy-preserving DeFi contract on a Halo2 / Pallas zk-rollup; quantum-os implements the same algebraic shape over a per-room WebRTC data channel, with **conservation enforced by ZFA twist balance** instead of Pedersen commitments — no zk circuits, no global ledger.
 
 ---
 
@@ -327,7 +327,7 @@ The pass and redeem were direct-to-peer over DTLS — invisible to third parties
 - [SECURITY.md](SECURITY.md) — bearer-note threat model and conservation guarantees
 - [SyllogismDemo.md](SyllogismDemo.md) — collaborative logic over the same primitives
 - [DiningPhilosophersDemo.md](DiningPhilosophersDemo.md) — atomic resource acquisition via `/pass`
-- **Original design source: [Patrick Maguire's DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)**
+- **Original design source: [Patrick Mockridge's DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)**
 - [Quantum Logical Framework `rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) — the Lean theorem that the conservation algebra inherits
 
 **[Open a room and try it →](https://jimscarver.github.io/quantum-os/)**
