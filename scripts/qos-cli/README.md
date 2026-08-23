@@ -34,7 +34,7 @@ npm install          # pulls ws + werift (werift = pure-TS headless WebRTC)
 ```bash
 # Announce to the public room (someone must be in it):
 node qos-cli.mjs \
-  --room "https://rchain-community.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
+  --room "https://rholang.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
   --name "release-bot" \
   --message "QLF v1.6.0 released — https://github.com/rchain-community/quantum-logical-framework/releases/tag/v1.6.0"
 
@@ -64,7 +64,7 @@ continuous peer.
 
 ```bash
 node qos-daemon.mjs \
-  --room "https://rchain-community.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
+  --room "https://rholang.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
   --name "memory" --state ./.qos-state
 ```
 

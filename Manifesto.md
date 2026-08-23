@@ -102,8 +102,8 @@ The full architecture, command vocabulary, and quick-start are in the **[README.
 
 ## 6. Try It
 
-- **Jim's public room** — [https://rchain-community.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721](https://rchain-community.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721) — click **Connect** to join. The `#room=cap:room:…` fragment is the room's ZFA capability token; possessing it *is* the right to join.
-- **A new room of your own** — open [https://rchain-community.github.io/quantum-os/](https://rchain-community.github.io/quantum-os/) in a fresh tab. Each fresh connection generates a new isolated Markov blanket identified by `#room=cap:room:…`. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
+- **Jim's public room** — [https://rholang.io/quantum-os/#room=cap:room:05214747236101414325074505234721](https://rholang.io/quantum-os/#room=cap:room:05214747236101414325074505234721) — click **Connect** to join. The `#room=cap:room:…` fragment is the room's ZFA capability token; possessing it *is* the right to join.
+- **A new room of your own** — open [https://rholang.io/quantum-os/](https://rholang.io/quantum-os/) in a fresh tab. Each fresh connection generates a new isolated Markov blanket identified by `#room=cap:room:…`. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
 - **A second room beside the first** — click the `+` tab. One session can be a peer in many rooms simultaneously; per-room state never crosses without an explicit `/share`.
 
 All rooms are **consent-defined** and fully sovereign, exactly as the [QLF Philosophy.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Philosophy.md) describes.
@@ -133,6 +133,6 @@ The consent is yours to give — or withhold — atomically, every time.
 - [The Network Nation](https://mitpress.mit.edu/9780262581202/the-network-nation/) — Hiltz & Turoff (1978)
 - [The Network State](https://thenetworkstate.com/) — Balaji Srinivasan (2022)
 - [Self-Determination Theory](https://selfdeterminationtheory.org/) — Deci, Ryan
-- **Live deployment**: [https://rchain-community.github.io/quantum-os/](https://rchain-community.github.io/quantum-os/)
+- **Live deployment**: [https://rholang.io/quantum-os/](https://rholang.io/quantum-os/)
 
 Welcome to the Network Nation 2.0.

@@ -7,7 +7,7 @@ as trust-governed members alongside the humans.
 
 ## Join
 
-**→ [Open my room](https://rchain-community.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721)**
+**→ [Open my room](https://rholang.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721)**
 
 Then **click Connect** in the app — opening the link only loads the page; *Connect* is
 what actually joins you to the peer mesh. Once connected: set a name with `/name <you>`,
@@ -24,7 +24,7 @@ or ` ask <question>`).
 Because **holding a room link _is_ your membership**, the private, sane way to collaborate
 is to make your **own** room and share its URL only with people you trust:
 
-1. **[Open the app](https://rchain-community.github.io/quantum-os/)** with no room in the URL — it
+1. **[Open the app](https://rholang.io/quantum-os/)** with no room in the URL — it
    mints a fresh, unguessable room for you.
 2. **Click Connect.**
 3. Copy your room URL from the address bar and send it to your trusted people.
