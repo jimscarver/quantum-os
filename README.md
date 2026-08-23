@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://rholang.io/quantum-os/)** · **[My room →](MyRoom.md)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[RhoQu Macro Demo →](RhoQuDemo.md)** · **[Optimization Demo →](OptimizationDemo.md)** · **[Consensus →](Consensus.md)** · **[Security →](SECURITY.md)** · **[New issue →](https://github.com/rchain-community/quantum-os/issues/new)**
+**[Open a room →](https://rchain-community.github.io/quantum-os/)** · **[My room →](MyRoom.md)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[RhoQu Macro Demo →](RhoQuDemo.md)** · **[Optimization Demo →](OptimizationDemo.md)** · **[Consensus →](Consensus.md)** · **[Security →](SECURITY.md)** · **[New issue →](https://github.com/rchain-community/quantum-os/issues/new)**
 
 **Group processes:** **[User Guide →](User_Guide.md)** · **[Developer Guide (build agents) →](Developer_Guide.md)** · **[Group Decisions →](Group_Decisions.md)** · **[Collective Optimization →](Collective_Optimization.md)** · **[Governance (liquid democracy) →](Governance.md)** · **[Room Best Practices →](Room_Best_Practices.md)** · **[RhoQuCalc Macros — protocols as verified ρ-processes →](RhoQuCalc_Macros.md)**
 
@@ -12,7 +12,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 
 ### How to create reality together
 
-1. Open **https://rholang.io/quantum-os/** in your browser.
+1. Open **https://rchain-community.github.io/quantum-os/** in your browser.
 2. Click **Connect** — you join a room identified by a ZFA capability token in the URL hash. Your peer ID is a ZFA-balanced process.
 3. Copy the share link and send it to someone (or open a second tab).
 4. The second peer clicks **Connect** — both appear in the **Peers** list.
@@ -891,7 +891,7 @@ wasm_capability_valid(hex: string): boolean
 | Cross-peer persistence | ✓ `/persist @lemma to <peer>` — agreed replication of public state with explicit accept/reject |
 | RhoQu macro language | ✓ `/rhoqu` — `process` / `new` / `\|` parallel / `if` / `on channel` / `for` transpile to dispatcher commands; handlers persist per-room |
 | Mobile viewport | ✓ `100dvh` + `interactive-widget=resizes-content` — input stays above the Android keyboard; not clipped on mobile Firefox |
-| GitHub Pages | ✓ https://rholang.io/quantum-os/ |
+| GitHub Pages | ✓ https://rchain-community.github.io/quantum-os/ |
 | Headless CLI peer | ✓ `scripts/qos-cli` — one-shot join + broadcast (Node + werift); ZFA/dyncap ported and self-tested |
 | Memory-peer daemon | ✓ persistent signed peer — persists + re-serves lemmas/currencies/transcript; stable identity; verified werift↔browser live |
 | Native Rust peer | Planned |

@@ -330,4 +330,4 @@ The pass and redeem were direct-to-peer over DTLS — invisible to third parties
 - **Original design source: [Patrick Mockridge's DarkWow promissory note contract](https://codeberg.org/PatrickM123/darkwow/src/branch/linear-master/doc/src/contract/promissory_note.md)**
 - [Quantum Logical Framework `rho_process_always_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) — the Lean theorem that the conservation algebra inherits
 
-**[Open a room and try it →](https://rholang.io/quantum-os/)**
+**[Open a room and try it →](https://rchain-community.github.io/quantum-os/)**

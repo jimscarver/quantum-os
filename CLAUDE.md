@@ -10,7 +10,7 @@ Project context for Claude Code sessions. Read this before making any changes.
 
 The ZFA kernel is implemented in Rust (compiled to WASM) and is the same algebraic core as the [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework). Possessing a capability token IS authorization — no server, no accounts, no trust.
 
-**Live deployment:** https://rholang.io/quantum-os/
+**Live deployment:** https://rchain-community.github.io/quantum-os/
 **Signaling server:** `wss://quantum-os-signaling.onrender.com` (Render.com, auto-deploys from `packages/signaling/`)
 
 ---
