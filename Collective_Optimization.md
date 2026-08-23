@@ -9,19 +9,19 @@ can and can't do.
 
 Quantum optimizers (annealers, QAOA) don't solve NP-hard problems instantly — that's pop-sci. They
 **approximate**: a physical system relaxes toward its minimum-energy (ground) state. The
-[Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) makes the same
+[Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) makes the same
 point formally — its machine-verified P-vs-NP reading shows **search/generate is exponential while
 verify is O(n), and a solution can't be assembled greedily**
-([P_vs_NP_QLF](https://github.com/jimscarver/quantum-logical-framework/blob/main/P_vs_NP_QLF.md)). So a
+([P_vs_NP_QLF](https://github.com/rchain-community/quantum-logical-framework/blob/main/P_vs_NP_QLF.md)). So a
 room can't conjure optimal answers either.
 
 What a room *can* do — and what QLF says the universe itself does — is **select by closure**: of all
 the candidate histories, the one that persists is the one that minimizes free action (`ΔF = −log 2`
 per event), favoured because *"the thing that can happen in the most ways happens first"*
-([MRE](https://github.com/jimscarver/quantum-logical-framework/blob/main/MRE.md),
-[QLF_FreeEnergy](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_FreeEnergy.lean)).
+([MRE](https://github.com/rchain-community/quantum-logical-framework/blob/main/MRE.md),
+[QLF_FreeEnergy](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_FreeEnergy.lean)).
 A room run well is one distributed Markov-blanket agent doing **perceive → predict → act → prune**
-([QuantumOS §3](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md)). That's a
+([QuantumOS §3](https://github.com/rchain-community/quantum-logical-framework/blob/main/QuantumOS.md)). That's a
 legitimate, physically faithful **metaheuristic** — the same family as simulated annealing,
 evolutionary search, and human computation.
 
@@ -94,7 +94,7 @@ room both *relax toward a low-energy answer* — but for real-world problems the
 - **Collective intelligence built in.** Many complementary perspectives, earned trust as the selection
   weight, governance to keep it honest — the QLF complementary-binding thesis (distinguishable closures
   bind where clones only flood,
-  [QLF_as_Intelligence](https://github.com/jimscarver/quantum-logical-framework/blob/main/QLF_as_Intelligence.md)).
+  [QLF_as_Intelligence](https://github.com/rchain-community/quantum-logical-framework/blob/main/QLF_as_Intelligence.md)).
 - **No decoherence to fight.** The annealing is over candidate *solutions*, not fragile qubit states —
   nothing to hold coherent at millikelvin.
 
@@ -119,13 +119,13 @@ round, ask a facilitator in your room: **`/facil optimize <objective + constrain
 ## Grounding (QLF)
 
 - Selection by closure / least free action, `ΔF = −log 2` per half-spin event:
-  [MRE](https://github.com/jimscarver/quantum-logical-framework/blob/main/MRE.md) ·
-  [QLF_FreeEnergy](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_FreeEnergy.lean).
+  [MRE](https://github.com/rchain-community/quantum-logical-framework/blob/main/MRE.md) ·
+  [QLF_FreeEnergy](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_FreeEnergy.lean).
 - *"Most ways happens first"* (Born-rule multiplicity):
-  [BayesianMechanics](https://github.com/jimscarver/quantum-logical-framework/blob/main/BayesianMechanics.md).
+  [BayesianMechanics](https://github.com/rchain-community/quantum-logical-framework/blob/main/BayesianMechanics.md).
 - Perceive→predict→act→prune as the room's cycle; collective intelligence as one distributed synthesis:
-  [QuantumOS §3](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) ·
-  [QLF_as_Intelligence](https://github.com/jimscarver/quantum-logical-framework/blob/main/QLF_as_Intelligence.md).
+  [QuantumOS §3](https://github.com/rchain-community/quantum-logical-framework/blob/main/QuantumOS.md) ·
+  [QLF_as_Intelligence](https://github.com/rchain-community/quantum-logical-framework/blob/main/QLF_as_Intelligence.md).
 - Why there is no instant NP solve (generate vs verify):
-  [P_vs_NP_QLF](https://github.com/jimscarver/quantum-logical-framework/blob/main/P_vs_NP_QLF.md) ·
-  [QLF_InfoSynthesis](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_InfoSynthesis.lean).
+  [P_vs_NP_QLF](https://github.com/rchain-community/quantum-logical-framework/blob/main/P_vs_NP_QLF.md) ·
+  [QLF_InfoSynthesis](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_InfoSynthesis.lean).

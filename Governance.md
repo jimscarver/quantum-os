@@ -11,7 +11,7 @@ This is the same ZFA substrate as everything else: dyncap-signed envelopes plus 
 **deterministic, joiner-local tally** (every peer resolves the same delegation
 graph from the signed delegations + ballots it holds — no central counter). See
 [`Group_Decisions.md`](Group_Decisions.md) for the broader family of decision
-processes and [`Group_Decisions_Demo.md`](https://github.com/jimscarver/quantum-logical-framework/blob/main/Group_Decisions_Demo.md)
+processes and [`Group_Decisions_Demo.md`](https://github.com/rchain-community/quantum-logical-framework/blob/main/Group_Decisions_Demo.md)
 for a worked multi-peer walkthrough.
 
 ---
@@ -272,4 +272,4 @@ typing `/gov trust` / `/gov censure`.
 ## See also
 
 - **[QuantumOS README](README.md)** — the runtime this governance layer is built on: rooms, peers, capability tokens, slash commands, and the ZFA substrate.
-- **[Quantum Logical Framework (QLF) README](https://github.com/jimscarver/quantum-logical-framework/blob/main/README.md)** — the physics/formalism repo: ZFA closure, the machine-verified Lean proofs, and the collective-intelligence theory ([`Room_Best_Practices.md`](Room_Best_Practices.md)) that motivates liquid trust.
+- **[Quantum Logical Framework (QLF) README](https://github.com/rchain-community/quantum-logical-framework/blob/main/README.md)** — the physics/formalism repo: ZFA closure, the machine-verified Lean proofs, and the collective-intelligence theory ([`Room_Best_Practices.md`](Room_Best_Practices.md)) that motivates liquid trust.

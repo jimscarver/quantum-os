@@ -7,7 +7,7 @@ Freedom is often thought of as the ability to do as one pleases without interfer
 
 That definition is incomplete. Freedom is also an *invitation* — to become the best version of ourselves, alone and together. In the **Consent-Based Global Network Society**, freedom is redefined as the **ability to cooperate voluntarily, atomically, and without coercion**. Quantum-OS is the technological substrate that makes that redefinition executable.
 
-This manifesto extends Jim Scarver's essay ["The Consent-Based Global Network Society — The Network Nation 2.0"](https://bravncwcgjoemvfx.quora.com/The-Consent-Based-Global-Network-Society-The-Network-Nation-2-0-Introduction-Freedom-is-often-thought-of-as-the-abil) and the [Quantum Logical Framework's Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md). The essay names the destination. QLF supplies the formal ontology — possibilist, with ZFA (Zero Free Action) as the sole selection principle. Quantum-OS is the kernel where those ideas run as code in a browser, today.
+This manifesto extends Jim Scarver's essay ["The Consent-Based Global Network Society — The Network Nation 2.0"](https://bravncwcgjoemvfx.quora.com/The-Consent-Based-Global-Network-Society-The-Network-Nation-2-0-Introduction-Freedom-is-often-thought-of-as-the-abil) and the [Quantum Logical Framework's Philosophy.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Philosophy.md). The essay names the destination. QLF supplies the formal ontology — possibilist, with ZFA (Zero Free Action) as the sole selection principle. Quantum-OS is the kernel where those ideas run as code in a browser, today.
 
 ---
 
@@ -87,26 +87,26 @@ The Quora essay names five imperatives for the Network Nation 2.0. Each is now a
 
 The manifesto is not aspirational. Every claim above is a live command in a browser app:
 
-- **[AtomicSwapDemo.md](https://github.com/jimscarver/quantum-os/blob/main/AtomicSwapDemo.md)** — `/rdv swap` as cooperative game theory in four keystrokes.
-- **[PromissoryNoteDemo.md](https://github.com/jimscarver/quantum-os/blob/main/PromissoryNoteDemo.md)** — bearer value with conservation enforced by the same algebraic invariant that proves no decoherence in the ZFA process.
-- **[MultisigDemo.md](https://github.com/jimscarver/quantum-os/blob/main/MultisigDemo.md)** — 2-of-2 cosignature using `/dyncap` for identity + `/rdv` for atomic agreement.
-- **[DiningPhilosophersDemo.md](https://github.com/jimscarver/quantum-os/blob/main/DiningPhilosophersDemo.md)** — deadlock-free resource sharing under the Dijkstra ordering protocol, using `/request` and `/pass`.
-- **[SyllogismDemo.md](https://github.com/jimscarver/quantum-os/blob/main/SyllogismDemo.md)** — two peers collaboratively prove "Socrates is mortal" using named lemmas (`@mortality`, `@socrates`) and `/qucalc` composition. The proof is the ZFA balance.
-- **[RhoQuDemo.md](https://github.com/jimscarver/quantum-os/blob/main/RhoQuDemo.md)** — three end-to-end macros: atomic swap with a transpile-time `if` guard; dining philosophers with `process` definitions and `on channel` handlers; multisig with `|` parallel `/persist` to witnesses.
-- **[Consensus.md](https://github.com/jimscarver/quantum-os/blob/main/Consensus.md)** — full protocol spec for the joiner-local supermajority probe, including its trust model and contrast with classical BFT.
-- **[SECURITY.md](https://github.com/jimscarver/quantum-os/blob/main/SECURITY.md)** — threat model, including the deliberate Markov-blanket isolation between rooms and the trust ceiling of hash-only dyncap.
+- **[AtomicSwapDemo.md](https://github.com/rchain-community/quantum-os/blob/main/AtomicSwapDemo.md)** — `/rdv swap` as cooperative game theory in four keystrokes.
+- **[PromissoryNoteDemo.md](https://github.com/rchain-community/quantum-os/blob/main/PromissoryNoteDemo.md)** — bearer value with conservation enforced by the same algebraic invariant that proves no decoherence in the ZFA process.
+- **[MultisigDemo.md](https://github.com/rchain-community/quantum-os/blob/main/MultisigDemo.md)** — 2-of-2 cosignature using `/dyncap` for identity + `/rdv` for atomic agreement.
+- **[DiningPhilosophersDemo.md](https://github.com/rchain-community/quantum-os/blob/main/DiningPhilosophersDemo.md)** — deadlock-free resource sharing under the Dijkstra ordering protocol, using `/request` and `/pass`.
+- **[SyllogismDemo.md](https://github.com/rchain-community/quantum-os/blob/main/SyllogismDemo.md)** — two peers collaboratively prove "Socrates is mortal" using named lemmas (`@mortality`, `@socrates`) and `/qucalc` composition. The proof is the ZFA balance.
+- **[RhoQuDemo.md](https://github.com/rchain-community/quantum-os/blob/main/RhoQuDemo.md)** — three end-to-end macros: atomic swap with a transpile-time `if` guard; dining philosophers with `process` definitions and `on channel` handlers; multisig with `|` parallel `/persist` to witnesses.
+- **[Consensus.md](https://github.com/rchain-community/quantum-os/blob/main/Consensus.md)** — full protocol spec for the joiner-local supermajority probe, including its trust model and contrast with classical BFT.
+- **[SECURITY.md](https://github.com/rchain-community/quantum-os/blob/main/SECURITY.md)** — threat model, including the deliberate Markov-blanket isolation between rooms and the trust ceiling of hash-only dyncap.
 
-The full architecture, command vocabulary, and quick-start are in the **[README.md](https://github.com/jimscarver/quantum-os/blob/main/README.md)**.
+The full architecture, command vocabulary, and quick-start are in the **[README.md](https://github.com/rchain-community/quantum-os/blob/main/README.md)**.
 
 ---
 
 ## 6. Try It
 
-- **Jim's public room** — [https://jimscarver.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721](https://jimscarver.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721) — click **Connect** to join. The `#room=cap:room:…` fragment is the room's ZFA capability token; possessing it *is* the right to join.
-- **A new room of your own** — open [https://jimscarver.github.io/quantum-os/](https://jimscarver.github.io/quantum-os/) in a fresh tab. Each fresh connection generates a new isolated Markov blanket identified by `#room=cap:room:…`. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
+- **Jim's public room** — [https://rchain-community.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721](https://rchain-community.github.io/quantum-os/#room=cap:room:05214747236101414325074505234721) — click **Connect** to join. The `#room=cap:room:…` fragment is the room's ZFA capability token; possessing it *is* the right to join.
+- **A new room of your own** — open [https://rchain-community.github.io/quantum-os/](https://rchain-community.github.io/quantum-os/) in a fresh tab. Each fresh connection generates a new isolated Markov blanket identified by `#room=cap:room:…`. Use `/room join <cap|url>` (or the share link) to invite others. Rooms persist across reloads via `localStorage`.
 - **A second room beside the first** — click the `+` tab. One session can be a peer in many rooms simultaneously; per-room state never crosses without an explicit `/share`.
 
-All rooms are **consent-defined** and fully sovereign, exactly as the [QLF Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md) describes.
+All rooms are **consent-defined** and fully sovereign, exactly as the [QLF Philosophy.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Philosophy.md) describes.
 
 ---
 
@@ -125,14 +125,14 @@ The consent is yours to give — or withhold — atomically, every time.
 ### References
 
 - [The Consent-Based Global Network Society — The Network Nation 2.0](https://bravncwcgjoemvfx.quora.com/The-Consent-Based-Global-Network-Society-The-Network-Nation-2-0-Introduction-Freedom-is-often-thought-of-as-the-abil) — Jim Scarver, Quora (the source essay this manifesto extends)
-- [Quantum Logical Framework — Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md) — possibilist ontology, ZFA as the sole selection principle
-- [Quantum-OS README.md](https://github.com/jimscarver/quantum-os/blob/main/README.md) — architecture, slash commands, quick start
-- [RhoQuDemo.md](https://github.com/jimscarver/quantum-os/blob/main/RhoQuDemo.md) — three end-to-end RhoQu walkthroughs
-- [Consensus.md](https://github.com/jimscarver/quantum-os/blob/main/Consensus.md) — discrepancy probe protocol
-- [SECURITY.md](https://github.com/jimscarver/quantum-os/blob/main/SECURITY.md) — threat model and known issues
+- [Quantum Logical Framework — Philosophy.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Philosophy.md) — possibilist ontology, ZFA as the sole selection principle
+- [Quantum-OS README.md](https://github.com/rchain-community/quantum-os/blob/main/README.md) — architecture, slash commands, quick start
+- [RhoQuDemo.md](https://github.com/rchain-community/quantum-os/blob/main/RhoQuDemo.md) — three end-to-end RhoQu walkthroughs
+- [Consensus.md](https://github.com/rchain-community/quantum-os/blob/main/Consensus.md) — discrepancy probe protocol
+- [SECURITY.md](https://github.com/rchain-community/quantum-os/blob/main/SECURITY.md) — threat model and known issues
 - [The Network Nation](https://mitpress.mit.edu/9780262581202/the-network-nation/) — Hiltz & Turoff (1978)
 - [The Network State](https://thenetworkstate.com/) — Balaji Srinivasan (2022)
 - [Self-Determination Theory](https://selfdeterminationtheory.org/) — Deci, Ryan
-- **Live deployment**: [https://jimscarver.github.io/quantum-os/](https://jimscarver.github.io/quantum-os/)
+- **Live deployment**: [https://rchain-community.github.io/quantum-os/](https://rchain-community.github.io/quantum-os/)
 
 Welcome to the Network Nation 2.0.
