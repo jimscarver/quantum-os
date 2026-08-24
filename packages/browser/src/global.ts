@@ -74,7 +74,7 @@ async function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<voi
   });
 }
 
-async function deriveWrappingKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveWrappingKey(passphrase: string, salt: BufferSource): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(passphrase),
