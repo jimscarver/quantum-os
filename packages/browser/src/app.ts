@@ -21,6 +21,7 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
+import { expandGlobalMacro, lintRholang, runGlobalPipeline } from "./global.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1624,6 +1625,7 @@ function handleCommand(raw: string): string[] {
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
+      sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros · node <url> (lint→sign→deploy)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
@@ -3628,6 +3630,51 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "global": {
+      // RChain capability macros — expand (locally, or via a /global agent in the
+      // room), then lint → preview → sign (client-side key) → deploy to the node.
+      const g = arg.trim();
+      if (g.startsWith("node ")) {
+        const url = g.slice(5).trim();
+        localStorage.setItem("qos-node-url", url);
+        sys(`✓ deploy node set to ${url}`);
+        break;
+      }
+      try {
+        const x = expandGlobalMacro(`/global ${g}`);
+        if (x.kind === "help" || x.kind === "list") {
+          for (const l of x.text.split("\n")) sys(l);
+          break;
+        }
+        if (x.kind === "result") { sys(x.text); break; }
+        // x.kind === "rholang" → preview, then the client-side sign & deploy loop.
+        const nodeUrl = localStorage.getItem("qos-node-url") ?? "http://127.0.0.1:40403";
+        sys(`/global ${x.macro} → expanded (review, then sign & deploy):`);
+        for (const l of x.source.split("\n")) sys("  " + l);
+        sys(`target node: ${nodeUrl}  (change with /global node <url>)`);
+        void (async () => {
+          const lint = await lintRholang(x.source);
+          if (!lint.ok) {
+            sys("✗ lint failed — not signing:");
+            for (const e of lint.errors) sys("  • " + e);
+            return;
+          }
+          sys("✓ lint clean");
+          if (!window.confirm("Sign and deploy this rholang to the RChain node?")) {
+            sys("cancelled — nothing deployed");
+            return;
+          }
+          const pass = window.prompt("Passphrase for your signing key (creates one on first use):") ?? "";
+          const r = await runGlobalPipeline(x.source, { nodeUrl, passphrase: pass });
+          if (r.ok) sys(`✓ ${r.message}${r.deployId ? ` — id ${r.deployId}` : ""}`);
+          else sys(`✗ ${r.stage}: ${r.message}`);
+        })();
+      } catch (e) {
+        sys(`✗ ${(e as Error)?.message ?? e}`);
+      }
+      break;
+    }
+
     default:
       sys(`unknown command: /${cmd}  (type /help for list)`);
   }
@@ -4788,7 +4835,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -5091,6 +5138,7 @@ const CMD_HELP: Record<string, string[]> = {
   script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
+  global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library. · /global node <url> — set the deploy target (default http://127.0.0.1:40403).", "Writes are linted (WASM), previewed, then signed with your passphrase-wrapped browser key and POSTed to the node — the key never leaves the browser."],
 };
 
 interface SlashCmd { name: string; template: string; desc: string }
