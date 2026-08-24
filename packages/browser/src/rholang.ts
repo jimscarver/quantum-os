@@ -204,30 +204,96 @@ export function signDeployData(d: DeployData, secretHex: string): { deployer: st
 // every system process, under a short name. What you type is the body.
 // ---------------------------------------------------------------------------
 
-/** name → URN. `deployerId` is deploy-only: an eval has no deployer, and merely
- *  binding it there fails to normalize ("No value set for rho:rchain:deployerId"). */
-const POWERBOX: [name: string, urn: string, deployOnly?: boolean][] = [
-  ["stdout", "rho:io:stdout"],
-  ["stderr", "rho:io:stderr"],
-  ["zfa", "rho:qucalc:zfa"],
-  ["grant", "rho:qucalc:grant"],
-  ["verify", "rho:qucalc:verify"],
-  ["fuse", "rho:qucalc:fuse"],
-  ["resolveWeights", "rho:gov:resolveWeights"],
-  ["trustLevels", "rho:gov:trustLevels"],
-  ["censure", "rho:gov:censure"],
-  ["tally", "rho:gov:tally"],
-  ["lookup", "rho:registry:lookup"],
-  ["insertArbitrary", "rho:registry:insertArbitrary"],
-  ["revVault", "rho:rchain:revVault"],
-  ["revAddress", "rho:rev:address"],
-  ["blockData", "rho:block:data"],
-  ["deployerId", "rho:rchain:deployerId", true],
+/**
+ * The names a program gets for free, and what each one takes.
+ *
+ * `deployOnly` marks `deployerId`: an eval has no deployer, and merely binding
+ * it there fails to normalize ("No value set for rho:rchain:deployerId").
+ *
+ * The shapes here were read off the node's own argument parsers, not its docs —
+ * `docs/src/qucalc/extensions.md` documents `trustLevels` ratings and `censure`
+ * censures/vouchers as nested maps, and the node rejects those: it wants tuple
+ * lists (`parse_rating_list`, `parse_censure_list`, and `parse_voucher_list`,
+ * which is `parse_rating_list` again). Verified against a running node.
+ */
+interface PowerboxEntry {
+  name: string;
+  urn: string;
+  /** How it is called, with the return channel where the node expects it. */
+  sig: string;
+  /** What arrives on that channel. */
+  returns?: string;
+  /** Argument shapes that are not obvious from the signature. */
+  note?: string;
+  deployOnly?: boolean;
+}
+
+const POWERBOX: PowerboxEntry[] = [
+  { name: "stdout", urn: "rho:io:stdout", sig: "stdout!(value)",
+    returns: "nothing — it prints to the node's log, which you cannot read from here" },
+  { name: "stderr", urn: "rho:io:stderr", sig: "stderr!(value)",
+    returns: "nothing — same" },
+
+  { name: "zfa", urn: "rho:qucalc:zfa", sig: "zfa!(history, *return)",
+    returns: "(isZfa, phase) — phase is +I=1, −I=-1, +iI=2, −iI=-2",
+    note: "history is a list of twist values 0..7, or the equivalent string" },
+  { name: "grant", urn: "rho:qucalc:grant", sig: "grant!(history, *return)",
+    returns: "the minted capability uri, or Nil if the history is not ZFA-closed" },
+  { name: "verify", urn: "rho:qucalc:verify", sig: "verify!(uri, *return)",
+    returns: "Bool" },
+  { name: "fuse", urn: "rho:qucalc:fuse", sig: "fuse!(subject, predicate, *return)",
+    returns: "(geometry, cap), or Nil if the synthesis does not close" },
+
+  { name: "resolveWeights", urn: "rho:gov:resolveWeights",
+    sig: "resolveWeights!(directVoters, delegations, trust, *return)",
+    returns: "map of voter → weight",
+    note: "directVoters is a list of ids; delegations a map id → id; trust a map id → int" },
+  { name: "trustLevels", urn: "rho:gov:trustLevels", sig: "trustLevels!(ratings, admins, *return)",
+    returns: "map of member → level",
+    note: "ratings is a LIST of (rater, ratee, level) tuples — not a map; admins a list of ids" },
+  { name: "censure", urn: "rho:gov:censure", sig: "censure!(censures, levels, vouchers, *return)",
+    returns: "(discredited, newLevels)",
+    note: "censures is a list of (censor, target); levels a map member → int; vouchers a list of (voucher, vouchee, level)" },
+  { name: "tally", urn: "rho:gov:tally", sig: "tally!(ballots, weights, mode, *return)",
+    returns: "the winning option, or Nil when there are no ballots",
+    note: "ballots is a map member → [ranked options]; weights a map member → int ({} = one each); mode \"ranked\" or \"approval\"" },
+
+  { name: "lookup", urn: "rho:registry:lookup", sig: "lookup!(uri, *return)",
+    returns: "(uri, value), or Nil when nothing is registered there" },
+  { name: "insertArbitrary", urn: "rho:registry:insertArbitrary", sig: "insertArbitrary!(data, *return)",
+    returns: "the uri the data was stored at — content-addressed and unforgeable" },
+
+  { name: "revVault", urn: "rho:rchain:revVault", sig: "revVault!(method, [args…, *return])",
+    returns: "per method",
+    note: "the return channel goes INSIDE the list: getBalance [addr, ret] · transfer [from, to, amount, ret] · findOrCreate [addr, ret] · deposit [addr, amount, ret]" },
+  { name: "revAddress", urn: "rho:rev:address", sig: "revAddress!(op, arg, *return)",
+    returns: "the REV address as a string",
+    note: "op is \"fromPublicKey\", \"fromDeployerId\" or \"fromUnforgeable\"" },
+  { name: "blockData", urn: "rho:block:data", sig: "blockData!(*return)",
+    returns: "blockNumber and sender, as two values: for (@n, @sender <- return)" },
+
+  { name: "deployerId", urn: "rho:rchain:deployerId", sig: "*deployerId",
+    returns: "not a channel — an unforgeable name identifying whoever signed this deploy",
+    note: "use it as a value (*deployerId); deploy only, an eval has no deployer",
+    deployOnly: true },
 ];
 
 /** The names a program can use without declaring them. */
 export function powerboxNames(mode: "eval" | "deploy"): string[] {
-  return POWERBOX.filter(([, , deployOnly]) => mode === "deploy" || !deployOnly).map(([n]) => n);
+  return POWERBOX.filter((e) => mode === "deploy" || !e.deployOnly).map((e) => e.name);
+}
+
+/** The full spec, as display lines: how to call each name and what comes back. */
+export function powerboxSpec(mode: "eval" | "deploy"): string[] {
+  const out: string[] = [];
+  for (const e of POWERBOX) {
+    const skipped = e.deployOnly && mode !== "deploy";
+    out.push(`${e.sig}${skipped ? "   (deploy only)" : ""}`);
+    out.push(`    ${e.urn}`);
+    if (e.returns) out.push(`    → ${e.returns}`);
+    if (e.note) out.push(`    ${e.note}`);
+  }
+  return out;
 }
 
 /** A public name to read a deploy's results back from, unique per deploy. */
@@ -242,11 +308,12 @@ export function resultName(): string {
  *
  * A deploy cannot: its `return` is unforgeable and the deploy is long gone by
  * the time anyone asks. So the deploy wrapper adds a persistent forwarder that
- * copies everything sent to `return` onto a public name, which is then readable
- * by anyone who knows it — including us, a moment later.
+ * copies everything sent to `return` onto a public name — readable afterwards by
+ * anyone who knows it, including us a moment later — and to stdout for the log.
+ * One receive doing both, because two would compete for the same values.
  */
 export function wrapProgram(body: string, mode: "eval" | "deploy", forwardTo?: string): string {
-  const decls = ["return", ...POWERBOX.filter(([, , d]) => mode === "deploy" || !d).map(([n, urn]) => `${n}(\`${urn}\`)`)];
+  const decls = ["return", ...POWERBOX.filter((e) => mode === "deploy" || !e.deployOnly).map((e) => `${e.name}(\`${e.urn}\`)`)];
   const indented = body.split("\n").map((l) => (l.trim() ? "  " + l : l)).join("\n");
   const forwarder = forwardTo
     ? `\n  |\n  for (@__value <= return) { @${JSON.stringify(forwardTo)}!(__value) | stdout!(__value) }`

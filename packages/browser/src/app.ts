@@ -27,7 +27,7 @@ import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, publicKeyOf, revAddressOf, nodeStatus, evalTerm, deployTerm,
-         readResults, powerboxNames, type NodeConfig } from "./rholang.js";
+         readResults, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1607,6 +1607,7 @@ const RHOLANG_HELP = [
   "                           nothing is stored, no block is produced.",
   "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
   "  /rholang status        — what the node is: version, shard, height, phlo floor.",
+  "  /rholang powerbox      — the names every program gets, and what each one takes.",
   "",
   "  eval and deploy take the program from the lines you type next.",
   "  End with an empty line to run it, or type /cancel to throw it away.",
@@ -1633,6 +1634,7 @@ function startRholangCapture(mode: "eval" | "deploy", seed: string, sys: (t: str
     : "rholang to deploy — type the program, then an empty line to sign and submit it (/cancel to abort):");
   if (seed) sys("  " + seed);
   sys(`in scope: return, ${powerboxNames(mode).join(", ")}`);
+  sys("  /rholang powerbox — what each one takes and returns");
 }
 
 /** Run whatever the capture collected. */
@@ -3932,6 +3934,17 @@ function handleCommand(raw: string): string[] {
         case "eval":
         case "deploy": {
           startRholangCapture(sub, rest, sys);
+          break;
+        }
+
+        case "powerbox":
+        case "names": {
+          sys("declared for you in every program — send to these, read the answer on return:");
+          sys("");
+          for (const l of powerboxSpec("deploy")) sys("  " + l);
+          sys("");
+          sys("Under eval the system processes bind but never reply — only pure rholang");
+          sys("returns values there. A call that must answer needs deploy.");
           break;
         }
 
