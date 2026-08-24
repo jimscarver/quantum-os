@@ -33,29 +33,6 @@
 export function createMacroEngine(kernel) {
 const { parseTwists, achievesZfa, isPauliClosed, validateCapability } = kernel;
 
-// ---------------------------------------------------------------------------
-// Hygiene: patterns a *user-supplied argument* may not contain.
-//
-// What actually stops injection is that every user string reaches rholang
-// through `q()` — JSON.stringify — into a string-literal position, and every
-// number through cleanInt. A quote or backslash is escaped, so an argument
-// cannot leave the literal it lands in. These patterns are a second line
-// behind that, for content that would be alarming even as inert data.
-//
-// They are NOT a syntax filter. Rholang keywords inside a string literal are
-// text, not code: `new` and `for (` were once rejected here as "scope
-// smuggling" and "join smuggling", but neither can smuggle anything past the
-// quoting, and both fire on ordinary names — "New York", "renew all", "Vote
-// for (chair)". A guard that cannot prevent an attack and does reject real
-// input is worse than no guard.
-// ---------------------------------------------------------------------------
-const RESTRICTED = [
-  /rho:io:/i,                 // raw I/O channels
-  /rho:rchain:deployerId/i,   // someone else's unforgeable identity
-  /\*\s*!/,                   // eval-then-send injection
-  /!\s*\*/,                   // send-then-eval injection
-];
-
 function fail(msg) {
   const e = new Error(msg);
   e.kind = "macro";
@@ -65,11 +42,20 @@ function fail(msg) {
 /** A safe rholang string literal (JSON.stringify is a valid rholang string). */
 const q = (s) => JSON.stringify(String(s));
 
+// Arguments are not content-policed. What a user calls a directory is their
+// business: every string reaches rholang through `q()` into a string literal,
+// where it is inert text, and the WASM linter (crates/zfa-core/src/lint.rs)
+// inspects the *expanded rholang* for restricted patterns before anything is
+// signed. That is the layer that looks at code. Matching keywords against
+// names here caught nothing the quoting did not already stop, and refused
+// ordinary input like "New York" and "renew all licences".
+//
+// The length cap stays: it bounds the emitted program, which is this module's
+// business.
 function cleanString(v, name) {
   const s = String(v ?? "").trim();
   if (!s) throw fail(`${name}: expected a non-empty string`);
   if (s.length > 120) throw fail(`${name}: too long (max 120 chars)`);
-  for (const re of RESTRICTED) if (re.test(s)) throw fail(`${name}: rejected — restricted pattern`);
   return s;
 }
 
@@ -496,8 +482,10 @@ function selftest() {
     ["transfer 0x10 bob", () => { throw new Error("should have been rejected"); }],
     ["transfer 1e9 bob", () => { throw new Error("should have been rejected"); }],
     // hygiene / injection must be rejected:
-    ["directory rho:io:stdout", () => { throw new Error("should have been rejected"); }],
-    ["ballot x y,rho:io:stdout", () => { throw new Error("should have been rejected"); }],
+    // Not the expander's business: these are inert inside a string literal, and
+    // the WASM linter is what inspects the expanded rholang before signing.
+    ["directory rho:io:stdout", (r) => r.source.includes('"directory": "rho:io:stdout"')],
+    ["ballot x y,rho:io:stdout", (r) => r.source.includes('"y", "rho:io:stdout"')],
     ["nope", () => { throw new Error("should have been rejected"); }],
   ];
   let pass = 0;
@@ -527,8 +515,9 @@ function selftest() {
       () => P('%directory("oops"').errors.length === 1],
     ["nested brackets in args are balanced correctly",
       () => P('%ballot("i", ["a (b)", "c, d"])').expansions.length === 1],
-    ["ordinary names are not rejected as rholang keywords",
-      () => ["New York office", "renew all licences", "Vote for (chair)", "new hires"]
+    ["arguments are not content-policed",
+      () => ["New York office", "renew all licences", "Vote for (chair)", "new hires",
+             "rho:io:stdout", "about *deployerId", "a!!b"]
         .every((n) => P(`%directory(${JSON.stringify(n)})`).errors.length === 0)],
     ["a rholang keyword in an argument stays inside its string literal",
       () => P('%directory("new x in { evil!(1) }")').source

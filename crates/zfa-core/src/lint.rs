@@ -1,17 +1,18 @@
-//! Lightweight, heuristic rholang source linter.
+//! Lightweight rholang well-formedness check.
 //!
-//! This is the browser-side "code safety" pass from the `/global` macro-agent
-//! spec: before a macro-expanded deploy is signed and broadcast, the client runs
-//! this check and shows the user exactly what would execute. It is *not* a full
-//! parser — it catches the two classes of problem that matter for a macro that
-//! was already assembled from approved templates:
+//! Runs before a macro-expanded deploy is signed, so the user is not asked to
+//! sign something that cannot parse. It checks delimiter balance and nothing
+//! else. It is not a full parser.
 //!
-//!   1. delimiter balance (a malformed expansion),
-//!   2. restricted patterns (raw I/O channels, unforgeable-identity capture,
-//!      classic send/eval injection shapes).
+//! It deliberately does NOT restrict which rholang a deploy may contain. There
+//! is no forbidden rholang: RChain's security is capability-based, so what a
+//! deploy can reach is decided by the unforgeable names it holds, not by which
+//! identifiers appear in its source. A denylist here decided nothing the node
+//! does not already decide, while refusing legitimate programs — the list it
+//! replaced flagged `for(`, which is ordinary rholang, and `rho:io:`, which any
+//! deploy may use.
 //!
-//! Compiled to WASM (`wasm_lint_ok` / `wasm_lint_errors`) and mirrored in the
-//! agent's `global-macros.mjs` hygiene guard.
+//! Compiled to WASM (`wasm_lint_ok` / `wasm_lint_errors`).
 
 /// A single lint finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,26 +55,6 @@ pub fn lint(source: &str) -> Vec<Finding> {
         }
     }
 
-    // 2. Restricted patterns (ordered by severity).
-    for (needle, why) in [
-        ("rho:io:", "unauthorized raw I/O channel"),
-        (
-            "rho:rchain:deployerId",
-            "deployerId capture — a macro must not bind another signer's identity",
-        ),
-        ("for(", "join pattern — a macro must not introduce its own join"),
-        ("* !", "eval-then-send injection"),
-        ("! *", "send-then-eval injection"),
-        ("!!", "double-send"),
-    ] {
-        if let Some(pos) = source.find(needle) {
-            findings.push(Finding {
-                pos,
-                message: format!("{why}: `{needle}`"),
-            });
-        }
-    }
-
     findings
 }
 
@@ -101,27 +82,23 @@ mod tests {
         assert!(f.iter().any(|x| x.message.contains("unbalanced")));
     }
 
+    /// There is no forbidden rholang. Capability security decides what a deploy
+    /// can reach; the linter only decides whether it is well-formed.
     #[test]
-    fn flags_raw_io() {
-        let f = lint("new ret in { rho:io:stdout!(\"hi\", *ret) }");
-        assert!(f.iter().any(|x| x.message.contains("rho:io:")));
-    }
-
-    #[test]
-    fn flags_deployerid_capture() {
-        let f = lint("new x in { rho:rchain:deployerId!(*x) }");
-        assert!(f.iter().any(|x| x.message.contains("deployerId")));
-    }
-
-    #[test]
-    fn flags_injection_shapes() {
-        assert!(lint("a! *x").iter().any(|x| x.message.contains("injection")));
-        assert!(lint("x!!").iter().any(|x| x.message.contains("double-send")));
+    fn does_not_restrict_which_rholang_is_permitted() {
+        for src in [
+            "new ret in { rho:io:stdout!(\"hi\", *ret) }",
+            "new x in { rho:rchain:deployerId!(*x) }",
+            "for (@x <- @\"c\") { Nil }",
+            "new c in { c!!(1) }",
+        ] {
+            assert!(lint(src).is_empty(), "{src:?} -> {:?}", lint(src));
+        }
     }
 
     #[test]
     fn ok_helper_agrees() {
         assert!(lint_ok("new ret in { Nil }"));
-        assert!(!lint_ok("rho:io:stdout!(1)"));
+        assert!(!lint_ok("new ret in { Nil "));
     }
 }

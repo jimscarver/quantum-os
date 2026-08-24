@@ -3771,7 +3771,7 @@ function handleCommand(raw: string): string[] {
         void (async () => {
           const lint = await lintRholang(source);
           if (!lint.ok) {
-            sys("✗ lint failed — not signing:");
+            sys("✗ malformed rholang — not signing:");
             for (const e of lint.errors) sys("  • " + e);
             return;
           }

@@ -5,7 +5,9 @@
 // browser:
 //
 //   lint   → the WASM linter (crates/zfa-core/src/lint.rs) checks the expanded
-//            code for restricted patterns before anything is signed.
+//            code is well-formed, so nobody is asked to sign something that
+//            cannot parse. It does not restrict which rholang is permitted —
+//            capability security decides what a deploy can reach.
 //   sign   → the deploy is signed with a locally-generated keypair, wrapped by a
 //            passphrase-derived AES key and stored in IndexedDB. The private key
 //            never leaves the browser.
