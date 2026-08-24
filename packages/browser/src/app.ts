@@ -23,7 +23,7 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
-import { expandGlobalMacro, lintRholang, runGlobalPipeline } from "./global.js";
+import { expandGlobalMacro, expandGlobalProgram, lintRholang, runGlobalPipeline } from "./global.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -3735,19 +3735,42 @@ function handleCommand(raw: string): string[] {
         break;
       }
       try {
-        const x = expandGlobalMacro(`/global ${g}`);
-        if (x.kind === "help" || x.kind === "list") {
-          for (const l of x.text.split("\n")) sys(l);
-          break;
+        // Two shapes: a bare single macro (`transfer 100 bob` — the whole program
+        // is one macro), or a rholang program, one line or many, with %name(…)
+        // call sites embedded in it. The rholang itself is not parsed; call sites
+        // expand in place and everything else is left as written, so whatever the
+        // result means is the linter's question and then the node's.
+        const head = g.split(/\s+/)[0]?.toLowerCase() ?? "";
+        const bare = !g.includes("%") && head !== "";
+        let source: string;
+        let title: string;
+        if (bare) {
+          const x = expandGlobalMacro(`/global ${g}`);
+          if (x.kind === "help" || x.kind === "list") {
+            for (const l of x.text.split("\n")) sys(l);
+            break;
+          }
+          if (x.kind === "result") { sys(x.text); break; }
+          source = x.source;
+          title = `/global ${x.macro} → expanded (review, then sign & deploy):`;
+        } else {
+          const p = expandGlobalProgram(g);
+          for (const e of p.errors) sys(`✗ line ${e.line}: ${e.message}`);
+          if (!p.expansions.length) {
+            sys(p.errors.length ? "nothing expanded — fix the errors above" : "no %macro(…) call sites found — /global macros lists them");
+            break;
+          }
+          source = p.source;
+          const names = p.expansions.map((e) => `%${e.name}`).join(", ");
+          title = `/global → expanded ${p.expansions.length} macro${p.expansions.length === 1 ? "" : "s"} (${names})`
+                + `${p.errors.length ? `, ${p.errors.length} left unexpanded` : ""} — review, then sign & deploy:`;
         }
-        if (x.kind === "result") { sys(x.text); break; }
-        // x.kind === "rholang" → preview, then the client-side sign & deploy loop.
         const nodeUrl = localStorage.getItem("qos-node-url") ?? "http://127.0.0.1:40403";
-        sys(`/global ${x.macro} → expanded (review, then sign & deploy):`);
-        for (const l of x.source.split("\n")) sys("  " + l);
+        sys(title);
+        for (const l of source.split("\n")) sys("  " + l);
         sys(`target node: ${nodeUrl}  (change with /global node <url>)`);
         void (async () => {
-          const lint = await lintRholang(x.source);
+          const lint = await lintRholang(source);
           if (!lint.ok) {
             sys("✗ lint failed — not signing:");
             for (const e of lint.errors) sys("  • " + e);
@@ -3759,7 +3782,7 @@ function handleCommand(raw: string): string[] {
             return;
           }
           const pass = window.prompt("Passphrase for your signing key (creates one on first use):") ?? "";
-          const r = await runGlobalPipeline(x.source, { nodeUrl, passphrase: pass });
+          const r = await runGlobalPipeline(source, { nodeUrl, passphrase: pass });
           if (r.ok) sys(`✓ ${r.message}${r.deployId ? ` — id ${r.deployId}` : ""}`);
           else sys(`✗ ${r.stage}: ${r.message}`);
         })();

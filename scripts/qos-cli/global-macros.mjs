@@ -226,6 +226,21 @@ new ret in {
 // Expansion entry point.
 // ---------------------------------------------------------------------------
 
+/**
+ * The `/global` entry point. The body is either a bare single macro call
+ * (`transfer 100 bob` — the whole program is one macro) or a rholang program,
+ * one line or many, with `%name(…)` call sites embedded in it.
+ */
+export function expandGlobal(input) {
+  const body = String(input ?? "").replace(/^\s*\/?global\s*/i, "");
+  const head = body.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (head === "help") return { kind: "help" };
+  if (head === "macros" || head === "list") return { kind: "list" };
+  // Bare form: no call sites, and the first word names a macro.
+  if (!body.includes("%") && MACROS[head]) return expandMacro(body);
+  return expandProgram(body);
+}
+
 /** Parse "/global name args…" (or bare "name args…") and expand it. */
 export function expandMacro(line) {
   const s = String(line ?? "").trim();
@@ -271,6 +286,165 @@ export function expandMacro(line) {
   return { kind: "result", macro: name, ...macro.read(args) };
 }
 
+// ---------------------------------------------------------------------------
+// Program expansion: macros embedded in rholang.
+//
+// A `/global` body is a rholang program — one line or many — with macro call
+// sites written `%name(arg, …)`. We do NOT parse the rholang: we scan it well
+// enough to find call sites that are really call sites (skipping strings and
+// comments, balancing brackets), expand those in place, and leave every other
+// byte untouched. Whatever the result does or does not mean is the linter's
+// question and then the node's; expansion only reports its own errors.
+//
+// The `%` sigil is what keeps this honest without a rholang grammar — a bare
+// `ballot(…)` would be indistinguishable from a real contract call.
+// ---------------------------------------------------------------------------
+
+/** Advance past a rholang string literal starting at `i` (src[i] === '"'). */
+function skipString(src, i) {
+  i++;
+  while (i < src.length) {
+    if (src[i] === "\\") { i += 2; continue; }
+    if (src[i] === '"') return i + 1;
+    i++;
+  }
+  return -1;                       // unterminated
+}
+
+/** Advance past whichever of string / line comment / block comment starts at `i`, else -1. */
+function skipTrivia(src, i) {
+  if (src[i] === '"') return skipString(src, i);
+  if (src[i] === "/" && src[i + 1] === "/") { const e = src.indexOf("\n", i); return e < 0 ? src.length : e; }
+  if (src[i] === "/" && src[i + 1] === "*") { const e = src.indexOf("*/", i + 2); return e < 0 ? -1 : e + 2; }
+  return -1;
+}
+
+const CLOSERS = { "(": ")", "[": "]", "{": "}" };
+
+/** Index of the bracket closing the one at `open`, or -1 if unbalanced. */
+function matchBracket(src, open) {
+  const stack = [CLOSERS[src[open]]];
+  let i = open + 1;
+  while (i < src.length) {
+    const t = skipTrivia(src, i);
+    if (t === -1 && (src[i] === '"' || (src[i] === "/" && src[i + 1] === "*"))) return -1;  // unterminated
+    if (t !== -1) { i = t; continue; }
+    const c = src[i];
+    if (CLOSERS[c]) stack.push(CLOSERS[c]);
+    else if (c === ")" || c === "]" || c === "}") {
+      if (stack[stack.length - 1] !== c) return -1;
+      stack.pop();
+      if (!stack.length) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Split a macro argument list on top-level commas. */
+function splitArgs(src) {
+  const out = [];
+  let depth = 0, start = 0, i = 0;
+  while (i < src.length) {
+    const t = skipTrivia(src, i);
+    if (t !== -1) { i = t; continue; }
+    const c = src[i];
+    if (CLOSERS[c]) depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "," && depth === 0) { out.push(src.slice(start, i)); start = i + 1; }
+    i++;
+  }
+  const tail = src.slice(start);
+  if (out.length || tail.trim()) out.push(tail);
+  return out.map((x) => x.trim()).filter((x, n, a) => !(a.length === 1 && x === ""));
+}
+
+/** A rholang term as the plain text the arg validators expect. */
+function termToPlain(t) {
+  const s = String(t).trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    // A rholang string literal: take its content, honouring backslash escapes.
+    return s.slice(1, -1).replace(/\\(.)/g, (_, c) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+  }
+  if (s.startsWith("[") && s.endsWith("]")) {
+    // A list: hand the validators the comma form they already parse.
+    return splitArgs(s.slice(1, -1)).map(termToPlain).join(",");
+  }
+  return s;
+}
+
+/** Bind already-split argument terms against a macro's schema. */
+function bindArgs(macro, name, terms) {
+  const spec = macro.argSpec;
+  if (terms.length < spec.length) {
+    throw fail(`${name}: missing args — ${spec.slice(terms.length).map(([a, t]) => `${a}:${t}`).join(", ")}`);
+  }
+  if (terms.length > spec.length) throw fail(`${name}: too many args (expected ${spec.length})`);
+  const args = {};
+  for (let i = 0; i < spec.length; i++) {
+    const [argName, type] = spec[i];
+    const raw = termToPlain(terms[i]);
+    switch (type) {
+      case "string": args[argName] = cleanString(raw, argName); break;
+      case "twists": args[argName] = cleanTwists(raw, argName); break;
+      case "list":   args[argName] = cleanList(raw, argName); break;
+      case "cap":    args[argName] = cleanCap(raw, argName); break;
+      case "int":    args[argName] = cleanInt(raw, argName); break;
+      default: throw fail(`${name}: internal — unknown arg type ${type}`);
+    }
+  }
+  return args;
+}
+
+const lineOf = (src, idx) => src.slice(0, idx).split("\n").length;
+
+/**
+ * Expand every `%macro(…)` call site in a rholang program.
+ * Returns { kind:"program", source, expansions:[{name,line}], errors:[{line,message}] }.
+ * Errors do not abort: every call site is attempted so one message reports them all.
+ */
+export function expandProgram(src) {
+  const text = String(src ?? "");
+  const out = [];
+  const expansions = [];
+  const errors = [];
+  let i = 0, last = 0;
+  while (i < text.length) {
+    const t = skipTrivia(text, i);
+    if (t !== -1) { i = t; continue; }
+    if (text[i] !== "%") { i++; continue; }
+    const m = /^%([A-Za-z][\w-]*)\s*\(/.exec(text.slice(i));
+    if (!m) { i++; continue; }
+    const name = m[1].toLowerCase();
+    const open = i + m[0].length - 1;
+    const close = matchBracket(text, open);
+    if (close === -1) {
+      errors.push({ line: lineOf(text, i), message: `%${name}: unbalanced ( — call site is not closed` });
+      break;
+    }
+    const macro = MACROS[name];
+    out.push(text.slice(last, i));
+    if (!macro) {
+      errors.push({ line: lineOf(text, i), message: `unknown macro %${name} — try /global macros` });
+      out.push(text.slice(i, close + 1));                  // leave it as written
+    } else {
+      try {
+        const args = bindArgs(macro, name, splitArgs(text.slice(open + 1, close)));
+        const rho = macro.write ? macro.expand(args) : `/* ${macro.read(args).text} */`;
+        out.push(rho);
+        expansions.push({ name, line: lineOf(text, i), write: !!macro.write });
+      } catch (e) {
+        errors.push({ line: lineOf(text, i), message: e?.message ?? String(e) });
+        out.push(text.slice(i, close + 1));
+      }
+    }
+    last = close + 1;
+    i = close + 1;
+  }
+  out.push(text.slice(last));
+  return { kind: "program", source: out.join(""), expansions, errors };
+}
+
 /** One-line summary of every macro (for `/global macros`). */
 export function listMacros() {
   const lines = Object.entries(MACROS).map(
@@ -283,7 +457,9 @@ export const HELP =
   `RChain capability macros — /global\n` +
   `  /global help                 this help\n` +
   `  /global macros               list the approved macro library\n` +
-  `  /global <macro> <args…>      expand a macro (writes: rholang preview to sign; reads: result)\n`;
+  `  /global <macro> <args…>      expand a single macro (the whole program is one macro)\n` +
+  `  /global <rholang…>           expand %macro(…) call sites inside a rholang program;\n` +
+  `                               one line or many, everything else is left as written\n`;
 
 // ---------------------------------------------------------------------------
 // Self-test (node global-macros.mjs --selftest)
@@ -307,6 +483,42 @@ export function selftest() {
     ["nope", () => { throw new Error("should have been rejected"); }],
   ];
   let pass = 0;
+
+  // Program form: macros embedded in rholang, one line or many.
+  const P = (src) => expandProgram(src);
+  const progCases = [
+    ["expands a call site in place",
+      () => P('new x in { %directory("notes") }').source.includes("insertArbitrary!")],
+    ["multi-word args, which the bare form cannot express",
+      () => P('%mailbox("Q4 results")').source.includes('"mailbox": "Q4 results"')],
+    ["two call sites, both expanded",
+      () => P('%directory("a") | %mailbox("b")').expansions.length === 2],
+    ["a %name( inside a string is not a call site",
+      () => P('x!("%directory(\\"no\\")")').expansions.length === 0],
+    ["a %name( inside a line comment is not a call site",
+      () => P('// %directory("no")\nNil').expansions.length === 0],
+    ["a %name( inside a block comment is not a call site",
+      () => P('/* %directory("no") */ Nil').expansions.length === 0],
+    ["unknown macro is an error, and the text is left as written",
+      () => { const r = P('%nosuch("x")'); return r.errors.length === 1 && r.source === '%nosuch("x")'; }],
+    ["a bad arg reports its line and leaves that site alone",
+      () => { const r = P('Nil |\n%transfer(1e9, "bob")'); return r.errors[0].line === 2 && r.source.includes("%transfer(1e9"); }],
+    ["one bad site does not suppress a good one",
+      () => { const r = P('%directory("ok") | %nosuch("x")'); return r.expansions.length === 1 && r.errors.length === 1; }],
+    ["unbalanced call site is reported, not thrown",
+      () => P('%directory("oops"').errors.length === 1],
+    ["nested brackets in args are balanced correctly",
+      () => P('%ballot("i", ["a (b)", "c, d"])').expansions.length === 1],
+    ["a list arg keeps its elements whole",
+      () => P('%ballot("i", ["ship auth", "pay debt"])').source.includes('"ship auth", "pay debt"')],
+  ];
+  for (const [name, fn] of progCases) {
+    try {
+      if (fn()) { console.log(`  ok   program: ${name}`); pass++; }
+      else console.log(`  FAIL program: ${name}`);
+    } catch (e) { console.log(`  FAIL program: ${name}  →  ${e?.message ?? e}`); }
+  }
+
   for (const [input, check] of cases) {
     try {
       const r = expandMacro(input);
@@ -320,8 +532,9 @@ export function selftest() {
       else { console.log(`  FAIL ${input}  →  ${e?.message ?? e}`); }
     }
   }
-  console.log(`selftest: ${pass}/${cases.length} passed`);
-  return pass === cases.length;
+  const total = cases.length + progCases.length;
+  console.log(`selftest: ${pass}/${total} passed`);
+  return pass === total;
 }
 
 // Run selftest when invoked directly with --selftest.

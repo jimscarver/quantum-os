@@ -384,6 +384,158 @@ const MACROS: Record<string, MacroDef> = {
   },
 };
 
+/// Decimal digits only, carried as a BigInt. `Number()` rounds past 2^53, so a
+/// typed 12345678901234567890 became a signed 12345678901234567000 — the amount
+/// approved was not the amount signed. REV amounts run well past 2^53.
+function cleanInt(v: unknown, name: string): bigint {
+  const s = String(v ?? "").trim();
+  if (!/^\d+$/.test(s)) throw new Error(`${name}: expected a non-negative integer (decimal digits only)`);
+  if (s.length > 40) throw new Error(`${name}: integer too long (max 40 digits)`);
+  return BigInt(s);
+}
+
+// ---- macros embedded in rholang ----------------------------------------
+//
+// A `/global` body is a rholang program — one line or many — with macro call
+// sites written `%name(arg, …)`. The rholang is NOT parsed: we scan it well
+// enough to find call sites that are really call sites (skipping strings and
+// comments, balancing brackets), expand those in place, and leave every other
+// byte alone. Mirrors expandProgram in scripts/qos-cli/global-macros.mjs.
+
+function skipString(src: string, i: number): number {
+  i++;
+  while (i < src.length) {
+    if (src[i] === "\\") { i += 2; continue; }
+    if (src[i] === '"') return i + 1;
+    i++;
+  }
+  return -1;
+}
+
+function skipTrivia(src: string, i: number): number {
+  if (src[i] === '"') return skipString(src, i);
+  if (src[i] === "/" && src[i + 1] === "/") { const e = src.indexOf("\n", i); return e < 0 ? src.length : e; }
+  if (src[i] === "/" && src[i + 1] === "*") { const e = src.indexOf("*/", i + 2); return e < 0 ? -1 : e + 2; }
+  return -1;
+}
+
+const CLOSERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+
+function matchBracket(src: string, open: number): number {
+  const stack: string[] = [CLOSERS[src[open]]];
+  let i = open + 1;
+  while (i < src.length) {
+    const t = skipTrivia(src, i);
+    if (t === -1 && (src[i] === '"' || (src[i] === "/" && src[i + 1] === "*"))) return -1;
+    if (t !== -1) { i = t; continue; }
+    const c = src[i];
+    if (CLOSERS[c]) stack.push(CLOSERS[c]);
+    else if (c === ")" || c === "]" || c === "}") {
+      if (stack[stack.length - 1] !== c) return -1;
+      stack.pop();
+      if (!stack.length) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+function splitArgs(src: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = 0, i = 0;
+  while (i < src.length) {
+    const t = skipTrivia(src, i);
+    if (t !== -1) { i = t; continue; }
+    const c = src[i];
+    if (CLOSERS[c]) depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "," && depth === 0) { out.push(src.slice(start, i)); start = i + 1; }
+    i++;
+  }
+  const tail = src.slice(start);
+  if (out.length || tail.trim()) out.push(tail);
+  return out.map((x) => x.trim()).filter((x, n, a) => !(a.length === 1 && x === ""));
+}
+
+function termToPlain(t: string): string {
+  const s = String(t).trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1).replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+  }
+  if (s.startsWith("[") && s.endsWith("]")) return splitArgs(s.slice(1, -1)).map(termToPlain).join(",");
+  return s;
+}
+
+function bindArgs(macro: MacroDef, name: string, terms: string[]): Record<string, unknown> {
+  const spec = macro.argSpec;
+  if (terms.length < spec.length) {
+    throw new Error(`${name}: missing args — ${spec.slice(terms.length).map(([n, t]) => `${n}:${t}`).join(", ")}`);
+  }
+  if (terms.length > spec.length) throw new Error(`${name}: too many args (expected ${spec.length})`);
+  const args: Record<string, unknown> = {};
+  for (let i = 0; i < spec.length; i++) {
+    const [argName, type] = spec[i];
+    const raw = termToPlain(terms[i]);
+    switch (type) {
+      case "string": args[argName] = cleanStr(raw, argName); break;
+      case "twists": args[argName] = cleanTwists(raw, argName); break;
+      case "list": args[argName] = cleanList(raw, argName); break;
+      case "int": args[argName] = cleanInt(raw, argName); break;
+      default: throw new Error(`${name}: internal — unknown arg type ${type}`);
+    }
+  }
+  return args;
+}
+
+export interface GlobalProgram {
+  kind: "program";
+  source: string;
+  expansions: { name: string; line: number; write: boolean }[];
+  errors: { line: number; message: string }[];
+}
+
+const lineOf = (src: string, idx: number) => src.slice(0, idx).split("\n").length;
+
+/// Expand every `%macro(…)` call site in a rholang program. Errors never abort:
+/// every site is attempted so one report covers them all, and a site that fails
+/// is left exactly as the user wrote it.
+export function expandGlobalProgram(src: string): GlobalProgram {
+  const text = String(src ?? "");
+  const out: string[] = [];
+  const expansions: GlobalProgram["expansions"] = [];
+  const errors: GlobalProgram["errors"] = [];
+  let i = 0, last = 0;
+  while (i < text.length) {
+    const t = skipTrivia(text, i);
+    if (t !== -1) { i = t; continue; }
+    if (text[i] !== "%") { i++; continue; }
+    const m = /^%([A-Za-z][\w-]*)\s*\(/.exec(text.slice(i));
+    if (!m) { i++; continue; }
+    const name = m[1].toLowerCase();
+    const open = i + m[0].length - 1;
+    const close = matchBracket(text, open);
+    if (close === -1) { errors.push({ line: lineOf(text, i), message: `%${name}: unbalanced ( — call site is not closed` }); break; }
+    const macro = MACROS[name];
+    out.push(text.slice(last, i));
+    if (!macro) {
+      errors.push({ line: lineOf(text, i), message: `unknown macro %${name} — try /global macros` });
+      out.push(text.slice(i, close + 1));
+    } else {
+      try {
+        out.push(macro.run(bindArgs(macro, name, splitArgs(text.slice(open + 1, close)))));
+        expansions.push({ name, line: lineOf(text, i), write: true });
+      } catch (e) {
+        errors.push({ line: lineOf(text, i), message: e instanceof Error ? e.message : String(e) });
+        out.push(text.slice(i, close + 1));
+      }
+    }
+    last = close + 1;
+    i = close + 1;
+  }
+  out.push(text.slice(last));
+  return { kind: "program", source: out.join(""), expansions, errors };
+}
+
 export function expandGlobalMacro(line: string): GlobalExpansion {
   const body = (line ?? "").trim().replace(/^\/?\s*global\s*/i, "");
   const tokens = body.split(/\s+/).filter(Boolean);
@@ -431,12 +583,7 @@ export function expandGlobalMacro(line: string): GlobalExpansion {
       case "string": args[argName] = cleanStr(raw, argName); break;
       case "twists": args[argName] = cleanTwists(raw, argName); break;
       case "list": args[argName] = cleanList(raw, argName); break;
-      case "int": {
-        const n = Number(raw);
-        if (!Number.isInteger(n) || n < 0) throw new Error(`${argName}: expected a non-negative integer`);
-        args[argName] = n;
-        break;
-      }
+      case "int": args[argName] = cleanInt(raw, argName); break;
       default: throw new Error(`${name}: internal — unknown arg type ${type}`);
     }
   }
