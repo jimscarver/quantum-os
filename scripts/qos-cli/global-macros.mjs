@@ -429,10 +429,12 @@ export function expandProgram(src) {
       out.push(text.slice(i, close + 1));                  // leave it as written
     } else {
       try {
+        // A read macro has no rholang to substitute, and expansion does not
+        // invent any: report it and leave the site as written.
+        if (!macro.write) throw fail(`%${name} is a read macro — it has no rholang; use it on its own line`);
         const args = bindArgs(macro, name, splitArgs(text.slice(open + 1, close)));
-        const rho = macro.write ? macro.expand(args) : `/* ${macro.read(args).text} */`;
-        out.push(rho);
-        expansions.push({ name, line: lineOf(text, i), write: !!macro.write });
+        out.push(macro.expand(args));
+        expansions.push({ name, line: lineOf(text, i), write: true });
       } catch (e) {
         errors.push({ line: lineOf(text, i), message: e?.message ?? String(e) });
         out.push(text.slice(i, close + 1));
