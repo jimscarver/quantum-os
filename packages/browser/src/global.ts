@@ -338,49 +338,49 @@ const MACROS: Record<string, MacroDef> = {
     write: true,
     argSpec: [["twists", "twists"]],
     run: (a) =>
-      `// mint a ZFA proof as a capability\nnew ret in {\n  rho:qucalc:grant!([${(a.twists as number[]).join(", ")}], *ret) |\n  for (@cap <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:qucalc:grant!([${(a.twists as number[]).join(", ")}], *ret) |\n  for (@cap <- ret) { Nil }\n}`,
   },
   ballot: {
     help: "Cast a ranked-choice ballot (rho:gov:tally).",
     write: true,
     argSpec: [["issue", "string"], ["options", "list"]],
     run: (a) =>
-      `// cast a ranked-choice ballot for ${q(a.issue as string)}\nnew ret in {\n  rho:gov:tally!({"issue": ${q(a.issue as string)}}, [${(a.options as string[]).map(q).join(", ")}], "ranked", *ret) |\n  for (@winner <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:gov:tally!({"issue": ${q(a.issue as string)}}, [${(a.options as string[]).map(q).join(", ")}], "ranked", *ret) |\n  for (@winner <- ret) { Nil }\n}`,
   },
   directory: {
     help: "Create a capability-facet directory (rho:registry:insertArbitrary).",
     write: true,
     argSpec: [["name", "string"]],
     run: (a) =>
-      `// create a capability-facet directory\nnew ret in {\n  rho:registry:insertArbitrary!({"directory": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:registry:insertArbitrary!({"directory": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
   },
   mailbox: {
     help: "Create a capability-facet inbox (rho:registry:insertArbitrary).",
     write: true,
     argSpec: [["name", "string"]],
     run: (a) =>
-      `// create a capability-facet inbox\nnew ret in {\n  rho:registry:insertArbitrary!({"mailbox": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:registry:insertArbitrary!({"mailbox": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
   },
   group: {
     help: "Create a governance group (deployer becomes admin).",
     write: true,
     argSpec: [["name", "string"]],
     run: (a) =>
-      `// create a governance group — the deployer becomes admin\nnew ret in {\n  rho:registry:insertArbitrary!({"group": ${q(a.name as string)}, "admin": *deployerId}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:registry:insertArbitrary!({"group": ${q(a.name as string)}, "admin": *deployerId}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
   },
   delegate: {
     help: "Delegate your vote to another member (rho:gov:resolveWeights).",
     write: true,
     argSpec: [["to", "string"]],
     run: (a) =>
-      `// self-signed delegation (signer = *deployerId)\nnew ret in {\n  rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(a.to as string)}}, {}, *ret) |\n  for (@weights <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(a.to as string)}}, {}, *ret) |\n  for (@weights <- ret) { Nil }\n}`,
   },
   transfer: {
     help: "Transfer REV to an address (rho:rchain:revVault).",
     write: true,
     argSpec: [["amount", "int"], ["to", "string"]],
     run: (a) =>
-      `// REV transfer (requires the rev-vault capability)\nnew ret in {\n  rho:rchain:revVault!("transfer", ${a.amount as number}, ${q(a.to as string)}, *ret) |\n  for (@r <- ret) { Nil }\n}`,
+      `new ret in {\n  rho:rchain:revVault!("transfer", ${a.amount as bigint}, ${q(a.to as string)}, *ret) |\n  for (@r <- ret) { Nil }\n}`,
   },
 };
 

@@ -134,8 +134,7 @@ export const MACROS = {
     argSpec: [["twists", "twists"]],
     expand(args) {
       const list = args.twists.join(", ");
-      return `// mint a ZFA proof as a capability
-new ret in {
+      return `new ret in {
   rho:qucalc:grant!([${list}], *ret) |
   for (@cap <- ret) { Nil }
 }`;
@@ -148,8 +147,7 @@ new ret in {
     argSpec: [["issue", "string"], ["options", "list"]],
     expand(args) {
       const options = args.options.map(q).join(", ");
-      return `// cast a ranked-choice ballot for ${q(args.issue)}
-new ret in {
+      return `new ret in {
   rho:gov:tally!({"issue": ${q(args.issue)}}, [${options}], "ranked", *ret) |
   for (@winner <- ret) { Nil }
 }`;
@@ -161,8 +159,7 @@ new ret in {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `// create a capability-facet directory
-new ret in {
+      return `new ret in {
   rho:registry:insertArbitrary!({"directory": ${q(args.name)}}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
@@ -174,8 +171,7 @@ new ret in {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `// create a capability-facet inbox
-new ret in {
+      return `new ret in {
   rho:registry:insertArbitrary!({"mailbox": ${q(args.name)}}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
@@ -187,8 +183,7 @@ new ret in {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `// create a governance group — the deployer becomes admin
-new ret in {
+      return `new ret in {
   rho:registry:insertArbitrary!({"group": ${q(args.name)}, "admin": *deployerId}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
@@ -200,8 +195,7 @@ new ret in {
     write: true,
     argSpec: [["to", "string"]],
     expand(args) {
-      return `// self-signed delegation (signer = *deployerId)
-new ret in {
+      return `new ret in {
   rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(args.to)}}, {}, *ret) |
   for (@weights <- ret) { Nil }
 }`;
@@ -213,8 +207,7 @@ new ret in {
     write: true,
     argSpec: [["amount", "int"], ["to", "string"]],
     expand(args) {
-      return `// REV transfer (requires the rev-vault capability)
-new ret in {
+      return `new ret in {
   rho:rchain:revVault!("transfer", ${args.amount}, ${q(args.to)}, *ret) |
   for (@r <- ret) { Nil }
 }`;
