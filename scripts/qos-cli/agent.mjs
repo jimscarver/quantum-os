@@ -65,7 +65,7 @@ Run several with different --role (and distinct --state dirs) in one room; they
 de-conflict shared duties automatically. Say \`/<role>\` (e.g. \`/facil\`, \`/scribe\`)
 or "anyone here?" and the agent replies. It is a full trust-weighted member: the room
 governs its voice via \`/gov trust\` / \`/gov censure\` (it posts up to its trust level
-per window, one rung below a same-rated human; \`/<role> trust\` shows its standing).
+per window, one rung below a same-rated human; \`/<role> trust\` shows its standing, \`/<role> health\` its diagnostics).
 Runs until Ctrl-C.`;
 
 export function parseArgs(argv) {
@@ -101,7 +101,18 @@ function extractRoomCap(s) {
 }
 
 const readJSON = (p, fb) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fb; } };
-const writeJSON = (p, o) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(o, null, 2)); };
+// Atomic: write a temp file in the same directory, then rename over the target.
+// identity.json holds the dyncap seed — a crash mid-write leaves it truncated,
+// readJSON falls back to null, and the daemon mints a FRESH identity: a forked
+// dyncap chain against every peer's TOFU pin, and its `/gov trust` standing
+// (keyed by peerId) silently gone.
+const writeJSON = (p, o) => {
+  const dir = path.dirname(p);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(o, null, 2));
+  fs.renameSync(tmp, p);
+};
 const short = (id) => String(id ?? "").slice(0, 8);
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -129,11 +140,22 @@ export async function run(args) {
   if (!validateCapability(roomId)) console.warn(`${TAG} warning: room token failed ZFA validation (continuing): ${roomId}`);
 
   // ---- measured-disruption policy (tunable; --quiet / --active shift it) ----
+  // A bad or valueless numeric flag (`--budget abc`, or `--budget` as the last argv)
+  // parses to NaN, and NaN silently disables whatever it gates rather than erroring:
+  // `postLog.length < NaN` is false, so the agent would hold EVERY nudge forever while
+  // looking healthy. Reject it at startup instead.
+  const numOpt = (v, flag, min) => {
+    if (v === undefined) return undefined;
+    if (!Number.isFinite(v) || v < min) { console.error(`${TAG} --${flag} needs a number >= ${min} (got "${v}")`); process.exit(1); }
+    return v;
+  };
+  const budgetOpt = numOpt(args.budget, "budget", 1);
+  const silentOpt = numOpt(args.silentMin, "silent-min", 1);
   const scale = args.quiet ? 1.6 : args.active ? 0.6 : 1.0;     // cooldown multiplier
   const WINDOW_MS   = 5 * 60_000;
-  const MAX_POSTS   = Math.max(1, Math.round((args.budget ?? (args.quiet ? 2 : args.active ? 6 : 4))));
+  const MAX_POSTS   = Math.max(1, Math.round((budgetOpt ?? (args.quiet ? 2 : args.active ? 6 : 4))));
   const MIN_GAP_MS  = Math.round(20_000 * scale);
-  const SILENT_MS   = Math.max(60_000, Math.round((args.silentMin ?? 6) * 60_000));
+  const SILENT_MS   = Math.max(60_000, Math.round((silentOpt ?? 6) * 60_000));
   const GREET_DELAY_MS = 4_000;
   const ACTIVE_MS   = 4 * 60_000;
   const DOMINATE_FRAC = 0.6, DOMINATE_MIN = 6;
@@ -305,7 +327,7 @@ export async function run(args) {
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} chair <topic>\`${askHint} (chair a structured deliberation → define · alternatives · evaluate · disagreements · agreements · closure, then record the decision; \`/${CMD} next\`/\`back\`/\`close\`/\`cancel\` to steer) · \`/${CMD} trust\` (my standing) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} chair <topic>\`${askHint} (chair a structured deliberation → define · alternatives · evaluate · disagreements · agreements · closure, then record the decision; \`/${CMD} next\`/\`back\`/\`close\`/\`cancel\` to steer) · \`/${CMD} trust\` (my standing) · \`/${CMD} health\` (uptime, peers, budget, CPU) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
   const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing. About this room: ${ABOUT_URL}`;
   // Self-introduce to a newly-identified human peer, once per peer per run (direct
@@ -415,6 +437,63 @@ export async function run(args) {
     const t = chair.topic; chair = null;
     reply(`🛑 Deliberation **${t}** cancelled — nothing recorded.`, null, 0);
   }
+  // ---- health / diagnostics (`/<cmd> health`) ----
+  // A daemon that runs for weeks needs to answer "are you actually healthy?" from
+  // inside the room, without shell access to the host. CPU is reported BOTH as a
+  // lifetime average and as a delta since the previous check: a lifetime average
+  // badly understates a runaway (that is exactly why `ps` %CPU hid the orphaned-SCTP
+  // burn documented in CLAUDE.md), so the delta is the number that actually shows it.
+  // High cpu here with a normal channel count is the signature to chase.
+  const startedAt = Date.now();
+  let cpuMark = process.cpuUsage(), cpuMarkAt = startedAt;
+  let lastError = null, errorCount = 0;
+  function noteError(what, e) {
+    errorCount += 1;
+    lastError = { what, msg: String(e?.message ?? e ?? "").slice(0, 160), at: Date.now() };
+    console.error(`${TAG} ${what}:`, e?.message ?? e);
+  }
+  const dur = (ms) => {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    return h < 24 ? `${h}h${m % 60}m` : `${Math.floor(h / 24)}d${h % 24}h`;
+  };
+  function healthText() {
+    const now = Date.now();
+    const cpu = process.cpuUsage();
+    const pct = (us, ms) => (ms > 0 ? (us / 1000 / ms) * 100 : 0).toFixed(1);
+    const life = pct(cpu.user + cpu.system, now - startedAt);
+    const dMs = now - cpuMarkAt;
+    const since = dMs >= 5_000 ? `, ${pct((cpu.user - cpuMark.user) + (cpu.system - cpuMark.system), dMs)}% since last check` : "";
+    cpuMark = cpu; cpuMarkAt = now;
+    const rss = Math.round(process.memoryUsage().rss / 1048576);
+    purgeRolling();
+    const roomFor = withinBudget();                    // also trims postLog to the live window
+    const humans = [...present].filter((id) => !isAgentPeer(id)).length;
+    const wsUp = peer.ws?.readyState === 1;            // 1 = WebSocket.OPEN
+    const trust = standing.governed
+      ? `level ${standing.level}${standing.discredited ? " — **discredited, stood down**" : ` (≤${standing.budget}/5min)`}`
+      : `ungoverned (configured ${MAX_POSTS}/5min)`;
+    const err = lastError
+      ? `${errorCount} — last *${lastError.what}*: ${lastError.msg} (${dur(now - lastError.at)} ago)`
+      : "none";
+    return [
+      `🩺 **Health — ${myName}** (${role.name})`,
+      `· up ${dur(now - startedAt)} · rss ${rss} MB · cpu ${life}%${since}`,
+      `· signaling ${wsUp ? "connected" : "**down / reconnecting**"} · channels ${peer.channels.size} · present ${present.size} (${humans} human, ${present.size - humans} agent) · known ${Object.keys(known).length}`,
+      `· posts ${postLog.length}/${standing.budget} this 5min${roomFor ? "" : " — **budget spent**"} · min-gap ${Math.round(MIN_GAP_MS / 1000)}s · ${muted ? "**muted**" : "unmuted"}`,
+      `· trust ${trust} · AI ${advisor.enabled ? advisor.model : "off"} · deliberation ${chair ? `**${chair.topic}** (${chair.phase})` : "none"}`,
+      `· errors ${err}`,
+    ].join("\n");
+  }
+
+  // The handlers below are fired from synchronous message dispatch and never awaited.
+  // An unhandled rejection takes the whole daemon down under Node's default policy, so
+  // a long-running agent records it for `/<cmd> health` and carries on instead.
+  const bg = (p, what) => { Promise.resolve(p).catch((e) => noteError(what, e)); };
+
   function handleCommand(text) {
     const raw = String(text ?? "").trim();
     const lc = raw.toLowerCase();
@@ -425,12 +504,13 @@ export async function run(args) {
       if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/${CMD} help\` for what I do.`, "agmute", 0); return true; }
       if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText() + chairStatusSuffix(), "agstatus", 20_000); return true; }
       if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
-      if (sub === "ask") { handleAsk(raw.replace(askStripRe, "").trim()); return true; }
-      if (sub === "optimize" || sub === "opt") { handleOptimize(raw.replace(optStripRe, "").trim()); return true; }
-      if (sub === "chair" || sub === "deliberate") { handleChair(raw.replace(chairStripRe, "").trim()); return true; }
-      if (sub === "next" || sub === "advance") { advanceChair(); return true; }
+      if (sub === "health" || sub === "diag" || sub === "diagnostics") { reply(healthText(), "aghealth", 15_000); return true; }
+      if (sub === "ask") { bg(handleAsk(raw.replace(askStripRe, "").trim()), "ask"); return true; }
+      if (sub === "optimize" || sub === "opt") { bg(handleOptimize(raw.replace(optStripRe, "").trim()), "optimize"); return true; }
+      if (sub === "chair" || sub === "deliberate") { bg(handleChair(raw.replace(chairStripRe, "").trim()), "chair"); return true; }
+      if (sub === "next" || sub === "advance") { bg(advanceChair(), "chair next"); return true; }
       if (sub === "back") { backChair(); return true; }
-      if (sub === "close" || sub === "decide") { closeChair(); return true; }
+      if (sub === "close" || sub === "decide") { bg(closeChair(), "chair close"); return true; }
       if (sub === "cancel" || sub === "abort") { cancelChair(); return true; }
       reply(helpText(), "aghelp", 25_000); return true;
     }
@@ -450,7 +530,7 @@ export async function run(args) {
     onReconnectScheduled: (ms) => console.warn(`${TAG} reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
     onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); nameAnnouncedAt.delete(id); },
-    onError: (e) => console.error(TAG, e?.message ?? e),
+    onError: (e) => noteError("peer", e),
     onChannelOpen: (id) => onChannelOpen(id),
     onMessage: (from, d) => onMessage(from, d),
   });
@@ -488,7 +568,7 @@ export async function run(args) {
   function reannounceStale() {
     const now = Date.now();
     for (const id of present) {
-      if (now - (nameAnnouncedAt.get(id) ?? 0) > ANNOUNCE_TTL) void announceName(id);
+      if (now - (nameAnnouncedAt.get(id) ?? 0) > ANNOUNCE_TTL) bg(announceName(id), "announce");
     }
   }
 
@@ -498,7 +578,7 @@ export async function run(args) {
     joinedAt.set(id, Date.now());
     // announce name + our agent role so other agents recognize us (self-heals via
     // reannounceStale if this delivery is lost to a signaling flap)
-    void announceName(id);
+    bg(announceName(id), "announce");
     // Self-introduction is delivered per-peer when a human identifies (see introduceTo,
     // called from onMessage) — NOT a one-time startup broadcast — so a browser that joins
     // later, or whose channel opens after a co-agent's, still reliably gets it.
@@ -553,7 +633,7 @@ export async function run(args) {
         checkDominator();
         break;
       }
-      case "state-discrepancy": surfaceDiscrepancy(d); break;
+      case "state-discrepancy": bg(surfaceDiscrepancy(d), "discrepancy"); break;
       // governance ingestion → recompute the agent's own trust standing (self-throttle only)
       case "group-open":
         if (d.id && !groups.has(d.id)) groups.set(d.id, normalizeGroup({ id: d.id, name: d.name, creator: from, creatorLabel: d.creatorLabel ?? short(from), createdAt: d.createdAt, members: { [from]: { peerId: from, role: "admin", label: d.creatorLabel ?? short(from), at: d.createdAt ?? Date.now() } } }));
@@ -642,7 +722,7 @@ export async function run(args) {
     const names = quiet.slice(0, 2).map(nameOf).join(", ");
     say(`We haven't heard from everyone — ${names}, curious what you're thinking on this?`, "silent", CD.silent);
   }
-  const timer = setInterval(() => tick().catch((e) => console.error(`${TAG} tick:`, e?.message ?? e)), TICK_MS);
+  const timer = setInterval(() => tick().catch((e) => noteError("tick", e)), TICK_MS);
 
   peer.connect();
   console.log(`${TAG} running as "${myName}" [role=${role.name}]  budget=${MAX_POSTS}/5min  min-gap=${Math.round(MIN_GAP_MS / 1000)}s  silent=${Math.round(SILENT_MS / 60000)}min  AI=${advisor.enabled ? advisor.model : "off"}. Ctrl-C to stop.`);

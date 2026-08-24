@@ -73,7 +73,18 @@ function extractRoomCap(s) {
 }
 
 const readJSON = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; } };
-const writeJSON = (p, obj) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(obj, null, 2)); };
+// Atomic: write a temp file in the same directory, then rename over the target.
+// identity.json holds the dyncap seed — a crash mid-write leaves it truncated,
+// readJSON falls back to null, and the daemon mints a FRESH identity: a forked
+// dyncap chain against every peer's TOFU pin, and its `/gov trust` standing
+// (keyed by peerId) silently gone.
+const writeJSON = (p, obj) => {
+  const dir = path.dirname(p);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.renameSync(tmp, p);
+};
 
 // Lemma names are canonicalized (trim + collapse inner whitespace) to match the
 // browser's canonLemma, so multi-word names (referenced as @[name with spaces])
