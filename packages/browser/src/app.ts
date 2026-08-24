@@ -23,7 +23,8 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
-import { expandGlobalMacro, expandGlobalProgram, lintRholang, runGlobalPipeline } from "./global.js";
+import { expandGlobalMacro, expandGlobalProgram, lintRholang, runGlobalPipeline,
+         listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -3746,10 +3747,8 @@ function handleCommand(raw: string): string[] {
         let title: string;
         if (bare) {
           const x = expandGlobalMacro(`/global ${g}`);
-          if (x.kind === "help" || x.kind === "list") {
-            for (const l of x.text.split("\n")) sys(l);
-            break;
-          }
+          if (x.kind === "help") { for (const l of GLOBAL_HELP.split("\n")) sys(l); break; }
+          if (x.kind === "list") { for (const l of globalListMacros().split("\n")) sys(l); break; }
           if (x.kind === "result") { sys(x.text); break; }
           source = x.source;
           title = `/global ${x.macro} → expanded (review, then sign & deploy):`;

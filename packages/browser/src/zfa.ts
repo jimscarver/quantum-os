@@ -157,6 +157,29 @@ function pauliFold(twists: Uint8Array): M2 {
   return m;
 }
 
+const TWIST_SYMBOL: Record<string, number> = {
+  "^": 0, v: 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7,
+};
+
+/// Parse a twist sequence from hex digits (`0167`), symbols (`^v`), or a
+/// `cap:label:hex` token. Mirrors `parseTwists` in scripts/qos-cli/zfa.mjs.
+export function parseTwists(str: string): Uint8Array | null {
+  if (typeof str !== "string" || str.length === 0) return null;
+  let s = str;
+  if (s.startsWith("cap:")) {
+    const parts = s.split(":");
+    if (parts.length < 3) return null;
+    s = parts[2];
+  }
+  if (/^[0-7]+$/.test(s)) return Uint8Array.from([...s].map((c) => parseInt(c, 10)));
+  const out: number[] = [];
+  for (const ch of s) {
+    if (!(ch in TWIST_SYMBOL)) return null;
+    out.push(TWIST_SYMBOL[ch]);
+  }
+  return Uint8Array.from(out);
+}
+
 export function isPauliClosed(twists: Uint8Array): boolean {
   if (_wasm) return _wasm.wasm_is_pauli_closed(twists);
   const [a, b, c, d] = pauliFold(twists);

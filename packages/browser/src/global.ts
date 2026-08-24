@@ -277,215 +277,29 @@ export async function runGlobalPipeline(
 // The agent is the authority in a room with one; this is the offline fallback.
 // ---------------------------------------------------------------------------
 
-export type GlobalExpansion =
-  | { kind: "help"; text: string }
-  | { kind: "list"; text: string }
-  | { kind: "result"; text: string }
-  | { kind: "rholang"; macro: string; source: string };
-
-const RESTRICTED = [
-  /rho:io:/i,
-  /rho:rchain:deployerId/i,
-  /\*\s*!/,
-  /!\s*\*/,
-  /new\s+[a-zA-Z]/i,
-  /for\s*\(/i,
-];
-
-function cleanStr(v: string, name: string): string {
-  const s = (v ?? "").trim();
-  if (!s) throw new Error(`${name}: expected a non-empty string`);
-  if (s.length > 120) throw new Error(`${name}: too long`);
-  for (const re of RESTRICTED) if (re.test(s)) throw new Error(`${name}: restricted pattern`);
-  return s;
-}
-
-const SYM: Record<string, number> = { "^": 0, v: 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7 };
-
-function cleanTwists(v: string, name: string): number[] {
-  const s = (v ?? "").trim().replace(/^\[|\]$/g, "");
-  if (/[^0-7\s,]/.test(s)) {
-    const out: number[] = [];
-    for (const ch of s) {
-      if (!(ch in SYM)) throw new Error(`${name}: unknown twist symbol`);
-      out.push(SYM[ch]);
-    }
-    return out;
-  }
-  const digits = s.replace(/[\s,]+/g, "");
-  if (!digits.length || !/^[0-7]+$/.test(digits)) throw new Error(`${name}: expected twist values 0..7`);
-  return [...digits].map(Number);
-}
-
-function cleanList(v: string, name: string): string[] {
-  const parts = (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  if (!parts.length) throw new Error(`${name}: expected a comma-separated list`);
-  return parts.map((p) => cleanStr(p, name));
-}
-
-const q = (s: string) => JSON.stringify(s);
-
-interface MacroDef {
-  help: string;
-  write: boolean;
-  argSpec: [string, string][];
-  run: (a: Record<string, unknown>) => string;
-}
-
-const MACROS: Record<string, MacroDef> = {
-  grant: {
-    help: "Mint a ZFA-balanced proof as a capability (rho:qucalc:grant).",
-    write: true,
-    argSpec: [["twists", "twists"]],
-    run: (a) =>
-      `new ret in {\n  rho:qucalc:grant!([${(a.twists as number[]).join(", ")}], *ret) |\n  for (@cap <- ret) { Nil }\n}`,
-  },
-  ballot: {
-    help: "Cast a ranked-choice ballot (rho:gov:tally).",
-    write: true,
-    argSpec: [["issue", "string"], ["options", "list"]],
-    run: (a) =>
-      `new ret in {\n  rho:gov:tally!({"issue": ${q(a.issue as string)}}, [${(a.options as string[]).map(q).join(", ")}], "ranked", *ret) |\n  for (@winner <- ret) { Nil }\n}`,
-  },
-  directory: {
-    help: "Create a capability-facet directory (rho:registry:insertArbitrary).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `new ret in {\n  rho:registry:insertArbitrary!({"directory": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  mailbox: {
-    help: "Create a capability-facet inbox (rho:registry:insertArbitrary).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `new ret in {\n  rho:registry:insertArbitrary!({"mailbox": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  group: {
-    help: "Create a governance group (deployer becomes admin).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `new ret in {\n  rho:registry:insertArbitrary!({"group": ${q(a.name as string)}, "admin": *deployerId}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  delegate: {
-    help: "Delegate your vote to another member (rho:gov:resolveWeights).",
-    write: true,
-    argSpec: [["to", "string"]],
-    run: (a) =>
-      `new ret in {\n  rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(a.to as string)}}, {}, *ret) |\n  for (@weights <- ret) { Nil }\n}`,
-  },
-  transfer: {
-    help: "Transfer REV to an address (rho:rchain:revVault).",
-    write: true,
-    argSpec: [["amount", "int"], ["to", "string"]],
-    run: (a) =>
-      `new ret in {\n  rho:rchain:revVault!("transfer", ${a.amount as bigint}, ${q(a.to as string)}, *ret) |\n  for (@r <- ret) { Nil }\n}`,
-  },
-};
-
-/// Decimal digits only, carried as a BigInt. `Number()` rounds past 2^53, so a
-/// typed 12345678901234567890 became a signed 12345678901234567000 — the amount
-/// approved was not the amount signed. REV amounts run well past 2^53.
-function cleanInt(v: unknown, name: string): bigint {
-  const s = String(v ?? "").trim();
-  if (!/^\d+$/.test(s)) throw new Error(`${name}: expected a non-negative integer (decimal digits only)`);
-  if (s.length > 40) throw new Error(`${name}: integer too long (max 40 digits)`);
-  return BigInt(s);
-}
-
-// ---- macros embedded in rholang ----------------------------------------
+// ---------------------------------------------------------------------------
+// Macro expansion — the shared engine.
 //
-// A `/global` body is a rholang program — one line or many — with macro call
-// sites written `%name(arg, …)`. The rholang is NOT parsed: we scan it well
-// enough to find call sites that are really call sites (skipping strings and
-// comments, balancing brackets), expand those in place, and leave every other
-// byte alone. Mirrors expandProgram in scripts/qos-cli/global-macros.mjs.
+// The registry, validators, templates and rholang scanner live in
+// ./global-macros.js, which scripts/qos-cli/global-macros.mjs imports too.
+// This file only binds the browser's ZFA kernel to it, so the rholang a user
+// sees the agent post in chat is the same rholang this module lints and signs.
+// ---------------------------------------------------------------------------
 
-function skipString(src: string, i: number): number {
-  i++;
-  while (i < src.length) {
-    if (src[i] === "\\") { i += 2; continue; }
-    if (src[i] === '"') return i + 1;
-    i++;
-  }
-  return -1;
-}
+import { createMacroEngine } from "./global-macros.js";
+import { achievesZfa, isPauliClosed, parseTwists, validateCapability } from "./zfa.js";
 
-function skipTrivia(src: string, i: number): number {
-  if (src[i] === '"') return skipString(src, i);
-  if (src[i] === "/" && src[i + 1] === "/") { const e = src.indexOf("\n", i); return e < 0 ? src.length : e; }
-  if (src[i] === "/" && src[i + 1] === "*") { const e = src.indexOf("*/", i + 2); return e < 0 ? -1 : e + 2; }
-  return -1;
-}
+const engine = createMacroEngine({ achievesZfa, isPauliClosed, parseTwists, validateCapability });
 
-const CLOSERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+export const MACROS = engine.MACROS;
+export const listMacros = engine.listMacros;
+export const HELP = engine.HELP;
 
-function matchBracket(src: string, open: number): number {
-  const stack: string[] = [CLOSERS[src[open]]];
-  let i = open + 1;
-  while (i < src.length) {
-    const t = skipTrivia(src, i);
-    if (t === -1 && (src[i] === '"' || (src[i] === "/" && src[i + 1] === "*"))) return -1;
-    if (t !== -1) { i = t; continue; }
-    const c = src[i];
-    if (CLOSERS[c]) stack.push(CLOSERS[c]);
-    else if (c === ")" || c === "]" || c === "}") {
-      if (stack[stack.length - 1] !== c) return -1;
-      stack.pop();
-      if (!stack.length) return i;
-    }
-    i++;
-  }
-  return -1;
-}
-
-function splitArgs(src: string): string[] {
-  const out: string[] = [];
-  let depth = 0, start = 0, i = 0;
-  while (i < src.length) {
-    const t = skipTrivia(src, i);
-    if (t !== -1) { i = t; continue; }
-    const c = src[i];
-    if (CLOSERS[c]) depth++;
-    else if (c === ")" || c === "]" || c === "}") depth--;
-    else if (c === "," && depth === 0) { out.push(src.slice(start, i)); start = i + 1; }
-    i++;
-  }
-  const tail = src.slice(start);
-  if (out.length || tail.trim()) out.push(tail);
-  return out.map((x) => x.trim()).filter((x, n, a) => !(a.length === 1 && x === ""));
-}
-
-function termToPlain(t: string): string {
-  const s = String(t).trim();
-  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
-    return s.slice(1, -1).replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
-  }
-  if (s.startsWith("[") && s.endsWith("]")) return splitArgs(s.slice(1, -1)).map(termToPlain).join(",");
-  return s;
-}
-
-function bindArgs(macro: MacroDef, name: string, terms: string[]): Record<string, unknown> {
-  const spec = macro.argSpec;
-  if (terms.length < spec.length) {
-    throw new Error(`${name}: missing args — ${spec.slice(terms.length).map(([n, t]) => `${n}:${t}`).join(", ")}`);
-  }
-  if (terms.length > spec.length) throw new Error(`${name}: too many args (expected ${spec.length})`);
-  const args: Record<string, unknown> = {};
-  for (let i = 0; i < spec.length; i++) {
-    const [argName, type] = spec[i];
-    const raw = termToPlain(terms[i]);
-    switch (type) {
-      case "string": args[argName] = cleanStr(raw, argName); break;
-      case "twists": args[argName] = cleanTwists(raw, argName); break;
-      case "list": args[argName] = cleanList(raw, argName); break;
-      case "int": args[argName] = cleanInt(raw, argName); break;
-      default: throw new Error(`${name}: internal — unknown arg type ${type}`);
-    }
-  }
-  return args;
-}
+export type GlobalExpansion =
+  | { kind: "help" }
+  | { kind: "list" }
+  | { kind: "result"; macro: string; text: string }
+  | { kind: "rholang"; macro: string; source: string };
 
 export interface GlobalProgram {
   kind: "program";
@@ -494,99 +308,12 @@ export interface GlobalProgram {
   errors: { line: number; message: string }[];
 }
 
-const lineOf = (src: string, idx: number) => src.slice(0, idx).split("\n").length;
-
-/// Expand every `%macro(…)` call site in a rholang program. Errors never abort:
-/// every site is attempted so one report covers them all, and a site that fails
-/// is left exactly as the user wrote it.
-export function expandGlobalProgram(src: string): GlobalProgram {
-  const text = String(src ?? "");
-  const out: string[] = [];
-  const expansions: GlobalProgram["expansions"] = [];
-  const errors: GlobalProgram["errors"] = [];
-  let i = 0, last = 0;
-  while (i < text.length) {
-    const t = skipTrivia(text, i);
-    if (t !== -1) { i = t; continue; }
-    if (text[i] !== "%") { i++; continue; }
-    const m = /^%([A-Za-z][\w-]*)\s*\(/.exec(text.slice(i));
-    if (!m) { i++; continue; }
-    const name = m[1].toLowerCase();
-    const open = i + m[0].length - 1;
-    const close = matchBracket(text, open);
-    if (close === -1) { errors.push({ line: lineOf(text, i), message: `%${name}: unbalanced ( — call site is not closed` }); break; }
-    const macro = MACROS[name];
-    out.push(text.slice(last, i));
-    if (!macro) {
-      errors.push({ line: lineOf(text, i), message: `unknown macro %${name} — try /global macros` });
-      out.push(text.slice(i, close + 1));
-    } else {
-      try {
-        out.push(macro.run(bindArgs(macro, name, splitArgs(text.slice(open + 1, close)))));
-        expansions.push({ name, line: lineOf(text, i), write: true });
-      } catch (e) {
-        errors.push({ line: lineOf(text, i), message: e instanceof Error ? e.message : String(e) });
-        out.push(text.slice(i, close + 1));
-      }
-    }
-    last = close + 1;
-    i = close + 1;
-  }
-  out.push(text.slice(last));
-  return { kind: "program", source: out.join(""), expansions, errors };
+/** Expand a bare single macro — the whole program is one macro. */
+export function expandGlobalMacro(line: string): GlobalExpansion {
+  return engine.expandGlobal(line) as GlobalExpansion;
 }
 
-export function expandGlobalMacro(line: string): GlobalExpansion {
-  const body = (line ?? "").trim().replace(/^\/?\s*global\s*/i, "");
-  const tokens = body.split(/\s+/).filter(Boolean);
-  if (!tokens.length) return { kind: "help", text: "usage: /global <macro> <args…>  (or /global help|macros)" };
-  const name = tokens[0].toLowerCase();
-  const rest = tokens.slice(1);
-
-  if (name === "help") {
-    return {
-      kind: "help",
-      text:
-        "RChain capability macros — /global\n" +
-        "  /global help            this help\n" +
-        "  /global macros          list the approved macro library\n" +
-        "  /global <macro> <args>  expand (writes: rholang preview to sign; reads: result)",
-    };
-  }
-  if (name === "macros" || name === "list") {
-    const rows = Object.entries(MACROS).map(
-      ([m, d]) => `  ${m.padEnd(10)} ${d.write ? "write" : "read "}  ${d.help}`
-    );
-    return { kind: "list", text: `Approved macros (${rows.length}):\n${rows.join("\n")}` };
-  }
-  if (name === "zfa") {
-    return { kind: "result", text: `local read — use /qucalc ${rest.join(" ")} (or /zfa-check) to verify ZFA` };
-  }
-  if (name === "verify") {
-    return { kind: "result", text: `local read — use /zfa ${rest.join(" ") || "<token>"} to validate a capability` };
-  }
-
-  const macro = MACROS[name];
-  if (!macro) throw new Error(`unknown macro ${JSON.stringify(name)} — try /global macros`);
-
-  const args: Record<string, unknown> = {};
-  const spec = macro.argSpec;
-  if (rest.length < spec.length) {
-    const missing = spec.slice(rest.length).map(([n, t]) => `${n}:${t}`).join(", ");
-    throw new Error(`${name}: missing args — ${missing}`);
-  }
-  if (rest.length > spec.length) throw new Error(`${name}: too many args (expected ${spec.length})`);
-  for (let i = 0; i < spec.length; i++) {
-    const [argName, type] = spec[i];
-    const raw = rest[i];
-    switch (type) {
-      case "string": args[argName] = cleanStr(raw, argName); break;
-      case "twists": args[argName] = cleanTwists(raw, argName); break;
-      case "list": args[argName] = cleanList(raw, argName); break;
-      case "int": args[argName] = cleanInt(raw, argName); break;
-      default: throw new Error(`${name}: internal — unknown arg type ${type}`);
-    }
-  }
-
-  return { kind: "rholang", macro: name, source: macro.run(args) };
+/** Expand every `%macro(…)` call site in a rholang program. */
+export function expandGlobalProgram(src: string): GlobalProgram {
+  return engine.expandProgram(src) as GlobalProgram;
 }
