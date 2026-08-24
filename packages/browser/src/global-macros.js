@@ -34,18 +34,26 @@ export function createMacroEngine(kernel) {
 const { parseTwists, achievesZfa, isPauliClosed, validateCapability } = kernel;
 
 // ---------------------------------------------------------------------------
-// Hygiene: patterns a *user-supplied argument* may not contain. This is the
-// "lexical scoping & hygiene" guard from the spec — it blocks the classic
-// injection vectors while the macro's own (governance-approved) template may
-// still reference system channels.
+// Hygiene: patterns a *user-supplied argument* may not contain.
+//
+// What actually stops injection is that every user string reaches rholang
+// through `q()` — JSON.stringify — into a string-literal position, and every
+// number through cleanInt. A quote or backslash is escaped, so an argument
+// cannot leave the literal it lands in. These patterns are a second line
+// behind that, for content that would be alarming even as inert data.
+//
+// They are NOT a syntax filter. Rholang keywords inside a string literal are
+// text, not code: `new` and `for (` were once rejected here as "scope
+// smuggling" and "join smuggling", but neither can smuggle anything past the
+// quoting, and both fire on ordinary names — "New York", "renew all", "Vote
+// for (chair)". A guard that cannot prevent an attack and does reject real
+// input is worse than no guard.
 // ---------------------------------------------------------------------------
 const RESTRICTED = [
   /rho:io:/i,                 // raw I/O channels
   /rho:rchain:deployerId/i,   // someone else's unforgeable identity
   /\*\s*!/,                   // eval-then-send injection
   /!\s*\*/,                   // send-then-eval injection
-  /new\s+[a-zA-Z]/i,          // scope smuggling
-  /for\s*\(/i,                // join / infinite-loop smuggling
 ];
 
 function fail(msg) {
@@ -519,6 +527,12 @@ function selftest() {
       () => P('%directory("oops"').errors.length === 1],
     ["nested brackets in args are balanced correctly",
       () => P('%ballot("i", ["a (b)", "c, d"])').expansions.length === 1],
+    ["ordinary names are not rejected as rholang keywords",
+      () => ["New York office", "renew all licences", "Vote for (chair)", "new hires"]
+        .every((n) => P(`%directory(${JSON.stringify(n)})`).errors.length === 0)],
+    ["a rholang keyword in an argument stays inside its string literal",
+      () => P('%directory("new x in { evil!(1) }")').source
+        .includes('"directory": "new x in { evil!(1) }"')],
     ["a list arg keeps its elements whole",
       () => P('%ballot("i", ["ship auth", "pay debt"])').source.includes('"ship auth", "pay debt"')],
   ];
