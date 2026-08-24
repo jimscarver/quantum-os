@@ -39,6 +39,7 @@
 | Dyncap clone race | An attacker who exfiltrates a peer's seed and broadcasts a `name` envelope *before* the legitimate peer in a fresh room wins the TOFU pin. The legitimate peer's subsequent envelopes will then be rejected as anchor-mismatched in that room. Hash-only identity cannot close this; signature-strength identity could. |
 | Vault password brute-force | The identity vault is confidential only up to its password. Anyone who obtains the ciphertext can attack it **offline**, and with group-scoped recovery the ciphertext is *deliberately* replicated to every group peer (including the always-on memory daemon), so it is not a secret. PBKDF2 at 210 000 iterations raises the per-guess cost but does not save a weak or reused password. Choose a strong password; the vault's security is exactly its strength. |
 | Public recovery handle | The `/login <handle>` lookup key is a public label (your display name); anyone in the group can fetch a member's *ciphertext* by handle. Confidentiality rests entirely on the password (row above), not on the handle being secret. |
+| Token balance is weaker than QLF's ZFA | `achieves_zfa` conjoins Pauli closure with **aggregate** count balance (`count_pos == count_neg`), where QLF's `is_zfa` requires **pairwise** balance — the signed action vector `(#^-#v, #>-#<, #/-#\\, #+-#-)` vanishing. The aggregate reading is strictly weaker, so the token space is larger than the ZFA-balanced space: at length 6 the kernel accepts 20,480 histories where QLF accepts 5,120. `^^<<` is the smallest illustration — it folds to `+I` with two positives against two negatives, and its signed action vector is `(2,-2,0,0)`. This does not weaken *entropy* (tokens are still 128-bit random), and no attack follows from it; what it means is that "ZFA-balanced token" names a superset of ZFA. See the section below. |
 | Vault widens the seed's blast radius | Before `/password`, exfiltrating the seed required reading `localStorage` on the victim's device. A published vault means the seed is now recoverable by anyone with the ciphertext **and** the password — a successful offline crack yields a full clone, subject to the same TOFU clone-race above. This is the accepted cost of portable recovery; it is why the password gate and the "don't run one identity in two browsers" (fork) guidance matter. |
 
 ---
@@ -57,6 +58,44 @@ cap:room:024602460246024602460246…
                  = Pauli scalar return (matrix fold ∈ {±I, ±iI})
                  ∧ Hermitian-pair count balance (count_pos == count_neg)
 ```
+
+**Which count balance — and why it is not QLF's.** The second conjunct above is
+*aggregate*: as many positive twists as negative ones, without regard to which
+conjugate pair they came from. QLF's count balance is *pairwise* — `#^=#v ∧
+#>=#< ∧ #/=#\ ∧ #+=#-`, the vanishing of the signed action vector, which is
+what *Zero Free Action* names. Pairwise implies aggregate; the converse fails.
+
+Two consequences, both measured exhaustively by
+[`crates/zfa-core/tests/census_conformance.rs`](crates/zfa-core/tests/census_conformance.rs):
+
+- **The keystone does not apply to the aggregate predicate.** QLF's
+  `count_balanced_pauli_closed` proves count balance implies Pauli closure for
+  every history; its hypothesis is the pairwise predicate. Under the aggregate
+  one there are 61,440 counterexamples at length 6 alone (`^<` is the
+  two-twist case, folding to `-iσ_z`). So the conjunction here is load-bearing,
+  not the redundant cross-check it was previously documented as.
+- **`achieves_zfa` over-accepts.** At length 6 it admits 20,480 histories where
+  QLF's `is_zfa` admits 5,120 — three quarters of what the kernel calls a
+  closure has a non-zero signed action vector.
+
+The predicate is left as-is rather than tightened, because it is what live room
+links and already-minted identities validate against; narrowing it would
+invalidate deployed tokens. `is_pairwise_balanced` / `achieves_zfa_pairwise`
+(Rust) and `isPairwiseBalanced` / `achievesZfaPairwise` (TypeScript) provide
+QLF's predicate for anything that needs it, and the coupling metric below uses
+them. The conformance suite pins the gap at exactly this size so it cannot
+widen unnoticed.
+
+### Census conformance
+
+The kernel is checked against the QLF census — an exhaustive enumeration of the
+8-twist alphabet computed in a separate repo, in a different language, and
+cross-checked there against machine-verified Lean theorems. The suite
+re-derives every census total here by brute force from this crate's own fold:
+266,304 histories at lengths 2, 4 and 6 on every `cargo test`, and 16.7M at
+length 8 behind `--ignored`. A sign flip in `twist_matrix`, a wrong branch in
+`is_pauli_closed`, or a drifted `Twist` encoding moves at least one total and
+fails the build. It is the check that found the balance-predicate gap above.
 
 Tokens are generated using `crypto.getRandomValues()` (browser) or the `getrandom` crate (Rust/WASM), which calls `crypto.getRandomValues()` internally. Entropy: 128 bits. Since v0.17, `Capability::from_entropy` uses rejection sampling (expected ~4 iterations) to guarantee both faces of the half-spin closure hold for every issued token. The output space is reduced versus the count-only check, but remains astronomically large for 32-twist tokens.
 

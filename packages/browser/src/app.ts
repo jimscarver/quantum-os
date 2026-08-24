@@ -1,5 +1,7 @@
 import { loadZfa, generateCapability, validateCapability,
-         spectralGap, achievesZfa, isPauliClosed } from "./zfa.js";
+         spectralGap, achievesZfa, isPauliClosed,
+         classifyCoupling, isPairwiseBalanced, signedAction,
+         foldsToScalar, COUPLED_BASELINE } from "./zfa.js";
 import { QOSPeer } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
          mintCurrencyToken, mintNote, mintNoteSeries, mintReceipt,
@@ -1604,6 +1606,7 @@ function handleCommand(raw: string): string[] {
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  /qlf-action <tw> — propose a history string for the room to verify");
       sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
+      sys("  /coupling [tw …] — was the room's closure shared, or several side by side?");
       sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
@@ -2263,6 +2266,72 @@ function handleCommand(raw: string): string[] {
       sys(`  is_count_balanced: ${cb ? "✓" : "✗"}  (${s.pos} pos / ${s.neg} neg)`);
       sys(`  is_pauli_closed:   ${pc ? "✓" : "✗"}  (folds to {±I, ±iI})`);
       sys(`  is_zfa = ${cb} ∧ ${pc} = ${cb && pc ? "✓ closed" : "✗ not closed"}   gap=${s.gap}`);
+      break;
+    }
+
+    case "coupling": {
+      // Was this one shared closure, or several closures that happened side by
+      // side? A room process is parallel(peer1, peer2, …) and is ZFA-balanced
+      // by construction, so its balance distinguishes nothing. Cutting it into
+      // per-peer factors does: see crates/zfa-core/src/coupling.rs.
+      const src = arg.trim();
+      let labels: string[] = [];
+      let parts: Uint8Array[] = [];
+
+      if (src) {
+        const chunks = src.split(/[|\s]+/).filter(Boolean);
+        if (chunks.length < 2) {
+          sys("usage: /coupling [<twists> <twists> …]");
+          sys("  with no arguments, classifies this room's own joint closure");
+          sys("  e.g. /coupling ^ v      ·   /coupling +- ^v<>");
+          break;
+        }
+        for (const c of chunks) {
+          const tw = parseSymbolicTwists(c);
+          if (!tw) { sys(`not a twist string: ${c}`); parts = []; break; }
+          parts.push(tw);
+          labels.push(twistsToSymbolic(tw));
+        }
+        if (parts.length === 0) break;
+      } else {
+        const allPeers = qpeer ? [qpeer.peerId, ...[...peers]] : [...peers];
+        for (const id of allPeers) {
+          const tw = tokenTwists(id);
+          if (!tw) continue;
+          parts.push(tw);
+          labels.push(id === qpeer?.peerId ? (myName || shortId(id)) + " (you)" : peerLabel(id));
+        }
+        if (parts.length < 2) {
+          sys("/coupling: needs at least two peers in the room (or pass histories directly)");
+          break;
+        }
+      }
+
+      const reading = classifyCoupling(parts);
+      sys(`/coupling: parallel(${labels.join(", ")})`);
+      parts.forEach((tw, i) => {
+        const state = isPairwiseBalanced(tw) ? "closes alone"
+                    : foldsToScalar(tw)      ? "folds to a scalar"
+                    :                          "open";
+        sys(`  ${labels[i]}  ${twistsToSymbolic(tw)}  — ${state}`);
+      });
+      sys(`  verdict: ${reading.verdict}`);
+      switch (reading.verdict) {
+        case "coupled":
+          sys("    only the join closes — a shared closure (QLF's entanglement)");
+          sys(`    census baseline: ${(COUPLED_BASELINE * 100).toFixed(1)}% of shared closures are coupled`);
+          break;
+        case "product":
+          sys("    separable — each part folds to a scalar on its own");
+          break;
+        case "independent":
+          sys("    each part closed alone — two closures, not one shared event");
+          break;
+        case "open":
+          sys(`    the join is not a ZFA closure; signed action = (${signedAction(
+                new Uint8Array(parts.flatMap(p => [...p]))).join(", ")})`);
+          break;
+      }
       break;
     }
 
@@ -5054,6 +5123,10 @@ const CMD_HELP: Record<string, string[]> = {
   freq: ["/freq [n | twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n (the 2:1 harmonic ladder)."],
   "qlf-action": ["/qlf-action <twists> — propose a QuCalc history string for the room to verify.", "The collaborative-study surface over the ZFA kernel; broadcast for /zfa-check.", "e.g. /qlf-action ^v<>/\\+-"],
   "zfa-check": ["/zfa-check <twists> — verify ZFA closure locally: is_zfa = is_count_balanced ∧ is_pauli_closed.", "Each peer runs its own kernel; no trusted evaluator. e.g. /zfa-check ^v^v"],
+  coupling: ["/coupling [<twists> …] — classify a joint closure: independent, product, or coupled.",
+             "No arguments classifies this room's own parallel(peer1, peer2, …).",
+             "Coupled means only the join closes — a shared closure, not two side by side.",
+             "Sector counts are the QLF census's; baseline 80.3% coupled. e.g. /coupling ^ v"],
   estimate: ["/estimate new <question> — open a robust group numeric estimate (median by default).",
              "/estimate <number> — submit your estimate · /estimate status — median + IQR · /estimate close.",
              "--mean for the mean tally; median is whale/outlier-resistant. Used by gov-9stage & colab-study."],
@@ -5106,6 +5179,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "qucalc",  template: "/qucalc ",    desc: "evaluate a RhoQuCalc twist sequence" },
   { name: "conj",    template: "/conj ",      desc: "Hermitian adjoint of a twist sequence" },
   { name: "freq",    template: "/freq ",      desc: "ZFA frequency spectrum / C(2n,n)" },
+  { name: "coupling", template: "/coupling ", desc: "shared closure, or several side by side?" },
   { name: "dump",    template: "/dump",       desc: "summary of logic shared this session" },
   { name: "lemma",   template: "/lemma ",     desc: "register / list named lemmas" },
   { name: "request", template: "/request ",   desc: "request a lemma from its holder" },

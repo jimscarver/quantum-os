@@ -4,7 +4,8 @@
 use wasm_bindgen::prelude::*;
 
 use crate::capability::Capability;
-use crate::history::{achieves_zfa, charge, div_b, spectral_gap};
+use crate::coupling::coupling_json;
+use crate::history::{achieves_zfa, achieves_zfa_pairwise, charge, div_b, is_pairwise_balanced, spectral_gap};
 use crate::pauli::is_pauli_closed;
 use crate::twist::Twist;
 
@@ -23,6 +24,30 @@ pub fn wasm_achieves_zfa(twist_bytes: &[u8]) -> bool {
 #[wasm_bindgen]
 pub fn wasm_is_pauli_closed(twist_bytes: &[u8]) -> bool {
     is_pauli_closed(&parse_twists(twist_bytes))
+}
+
+/// QLF's count balance: the signed action vector `(#^-#v, #>-#<, #/-#\\, #+-#-)`
+/// vanishes. Strictly stronger than the aggregate balance inside
+/// [`wasm_achieves_zfa`] — see the note on `history::achieves_zfa`.
+#[wasm_bindgen]
+pub fn wasm_is_pairwise_balanced(twist_bytes: &[u8]) -> bool {
+    is_pairwise_balanced(&parse_twists(twist_bytes))
+}
+
+/// QLF's ZFA exactly: pairwise count balance and Pauli closure.
+#[wasm_bindgen]
+pub fn wasm_achieves_zfa_pairwise(twist_bytes: &[u8]) -> bool {
+    achieves_zfa_pairwise(&parse_twists(twist_bytes))
+}
+
+/// Classify a room's joint closure by how its per-peer factors relate to it.
+///
+/// `parts` is the peers' twist histories as digit strings (`0`-`7`), separated
+/// by `|` — the order is the order the room composed them. Returns JSON:
+/// `{"verdict":"coupled","shared":true,"open":[0,1],"baseline":0.802893}`.
+#[wasm_bindgen]
+pub fn wasm_coupling(parts: &str) -> String {
+    coupling_json(parts)
 }
 
 #[wasm_bindgen]

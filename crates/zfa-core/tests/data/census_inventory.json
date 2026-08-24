@@ -1,0 +1,99 @@
+{
+  "_provenance": {
+    "source_repo": "https://github.com/jimscarver/quantum-logical-framework",
+    "source_file": "data/census_inventory.json",
+    "source_commit": "54fcc9b",
+    "trimmed": "history listings and factor witnesses dropped; aggregates only",
+    "regenerate": "run census_inventory.py in the QLF repo, then copy the aggregate fields of folds.by_length / factors here"
+  },
+  "_comment": "Exhaustive census of the 8-twist alphabet, computed independently of this repo. zfa-core's kernel is checked against it by tests/census_conformance.rs: every number below is re-derived here by brute force and must match exactly.",
+  "_invariants_asserted": [
+    "count balance => Pauli closure (count_balanced_pauli_closed)",
+    "count balance => fold is +-I, never +-iI (balanced_phase_is_real)",
+    "unbalanced histories do reach +-iI (unbalanced_can_be_imaginary)",
+    "closure depth = max phase excursion (closedAtHorizon_iff_maxExcursion_le)",
+    "one-pass closures number 2^n (onePass_ways_iff)",
+    "the deepest stratum holds exactly 2 (nested_closed_at_d)",
+    "phase factorizes over independent factors (QLF_IndexedFactors.phase_factorizes)",
+    "a joint closure of independent factors needs each factor closed (kron is scalar iff both are)",
+    "first closures are prefix-free, so their cylinder mass sum W/8^d is at most 1 (QLF_KraftMeasure.twist_kraft)",
+    "a signed class total never exceeds its way count, |A| <= W",
+    "the normalized-event weight sum A^2/(W.8^d) stays under the Kraft mass (QLF_KraftMeasure.normalized_event_mass_le_one)"
+  ],
+  "folds": {
+    "by_length": {
+      "10": {
+        "count": 7939008,
+        "n_plus": 3535200,
+        "n_minus": 4403808,
+        "n_imaginary": 0,
+        "signed_amplitude": -868608,
+        "weight_of_signed_amplitude": 754479857664
+      },
+      "2": {
+        "count": 8,
+        "n_plus": 0,
+        "n_minus": 8,
+        "n_imaginary": 0,
+        "signed_amplitude": -8,
+        "weight_of_signed_amplitude": 64
+      },
+      "4": {
+        "count": 168,
+        "n_plus": 144,
+        "n_minus": 24,
+        "n_imaginary": 0,
+        "signed_amplitude": 120,
+        "weight_of_signed_amplitude": 14400
+      },
+      "6": {
+        "count": 5120,
+        "n_plus": 1488,
+        "n_minus": 3632,
+        "n_imaginary": 0,
+        "signed_amplitude": -2144,
+        "weight_of_signed_amplitude": 4596736
+      },
+      "8": {
+        "count": 190120,
+        "n_plus": 116008,
+        "n_minus": 74112,
+        "n_imaginary": 0,
+        "signed_amplitude": 41896,
+        "weight_of_signed_amplitude": 1755274816
+      }
+    },
+    "phase_rule": "(-1)^(#neg twists) * sign(permutation sorting the axis word)",
+    "unbalanced_imaginary_count_len3": 48
+  },
+  "factors": {
+    "2": {
+      "independent_pairs": 0,
+      "shared_closures": 8,
+      "product_sector": 2,
+      "coupled_sector": 6,
+      "coupled_fraction": 0.75
+    },
+    "4": {
+      "independent_pairs": 64,
+      "shared_closures": 440,
+      "product_sector": 92,
+      "coupled_sector": 348,
+      "coupled_fraction": 0.790909
+    },
+    "6": {
+      "independent_pairs": 2688,
+      "shared_closures": 22912,
+      "product_sector": 4480,
+      "coupled_sector": 18432,
+      "coupled_fraction": 0.804469
+    },
+    "8": {
+      "independent_pairs": 110144,
+      "shared_closures": 1220696,
+      "product_sector": 240608,
+      "coupled_sector": 980088,
+      "coupled_fraction": 0.802893
+    }
+  }
+}

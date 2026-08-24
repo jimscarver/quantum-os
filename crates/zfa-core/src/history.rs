@@ -14,13 +14,54 @@ pub fn count_neg(h: &[Twist]) -> i64 {
     h.iter().filter(|t| t.is_negative()).count() as i64
 }
 
-/// True iff `count_pos(h) == count_neg(h)` — the Hermitian-pair multiset
-/// face of half-spin closure (the abelian shadow of `achieves_zfa`).
+/// True iff `count_pos(h) == count_neg(h)` — positives and negatives balance
+/// **in aggregate**, without regard to which conjugate pair they came from.
 ///
-/// Each event is structurally a bra-ket pair; this predicate counts the
-/// multiset, ignoring order. The non-abelian face is [`is_pauli_closed`].
+/// This is strictly weaker than QLF's count balance
+/// ([`is_pairwise_balanced`]), which requires each conjugate pair to balance
+/// on its own. `^^<<` passes this and fails that. Read the two-predicate note
+/// on [`achieves_zfa`] before using either.
 pub fn is_count_balanced(h: &[Twist]) -> bool {
     count_pos(h) == count_neg(h)
+}
+
+/// The **signed action vector**: `(#^-#v, #>-#<, #/-#\, #+-#-)`.
+///
+/// ZFA is *Zero Free Action* — this vector vanishing. Mirrors
+/// `calculate_action` in the QLF Python core (`twist_core.py`), component
+/// order included.
+pub fn signed_action(h: &[Twist]) -> (i64, i64, i64, i64) {
+    let n = |t: Twist| h.iter().filter(|&&x| x == t).count() as i64;
+    (
+        n(Twist::Up) - n(Twist::Down),
+        n(Twist::Right) - n(Twist::Left),
+        n(Twist::Slash) - n(Twist::BSlash),
+        n(Twist::Plus) - n(Twist::Minus),
+    )
+}
+
+/// True iff the signed action vector vanishes: `#^=#v ∧ #>=#< ∧ #/=#\ ∧
+/// #+=#-`. This is QLF's **count balance** — the hypothesis of the keystone
+/// theorem `count_balanced_pauli_closed`, which proves it implies Pauli
+/// closure for every history, cross-axis interleavings included.
+///
+/// The aggregate [`is_count_balanced`] does *not* imply Pauli closure: 61,440
+/// histories of length 6 alone are counterexamples. Anything appealing to the
+/// keystone must use this predicate.
+pub fn is_pairwise_balanced(h: &[Twist]) -> bool {
+    signed_action(h) == (0, 0, 0, 0)
+}
+
+/// QLF's ZFA, exactly: count balance in the pairwise sense, and Pauli closure.
+/// Mirrors `is_zfa` in the QLF Python core (`twist_core.py`), minus its
+/// separate minimum-length gate.
+///
+/// By the keystone the second conjunct is implied by the first; it is kept
+/// because that is how the runtime predicate is written and stated, and
+/// `tests/census_conformance.rs` re-derives the implication rather than
+/// assuming it.
+pub fn achieves_zfa_pairwise(h: &[Twist]) -> bool {
+    is_pairwise_balanced(h) && is_pauli_closed(h)
 }
 
 /// Full ZFA = **half-spin closure**: a process whose execution returns a
@@ -34,17 +75,29 @@ pub fn is_count_balanced(h: &[Twist]) -> bool {
 ///      *abelian* face: each twist is paired with its Hermitian conjugate,
 ///      i.e. the history has bra-ket structure.
 ///
-/// Neither face implies the other in isolation: `σ_x σ_y σ_z = iI` is
-/// Pauli-closed but count-imbalanced; `^ < v -` is count-balanced but
-/// folds to σ_x. Both together are the unique characterisation of a
-/// closed half-spin process.
-///
 /// Pauli closure is not a "second condition" enforced on top of count
 /// balance — it IS the SU(2)-scalar-return reading of half-spin closure.
 /// See HALF-SPIN-ZFA-EMBEDDING.md §3a (and §6 for why H ≅ SU(2) is the
 /// forced algebra at all).
 ///
-/// Mirrors `is_zfa` in the QLF Python core (`twist_core.py`).
+/// # This is not QLF's ZFA
+///
+/// The count-balance conjunct here is the **aggregate** one
+/// ([`is_count_balanced`]), where QLF's is **pairwise**
+/// ([`is_pairwise_balanced`]). The aggregate reading is strictly weaker, so
+/// this predicate accepts histories QLF's `is_zfa` rejects — `^^<<` folds to
+/// `+I` and has two positives against two negatives, but its signed action
+/// vector is `(2, -2, 0, 0)`, which is not zero free action.
+///
+/// The difference is not cosmetic. The keystone theorem
+/// `count_balanced_pauli_closed` — count balance implies Pauli closure — holds
+/// for the pairwise predicate and fails for this one, so an argument that
+/// leans on the keystone must call [`achieves_zfa_pairwise`] instead.
+///
+/// This predicate is what the deployed capability format validates against
+/// (`Capability::from_entropy` produces aggregate-balanced tokens), so it is
+/// kept as-is rather than tightened underneath live room links.
+/// `tests/census_conformance.rs` pins the gap so it cannot widen unnoticed.
 pub fn achieves_zfa(h: &[Twist]) -> bool {
     is_count_balanced(h) && is_pauli_closed(h)
 }
@@ -144,5 +197,39 @@ mod tests {
         assert!(achieves_zfa(&h));
         assert_eq!(charge(&h), 0);
         assert_eq!(div_b(&h), 0);
+    }
+
+    #[test]
+    fn signed_action_is_the_qlf_vector() {
+        // twist_core.calculate_action("^^<<") == (2, -2, 0, 0)
+        let h = vec![Up, Up, Left, Left];
+        assert_eq!(signed_action(&h), (2, -2, 0, 0));
+    }
+
+    #[test]
+    fn aggregate_balance_is_strictly_weaker_than_pairwise() {
+        // Two positives, two negatives, and the fold is +I — so this crate's
+        // `achieves_zfa` accepts it. Its signed action vector is (2,-2,0,0),
+        // so QLF's ZFA does not.
+        let h = vec![Up, Up, Left, Left];
+        assert!(is_count_balanced(&h));
+        assert!(!is_pairwise_balanced(&h));
+        assert!(achieves_zfa(&h));
+        assert!(!achieves_zfa_pairwise(&h));
+    }
+
+    #[test]
+    fn pairwise_balance_implies_the_aggregate() {
+        for h in [
+            vec![Up, Down],
+            vec![Plus, Minus],
+            vec![Up, Left, Down, Right],
+            vec![Up, Down, Right, Left, Slash, BSlash],
+        ] {
+            assert!(is_pairwise_balanced(&h), "{h:?}");
+            assert!(is_count_balanced(&h), "{h:?}");
+            // The keystone: pairwise balance alone forces Pauli closure.
+            assert!(achieves_zfa_pairwise(&h), "{h:?}");
+        }
     }
 }
