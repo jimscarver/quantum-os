@@ -363,3 +363,38 @@ persist under `--state`.
   only **warns** and proceeds (the cap is still a valid rendezvous id).
 - Trust model unchanged: possessing the room cap **is** authorization; the
   signaling server is an untrusted relay; data channels are DTLS-encrypted.
+
+## RChain capability macros — the `/global` agent (`global-agent.mjs`)
+
+The `/global` agent joins the room and turns chat messages into RChain capability
+operations. It maps macro requests to the rchain-rust system contracts and shares
+the results back into the room chat:
+
+```bash
+node global-agent.mjs --room <cap:room:… | room-URL> [--name global]
+```
+
+While connected, any peer types in the room chat:
+
+- `/global help` — usage.
+- `/global macros` — list the approved macro library.
+- `/global <macro> <args…>` — expand a macro.
+
+**Read macros are answered by the agent** (locally, via the ZFA engine) and the
+result is broadcast to the room:
+
+- `zfa 01` → `zfa(01) → ZFA true (pauli-closed true)`
+- `verify cap:room:…` → `verify(cap:room:…) → valid`
+
+**Write macros return a human-readable rholang preview** for the requestor to
+review and sign *client-side* (the agent never holds keys — zero-trust):
+
+- `grant 01`, `ballot lunch pizza,tacos`, `directory notes`, `mailbox inbox`,
+  `group rchain`, `delegate alice`, `transfer 10 bob`
+
+Macros are **typed templates** (`global-macros.mjs`): arguments are structurally
+validated and interpolated (never raw string-appended), and a restricted-pattern
+guard rejects injection (`rho:io:`, `new …`, `for(`, `!*`/`*!`, …). Run
+`node global-macros.mjs --selftest` to verify.
+
+`run-agents.sh` launches it by default (set `NO_GLOBAL=1` to skip).

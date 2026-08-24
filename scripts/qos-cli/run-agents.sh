@@ -50,6 +50,21 @@ if [ -z "${NO_MEMORY:-}" ]; then
   fi
 fi
 
+# RChain capability macro agent — expands `/global <macro> <args…>` into rholang
+# (or answers read macros locally) and shares the result in the room chat.
+# Deterministic; no AI backend. Set NO_GLOBAL=1 to skip.
+if [ -z "${NO_GLOBAL:-}" ]; then
+  gpidf=".agents/global.pid"
+  if [ -f "$gpidf" ] && kill -0 "$(cat "$gpidf")" 2>/dev/null; then
+    echo "• global already running (pid $(cat "$gpidf"))"
+  else
+    nohup node global-agent.mjs --room "$ROOM" --name global \
+      >> ".agents/global.log" 2>&1 &
+    echo $! > "$gpidf"
+    echo "✓ started global (pid $!) → scripts/qos-cli/.agents/global.log"
+  fi
+fi
+
 echo
 echo "Tail:  tail -f scripts/qos-cli/.agents/*.log"
 echo "Stop:  bash scripts/qos-cli/stop-agents.sh"
