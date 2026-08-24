@@ -288,7 +288,11 @@ answer about the room, facilitation, or decisions (needs `--ai`); `/facil optimi
 <objective + constraints>` facilitates an annealing-style optimization round —
 proposes candidates and the next `/estimate`/`/poll` step (needs `--ai`; see
 [`Collective_Optimization.md`](../../Collective_Optimization.md)); `/facil chair
-<topic>` chairs a structured deliberation (needs `--ai`; see below); `/facil off` /
+<topic>` chairs a structured deliberation (needs `--ai`; see below); `/facil health`
+reports diagnostics for a long-running daemon — uptime, RSS, CPU, signaling/channel
+state, present peers, posts used against the budget, trust standing, and the last
+error. CPU is given both as a lifetime average and as a delta since the previous
+check, because a lifetime average hides a runaway; `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 
