@@ -1,5 +1,6 @@
 pub mod capability;
 pub mod history;
+pub mod lint;
 pub mod pauli;
 pub mod process;
 pub mod twist;

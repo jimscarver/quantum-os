@@ -398,3 +398,21 @@ guard rejects injection (`rho:io:`, `new …`, `for(`, `!*`/`*!`, …). Run
 `node global-macros.mjs --selftest` to verify.
 
 `run-agents.sh` launches it by default (set `NO_GLOBAL=1` to skip).
+
+### Browser side (the zero-trust signing loop)
+
+The agent only *expands*; the browser validates and signs. `packages/browser/src/global.ts`
+provides the client half of the pipeline:
+
+- `lintRholang(source)` — runs the WASM linter (`crates/zfa-core/src/lint.rs`,
+  exposed as `wasm_lint_ok` / `wasm_lint_errors`) on the expanded rholang.
+- `generateKeyPair` / `storeKeyPair` / `loadKeyPair` — a passphrase-wrapped
+  (PBKDF2 → AES-GCM) ECDSA keypair persisted in IndexedDB; the private key never
+  leaves the browser.
+- `signPayload` / `deployToNode` — sign and POST the deploy to the target node.
+- `runGlobalPipeline(source, { nodeUrl, passphrase })` — preview → lint → sign →
+  deploy, returning a staged result the UI can display.
+
+> Signing is ECDSA P-256 (Web Crypto has no secp256k1); swap `generateKeyPair` /
+> `signPayload` for secp256k1 (`@noble/curves` or a WASM secp256k1) for real
+> RChain deploys. The key-storage + lint + deploy flow is unchanged.
