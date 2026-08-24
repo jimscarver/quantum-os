@@ -80,9 +80,16 @@ function cleanCap(v, name) {
 }
 
 function cleanInt(v, name) {
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < 0) throw fail(`${name}: expected a non-negative integer`);
-  return n;
+  const s = String(v ?? "").trim();
+  // Decimal digits only, carried as a BigInt. `Number()` silently rounded
+  // anything past 2^53 — a typed 12345678901234567890 became a signed
+  // 12345678901234567000 — which for a REV amount means the value the user
+  // approved is not the value that gets signed. It also quietly accepted
+  // `0x10` as 16 and `1e9` as 1000000000. REV amounts run well past 2^53, so
+  // the digits the user typed are the digits that get emitted.
+  if (!/^\d+$/.test(s)) throw fail(`${name}: expected a non-negative integer (decimal digits only)`);
+  if (s.length > 40) throw fail(`${name}: integer too long (max 40 digits)`);
+  return BigInt(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +296,11 @@ export function selftest() {
     ["ballot lunch pizza,tacos", (r) => r.kind === "rholang" && r.source.includes("rho:gov:tally!")],
     ["directory notes", (r) => r.kind === "rholang" && r.source.includes("insertArbitrary!")],
     ["transfer 10 bob", (r) => r.kind === "rholang" && r.source.includes("revVault!")],
+    // amounts past 2^53 must survive verbatim, not be rounded through a double:
+    ["transfer 12345678901234567890 bob",
+      (r) => r.source.includes('"transfer", 12345678901234567890,')],
+    ["transfer 0x10 bob", () => { throw new Error("should have been rejected"); }],
+    ["transfer 1e9 bob", () => { throw new Error("should have been rejected"); }],
     // hygiene / injection must be rejected:
     ["directory rho:io:stdout", () => { throw new Error("should have been rejected"); }],
     ["ballot x y,rho:io:stdout", () => { throw new Error("should have been rejected"); }],
@@ -303,7 +315,7 @@ export function selftest() {
       pass++;
     } catch (e) {
       // The three injection/unknown cases are expected to throw — count them as passing.
-      const expected = /injection|rejected|unknown macro|restricted pattern/.test(e?.message ?? "");
+      const expected = /injection|rejected|unknown macro|restricted pattern|decimal digits only/.test(e?.message ?? "");
       if (expected) { console.log(`  ok   ${input}  (rejected: ${e.message})`); pass++; }
       else { console.log(`  FAIL ${input}  →  ${e?.message ?? e}`); }
     }
