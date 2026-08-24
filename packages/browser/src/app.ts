@@ -23,8 +23,11 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
-import { expandGlobalMacro, expandGlobalProgram, lintRholang, runGlobalPipeline,
+import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
+import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
+         generateKey as generateDeployKey, publicKeyOf, nodeStatus, evalTerm, deployTerm,
+         type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1588,6 +1591,96 @@ function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"):
   });
 }
 
+// ---------------------------------------------------------------------------
+// /rholang — multi-line program capture
+//
+// A rholang program is not a command line: it has newlines, braces and quotes,
+// and a chat input takes one line at a time. So `/rholang eval` and
+// `/rholang deploy` open a capture: every line typed after them is program text
+// until an empty line, which runs it. That is the only terminator — there is
+// nothing to escape and nothing to quote.
+// ---------------------------------------------------------------------------
+
+const RHOLANG_HELP = [
+  "/rholang — run rholang on an RChain node.",
+  "  /rholang eval          — run a program and read the result back. Nothing is signed,",
+  "                           nothing is stored, no block is produced.",
+  "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
+  "  /rholang status        — what the node is: version, shard, height, phlo floor.",
+  "",
+  "  eval and deploy take the program from the lines you type next.",
+  "  End with an empty line to run it, or type /cancel to throw it away.",
+  "",
+  "  Configuration:",
+  "  /rholang config               — show all of it",
+  "  /rholang node <url>           — node HTTP API (default http://127.0.0.1:40403)",
+  "  /rholang shard <id>           — shard the deploy is valid in (default root)",
+  "  /rholang phlo <limit> [price] — what a deploy may spend",
+  "  /rholang key generate|<hex>|show|forget — the secp256k1 deploy key (this browser only)",
+  "",
+  "  eval runs in a read-only sandbox over finalized state, where the node does not",
+  "  run its system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*,",
+  "  rho:registry:* and rho:rchain:* yield nothing. Reaching those means deploy.",
+];
+
+interface RholangCapture { mode: "eval" | "deploy"; lines: string[] }
+let rholangCapture: RholangCapture | null = null;
+
+function startRholangCapture(mode: "eval" | "deploy", seed: string, sys: (t: string) => void): void {
+  rholangCapture = { mode, lines: seed ? [seed] : [] };
+  sys(mode === "eval"
+    ? "rholang to evaluate — type the program, then an empty line to run it (/cancel to abort):"
+    : "rholang to deploy — type the program, then an empty line to sign and submit it (/cancel to abort):");
+  if (seed) sys("  " + seed);
+}
+
+/** Run whatever the capture collected. */
+function finishRholangCapture(): void {
+  const cap = rholangCapture;
+  rholangCapture = null;
+  if (!cap) return;
+  const source = cap.lines.join("\n").trim();
+  const say = (t: string) => addMessage("", t, "system");
+  if (!source) { say("nothing typed — cancelled"); return; }
+
+  const cfg = loadNodeConfig();
+  void (async () => {
+    // Never ask anyone to sign what cannot parse. The linter checks the shape of
+    // the program, not what it is permitted to reach — that is the node's call.
+    const lint = await lintRholang(source);
+    if (!lint.ok) {
+      say("✗ malformed rholang — not running:");
+      for (const e of lint.errors) say("  • " + e);
+      return;
+    }
+
+    if (cap.mode === "eval") {
+      say("evaluating on " + cfg.url + "…");
+      try {
+        const r = await evalTerm(cfg, source);
+        if (r.values.length) for (const v of r.values) say("  → " + v);
+        else say("  → (no value — a term reports by sending on a name called `return`)");
+        if (r.blockNumber !== undefined) say("  at block " + r.blockNumber);
+      } catch (e) {
+        say("✗ " + ((e as Error)?.message ?? e));
+      }
+      return;
+    }
+
+    if (!cfg.key) { say("✗ no deploy key — /rholang key generate, or /rholang key <hex>"); return; }
+    const confirmText = "Sign and deploy this to " + cfg.url + "?\n\n"
+      + "phlo limit " + cfg.phloLimit + " × price " + cfg.phloPrice + ", shard " + cfg.shard;
+    if (!window.confirm(confirmText)) { say("cancelled — nothing deployed"); return; }
+    say("signing and deploying to " + cfg.url + "…");
+    try {
+      const r = await deployTerm(cfg, source);
+      say((r.ok ? "✓ " : "✗ ") + r.message);
+    } catch (e) {
+      say("✗ " + ((e as Error)?.message ?? e));
+    }
+  })();
+}
+
 function handleCommand(raw: string): string[] {
   const parts = raw.slice(1).trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -1640,6 +1733,7 @@ function handleCommand(raw: string): string[] {
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
+      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · status · config (multi-line, end with a blank line)");
       sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros · node <url> (lint→sign→deploy)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
@@ -3780,13 +3874,129 @@ function handleCommand(raw: string): string[] {
             sys("cancelled — nothing deployed");
             return;
           }
-          const pass = window.prompt("Passphrase for your signing key (creates one on first use):") ?? "";
-          const r = await runGlobalPipeline(source, { nodeUrl, passphrase: pass });
-          if (r.ok) sys(`✓ ${r.message}${r.deployId ? ` — id ${r.deployId}` : ""}`);
-          else sys(`✗ ${r.stage}: ${r.message}`);
+          // Deploy through the same client /rholang uses: a secp256k1 signature
+          // over the node's own DeployData encoding. The old passphrase-wrapped
+          // P-256 key signed a packet no RChain node would ever verify.
+          const r = await deployTerm(loadNodeConfig(), source);
+          sys((r.ok ? "✓ " : "✗ ") + r.message);
         })();
       } catch (e) {
         sys(`✗ ${(e as Error)?.message ?? e}`);
+      }
+      break;
+    }
+
+    case "rholang": {
+      // Talk to an RChain node: run a program, or sign and submit one. A room is
+      // ephemeral; a deploy is not. `eval` and `deploy` take their program from
+      // the lines that follow, so a multi-line program needs no escaping.
+      const parts2 = arg.trim().split(/\s+/);
+      const sub = (parts2[0] ?? "").toLowerCase();
+      const rest = arg.trim().slice(sub.length).trim();
+      const cfg = loadNodeConfig();
+
+      switch (sub) {
+        case "":
+        case "help": {
+          for (const l of RHOLANG_HELP) sys(l);
+          break;
+        }
+
+        case "status": {
+          sys(`asking ${cfg.url}…`);
+          void (async () => {
+            try {
+              const st = await nodeStatus(cfg);
+              sys(`✓ node ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
+              sys(`  network ${st.networkId ?? "?"} · shard ${st.shardId ?? "?"} · peers ${st.peers ?? 0}`);
+              sys(`  latest block ${st.latestBlockNumber ?? "?"} · min phlo price ${st.minPhloPrice ?? "?"}`);
+              if (st.shardId && st.shardId !== cfg.shard) {
+                sys(`  ⚠ your shard is "${cfg.shard}" but the node is "${st.shardId}" — deploys will be rejected`);
+                sys(`    fix with /rholang shard ${st.shardId}`);
+              }
+            } catch (e) {
+              sys(`✗ cannot reach ${cfg.url} — ${(e as Error)?.message ?? e}`);
+              sys("  is the node running, and is --api-host set so it listens for the browser?");
+            }
+          })();
+          break;
+        }
+
+        case "eval":
+        case "deploy": {
+          startRholangCapture(sub, rest, sys);
+          break;
+        }
+
+        case "config": {
+          for (const l of describeNodeConfig(cfg)) sys("  " + l);
+          break;
+        }
+
+        case "node": {
+          if (!rest) { sys(`node ${cfg.url}`); break; }
+          saveNodeConfig({ ...cfg, url: rest });
+          sys(`✓ node set to ${rest}`);
+          break;
+        }
+
+        case "shard": {
+          if (!rest) { sys(`shard ${cfg.shard}`); break; }
+          saveNodeConfig({ ...cfg, shard: rest });
+          sys(`✓ shard set to ${rest}`);
+          break;
+        }
+
+        case "phlo": {
+          const [limitTxt, priceTxt] = rest.split(/\s+/);
+          const limit = Number(limitTxt);
+          if (!limitTxt || !Number.isFinite(limit) || limit <= 0) {
+            sys(`phlo limit ${cfg.phloLimit}, price ${cfg.phloPrice}   (set with /rholang phlo <limit> [price])`);
+            break;
+          }
+          const price = priceTxt ? Number(priceTxt) : cfg.phloPrice;
+          if (!Number.isFinite(price) || price <= 0) { sys("✗ phlo price must be a positive number"); break; }
+          saveNodeConfig({ ...cfg, phloLimit: limit, phloPrice: price });
+          sys(`✓ phlo limit ${limit}, price ${price}`);
+          break;
+        }
+
+        case "key": {
+          if (!rest || rest.toLowerCase() === "show") {
+            sys(cfg.key ? `public key ${publicKeyOf(cfg.key)}` : "no deploy key — /rholang key generate, or /rholang key <hex>");
+            break;
+          }
+          if (rest.toLowerCase() === "generate") {
+            if (cfg.key && !window.confirm("Replace the existing deploy key? The old one is not recoverable.")) {
+              sys("cancelled — key unchanged");
+              break;
+            }
+            const k = generateDeployKey();
+            saveNodeConfig({ ...cfg, key: k });
+            sys("✓ deploy key generated (stored in this browser only)");
+            sys(`  public ${publicKeyOf(k)}`);
+            sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
+            break;
+          }
+          if (rest.toLowerCase() === "forget") {
+            const { key: _drop, ...without } = cfg;
+            saveNodeConfig(without as NodeConfig);
+            sys("✓ deploy key removed from this browser");
+            break;
+          }
+          try {
+            const pub = publicKeyOf(rest);
+            saveNodeConfig({ ...cfg, key: rest.trim().replace(/^0x/, "") });
+            sys("✓ deploy key set (stored in this browser only)");
+            sys(`  public ${pub}`);
+          } catch {
+            sys("✗ not a secp256k1 secret key — expected 32 bytes of base16");
+          }
+          break;
+        }
+
+        default:
+          sys(`unknown: /rholang ${sub}  — try /rholang help`);
       }
       break;
     }
@@ -4938,6 +5148,24 @@ function connect(): void {
 // ---------------------------------------------------------------------------
 
 function send(): void {
+  // A rholang capture is in progress: every line is program text, an empty line
+  // runs it. Checked before anything else — indentation is significant to read,
+  // a leading slash is legal rholang-adjacent text, and no peer is needed to
+  // talk to a node.
+  if (rholangCapture) {
+    const line = msgInput.value.replace(/\s+$/, "");
+    msgInput.value = "";
+    if (line.trim() === "") { finishRholangCapture(); return; }
+    if (line.trim().toLowerCase() === "/cancel") {
+      rholangCapture = null;
+      addMessage("", "cancelled — nothing run", "system");
+      return;
+    }
+    rholangCapture.lines.push(line);
+    addMessage("", "  " + line, "self");
+    return;
+  }
+
   const text = msgInput.value.trim();
   if (!text || !qpeer) return;
   pushHistory(text);
@@ -4957,7 +5185,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -5264,12 +5492,21 @@ const CMD_HELP: Record<string, string[]> = {
   script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
+  rholang: [
+    "/rholang eval — run a rholang program on the node and read the result back. Nothing is signed, nothing stored, no block.",
+    "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
+    "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
+    "eval and deploy read the program from the lines you type after the command — end with an empty line to run it, /cancel to discard.",
+    "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
+    "eval runs read-only over finalized state, where the node does not run system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*, rho:registry:* and rho:rchain:* yield nothing. Those need deploy.",
+  ],
   global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library. · /global node <url> — set the deploy target (default http://127.0.0.1:40403).", "Writes are linted (WASM), previewed, then signed with your passphrase-wrapped browser key and POSTed to the node — the key never leaves the browser."],
 };
 
 interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
   { name: "help",    template: "/help",       desc: "show all commands" },
+  { name: "rholang", template: "/rholang ",    desc: "run rholang on an RChain node: eval · deploy · status" },
   { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
   { name: "password", template: "/password",  desc: "password-protect your identity (+ publish to groups)" },
   { name: "login",   template: "/login ",     desc: "restore identity: /login <handle> (from group) or paste a string" },
