@@ -88,6 +88,17 @@ function cleanCap(v, name) {
   return s;
 }
 
+// A rholang term, passed through exactly as written. Maps and nested lists are
+// ordinary rholang and there is nothing to escape them into: the argument sits
+// in the user's own program, which they review and sign. The scanner has
+// already balanced it. Used by the `rho:gov:*` macros, whose arguments are maps.
+function cleanTerm(v, name) {
+  const s = String(v ?? "").trim();
+  if (!s) throw fail(`${name}: expected a rholang term`);
+  if (s.length > 2000) throw fail(`${name}: term too long (max 2000 chars)`);
+  return s;
+}
+
 function cleanInt(v, name) {
   const s = String(v ?? "").trim();
   // Decimal digits only, carried as a BigInt. `Number()` silently rounded
@@ -211,6 +222,177 @@ const MACROS = {
     },
   },
 
+  // --- rho:qucalc:* — proofs -------------------------------------------
+  // Mirrors qucalc/examples/syllogism.rho ("deduce"): thesis ⊕ antithesis fused
+  // through their shared middle term. Returns (geometry, cap), or Nil if the
+  // synthesis does not close. `grant` above is the same example's "seal".
+  fuse: {
+    help: "Dialectical synthesis of two histories (rho:qucalc:fuse).",
+    write: true,
+    argSpec: [["subject", "twists"], ["predicate", "twists"]],
+    expand(args) {
+      return `new ret in {
+  rho:qucalc:fuse!([${args.subject.join(", ")}], [${args.predicate.join(", ")}], *ret) |
+  for (@out <- ret) { Nil }
+}`;
+    },
+  },
+
+  // --- rho:gov:* — group decisions --------------------------------------
+  // Mirrors qucalc/examples/liquid_democracy.rho. Arguments are rholang maps,
+  // so they take the `term` type and pass through as written.
+  trust: {
+    help: "Admin-rooted web of trust → member levels (rho:gov:trustLevels).",
+    write: true,
+    argSpec: [["ratings", "term"], ["admins", "term"]],
+    expand(args) {
+      return `new ret in {
+  rho:gov:trustLevels!(${args.ratings}, ${args.admins}, *ret) |
+  for (@levels <- ret) { Nil }
+}`;
+    },
+  },
+
+  weights: {
+    help: "Liquid-democracy weights: delegation resolved transitively (rho:gov:resolveWeights).",
+    write: true,
+    argSpec: [["voters", "term"], ["delegations", "term"], ["levels", "term"]],
+    expand(args) {
+      return `new ret in {
+  rho:gov:resolveWeights!(${args.voters}, ${args.delegations}, ${args.levels}, *ret) |
+  for (@weights <- ret) { Nil }
+}`;
+    },
+  },
+
+  tally: {
+    help: "Weighted ranked-choice or approval tally (rho:gov:tally).",
+    write: true,
+    argSpec: [["ballots", "term"], ["weights", "term"], ["mode", "string"]],
+    expand(args) {
+      return `new ret in {
+  rho:gov:tally!(${args.ballots}, ${args.weights}, ${q(args.mode)}, *ret) |
+  for (@winner <- ret) { Nil }
+}`;
+    },
+  },
+
+  censure: {
+    help: "⅔-quorum accountability with voucher slashing (rho:gov:censure).",
+    write: true,
+    argSpec: [["censures", "term"], ["levels", "term"], ["vouchers", "term"]],
+    expand(args) {
+      return `new ret in {
+  rho:gov:censure!(${args.censures}, ${args.levels}, ${args.vouchers}, *ret) |
+  for (@out <- ret) { Nil }
+}`;
+    },
+  },
+
+  // --- bearer capabilities ----------------------------------------------
+  // Mirrors qucalc/examples/promissory_note.rho: declare an issuer authority,
+  // grant a bearer note, redeem it for a permanent receipt. Each is an
+  // unforgeable content-addressed registry capability.
+  issuer: {
+    help: "Mint issuer authority for a currency (promissory-note declare).",
+    write: true,
+    argSpec: [["currency", "string"]],
+    expand(args) {
+      return `new ret in {
+  rho:registry:insertArbitrary!({"kind": "issuer", "currency": ${q(args.currency)}}, *ret) |
+  for (@authority <- ret) { Nil }
+}`;
+    },
+  },
+
+  note: {
+    help: "Mint a bearer note of a denomination against an authority.",
+    write: true,
+    argSpec: [["authority", "string"], ["amount", "int"]],
+    expand(args) {
+      return `new ret in {
+  rho:registry:insertArbitrary!({"kind": "note", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
+  for (@note <- ret) { Nil }
+}`;
+    },
+  },
+
+  redeem: {
+    help: "Redeem a note for a permanent, non-transferable receipt.",
+    write: true,
+    argSpec: [["authority", "string"], ["amount", "int"]],
+    expand(args) {
+      return `new ret in {
+  rho:registry:insertArbitrary!({"kind": "receipt", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
+  for (@receipt <- ret) { Nil }
+}`;
+    },
+  },
+
+  // --- structural patterns ----------------------------------------------
+  // Mirrors qucalc/examples/atomic_swap.rho. The `for`-join IS the atomicity:
+  // both deposits are consumed together or neither is. No escrow, no third
+  // party. Channels are quoted names so they can be shared across deploys.
+  swap: {
+    help: "All-or-nothing two-party exchange over a for-join (atomic swap).",
+    write: true,
+    argSpec: [["depositA", "string"], ["depositB", "string"], ["toA", "string"], ["toB", "string"]],
+    expand(args) {
+      return `for (@a <- @${q(args.depositA)}; @b <- @${q(args.depositB)}) {
+  @${q(args.toA)}!(b) |
+  @${q(args.toB)}!(a)
+}`;
+    },
+  },
+
+  // Mirrors qucalc/examples/dining_philosophers.rho. Forks are capability
+  // channels; a philosopher takes both adjacent forks in one join, so no one
+  // can hold one while waiting for another — deadlock is impossible by
+  // construction rather than by protocol.
+  philosophers: {
+    help: "Seat N diners around a fork ring — deadlock-free by construction.",
+    write: true,
+    argSpec: [["names", "list"]],
+    expand(args) {
+      const n = args.names.length;
+      if (n < 2) throw fail("philosophers: needs at least two names");
+      const forks = Array.from({ length: n }, (_, i) => `f${i}`);
+      const seats = args.names.map(
+        (name, i) => `  Philosopher!(${q(name)}, *${forks[i]}, *${forks[(i + 1) % n]}, *done)`
+      );
+      return `new Philosopher, done, ${forks.join(", ")} in {
+  contract Philosopher(@name, left, right, done) = {
+    for (_ <- left; _ <- right) {
+      done!(name) |
+      left!(Nil) | right!(Nil)
+    }
+  } |
+${forks.map((f) => `  ${f}!(Nil)`).join(" |\n")} |
+${seats.join(" |\n")}
+}`;
+    },
+  },
+
+  // Mirrors qucalc/examples/multisig.rho: a nonce-keyed confirmation set where
+  // each signer is their own unforgeable *deployerId, and the decision fires
+  // only at quorum. Holding one token is not enough.
+  multisig: {
+    help: "N-of-M quorum co-signature over a nonce-keyed confirmation set.",
+    write: true,
+    argSpec: [["nonce", "string"], ["proposal", "string"], ["quorum", "int"]],
+    expand(args) {
+      return `new confirmationsCh, ret, deployerId(\`rho:rchain:deployerId\`) in {
+  confirmationsCh!({}) |
+  for (@confirmations <- confirmationsCh) {
+    let @joined <- confirmations.getOrElse((${q(args.nonce)}, ${q(args.proposal)}), Set()).union(Set(*deployerId)) in {
+      confirmationsCh!(confirmations.set((${q(args.nonce)}, ${q(args.proposal)}), joined)) |
+      if (joined.size() >= ${args.quorum}) { ret!(true) } else { ret!(Nil) }
+    }
+  }
+}`;
+    },
+  },
+
   transfer: {
     help: "Transfer REV to an address (rho:rchain:revVault).",
     write: true,
@@ -271,6 +453,9 @@ function expandMacro(line) {
       case "list":   args[argName] = cleanList(raw, argName); break;
       case "cap":    args[argName] = cleanCap(raw, argName); break;
       case "int":    args[argName] = cleanInt(raw, argName); break;
+      // A rholang term contains spaces, which the bare form splits on. Say so
+      // rather than binding half a map to one argument.
+      case "term":   throw fail(`${name}: takes a rholang term — use the program form, e.g. /global %${name}(…)`);
       default: throw fail(`${name}: internal — unknown arg type ${type}`);
     }
   }
@@ -385,13 +570,17 @@ function bindArgs(macro, name, terms) {
   const args = {};
   for (let i = 0; i < spec.length; i++) {
     const [argName, type] = spec[i];
-    const raw = termToPlain(terms[i]);
+    // A `term` is rholang and must NOT be normalized — termToPlain unwraps a
+    // list into its comma form for cleanList, which would turn the rholang list
+    // `["A", "D"]` into the bare text `A,D`.
+    const raw = type === "term" ? terms[i].trim() : termToPlain(terms[i]);
     switch (type) {
       case "string": args[argName] = cleanString(raw, argName); break;
       case "twists": args[argName] = cleanTwists(raw, argName); break;
       case "list":   args[argName] = cleanList(raw, argName); break;
       case "cap":    args[argName] = cleanCap(raw, argName); break;
       case "int":    args[argName] = cleanInt(raw, argName); break;
+      case "term":   args[argName] = cleanTerm(raw, argName); break;
       default: throw fail(`${name}: internal — unknown arg type ${type}`);
     }
   }
