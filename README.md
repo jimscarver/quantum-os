@@ -4,7 +4,7 @@
 
 Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC data channels for transport, self-hosted signaling server.
 
-**[Open a room →](https://jimscarver.github.io/quantum-os/)** · **[My room →](MyRoom.md)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[RhoQu Macro Demo →](RhoQuDemo.md)** · **[Optimization Demo →](OptimizationDemo.md)** · **[Consensus →](Consensus.md)** · **[Security →](SECURITY.md)** · **[New issue →](https://github.com/jimscarver/quantum-os/issues/new)**
+**[Open a room →](https://rchain-community.github.io/quantum-os/)** · **[My room →](MyRoom.md)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[RhoQu Macro Demo →](RhoQuDemo.md)** · **[Optimization Demo →](OptimizationDemo.md)** · **[Consensus →](Consensus.md)** · **[Security →](SECURITY.md)** · **[New issue →](https://github.com/rchain-community/quantum-os/issues/new)**
 
 **Group processes:** **[User Guide →](User_Guide.md)** · **[Developer Guide (build agents) →](Developer_Guide.md)** · **[Group Decisions →](Group_Decisions.md)** · **[Collective Optimization →](Collective_Optimization.md)** · **[Governance (liquid democracy) →](Governance.md)** · **[Room Best Practices →](Room_Best_Practices.md)** · **[RhoQuCalc Macros — protocols as verified ρ-processes →](RhoQuCalc_Macros.md)**
 
@@ -12,7 +12,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 
 ### How to create reality together
 
-1. Open **https://jimscarver.github.io/quantum-os/** in your browser.
+1. Open **https://rchain-community.github.io/quantum-os/** in your browser.
 2. Click **Connect** — you join a room identified by a ZFA capability token in the URL hash. Your peer ID is a ZFA-balanced process.
 3. Copy the share link and send it to someone (or open a second tab).
 4. The second peer clicks **Connect** — both appear in the **Peers** list.
@@ -27,7 +27,7 @@ Beyond evaluation, a room is a full collaboration space: take **group decisions*
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
 
-**Foundation:** [Quantum Logical Framework](https://github.com/jimscarver/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
+**Foundation:** [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
 
 ---
 
@@ -155,9 +155,9 @@ Output:
 ·   bra_ket_always_balanced: ✓ (BraKetRhoQuCalc.lean)
 ```
 
-The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basis. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) for the full bra-ket ↔ RhoQuCalc correspondence.
+The `|0⟩ + |1⟩` superposition yields the identity matrix — a complete basis. See [BraKetRhoQuCalc.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) for the full bra-ket ↔ RhoQuCalc correspondence.
 
-Lean anchor: [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+Lean anchor: [`bra_ket_always_balanced`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/qucalc [twists]` [shared]
 Evaluates a RhoQuCalc twist sequence. Accepts symbolic twists (`^v<>/\+-`), hex digits `0-7`, a `cap:label:hex` token, or `@name` references to named lemmas. No argument → show your peer's twist sequence. Click a peer or lemma name in the sidebar to prefill the input.
@@ -199,13 +199,13 @@ Output:
 ·   achieves_ZFA: ✗  gap=1  (not a physical process)
 ```
 
-ZFA balance is the selection principle: `@major @minor` composed (gap=0) is a valid deduction; an unbalanced composition is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
+ZFA balance is the selection principle: `@major @minor` composed (gap=0) is a valid deduction; an unbalanced composition is pruned by `full_zeno_prune` before becoming a physical event. See [BraKetRhoQuCalc.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) and [QuantumOS.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/QuantumOS.md) for the capability-security model built on this invariant.
 
-Lean anchors: [`RhoProcess`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
+Lean anchors: [`RhoProcess`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`rho_process_always_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) · [`bra_ket_always_balanced`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean)
 
 ### `/conj <twists>` [shared]
 
-Computes the **Hermitian adjoint** of a twist history `H`: reverse the sequence and flip each twist's parity (the pairing `0↔1, 2↔3, 4↔5, 6↔7`). This is QLF's structural "negation" operator — implemented as `Twist::conjugate` in the WASM kernel (`crates/zfa-core/src/twist.rs`), `Twist.conj` in Lean (`lean/QLF_TwistAlphabet.lean`), and `adjointHistory` in `packages/browser/src/app.ts`. Defining identity: `E + E† ≡ ZFA` (see [Hermitian_Conjugacy_Proof.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Hermitian_Conjugacy_Proof.md)).
+Computes the **Hermitian adjoint** of a twist history `H`: reverse the sequence and flip each twist's parity (the pairing `0↔1, 2↔3, 4↔5, 6↔7`). This is QLF's structural "negation" operator — implemented as `Twist::conjugate` in the WASM kernel (`crates/zfa-core/src/twist.rs`), `Twist.conj` in Lean (`lean/QLF_TwistAlphabet.lean`), and `adjointHistory` in `packages/browser/src/app.ts`. Defining identity: `E + E† ≡ ZFA` (see [Hermitian_Conjugacy_Proof.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Hermitian_Conjugacy_Proof.md)).
 
 Accepts the full twist-parsing pipeline used by `/qucalc`: symbolic (`^v<>/\+-`), hex digits 0-7, `cap:label:hex` tokens, and `@lemma` references.
 
@@ -234,9 +234,9 @@ Hermitian adjoint (H†):
 ·   (counterpart of Re(s)=1/2 in Riemann ξ;  see ReverseMathematics §4.9)
 ```
 
-Self-adjoint histories `Σ_sa = {H : H = H†}` form the operator-side counterpart of the Riemann ξ critical line — see [ReverseMathematics §4.9](https://github.com/jimscarver/quantum-logical-framework/blob/main/ReverseMathematics.md). The vacuum-alignment principle in [VacuumEnergy §6](https://github.com/jimscarver/quantum-logical-framework/blob/main/VacuumEnergy.md) reads the adjoint operator as the framework's negation; under [Magic_numbers.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Magic_numbers.md) the same adjoint structure drives the vacuum-as-intruder selection in nuclear shells.
+Self-adjoint histories `Σ_sa = {H : H = H†}` form the operator-side counterpart of the Riemann ξ critical line — see [ReverseMathematics §4.9](https://github.com/rchain-community/quantum-logical-framework/blob/main/ReverseMathematics.md). The vacuum-alignment principle in [VacuumEnergy §6](https://github.com/rchain-community/quantum-logical-framework/blob/main/VacuumEnergy.md) reads the adjoint operator as the framework's negation; under [Magic_numbers.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Magic_numbers.md) the same adjoint structure drives the vacuum-as-intruder selection in nuclear shells.
 
-Lean anchors: [`Twist.conj`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_TwistAlphabet.lean) · [`vacuum_alignment_selects_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`global_alignment_selects_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`rho_process_alignment_saturates`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_RhoProcessBridge.lean)
+Lean anchors: [`Twist.conj`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_TwistAlphabet.lean) · [`vacuum_alignment_selects_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`global_alignment_selects_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`rho_process_alignment_saturates`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_RhoProcessBridge.lean)
 
 ### `/coupling [<twists> …]`
 
@@ -522,7 +522,7 @@ peer ID: cap:peer:024602460246024602460246…
   ZFA-balanced: ✓  spectral gap: 0
   rho_process_always_zfa: ✓ (Lean-verified)
 ```
-Lean anchor: [`rho_process_always_zfa`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean)
+Lean anchor: [`rho_process_always_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean)
 
 ### `/room [sub]`
 
@@ -652,7 +652,7 @@ Validates any `cap:label:hex` token — checks ZFA balance and reports the spect
   valid: ✓  spectral gap: 0
   twists: 32 (16 positive, 16 negative)
 ```
-Lean anchor: [`achieves_ZFA`](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
+Lean anchor: [`achieves_ZFA`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean)
 
 ### `/cap [label]`
 Generates a fresh ZFA-balanced capability token locally (not shared).
@@ -701,7 +701,7 @@ Pauli closure is not a "second condition" layered on top of count balance — it
 
 `Capability::from_entropy` uses rejection sampling so every issued token satisfies both faces by construction — unbalanced or Pauli-open tokens are algebraically impossible to construct, not merely rejected at runtime.
 
-Key invariants (machine-verified in [QLF](https://github.com/jimscarver/quantum-logical-framework)):
+Key invariants (machine-verified in [QLF](https://github.com/rchain-community/quantum-logical-framework)):
 - `achieves_zfa` — half-spin closure (both algebraic faces: Pauli scalar return ∧ Hermitian-pair count balance)
 - `spectral_gap = 0 ↔ is_symmetric` — eigenvalue-level stability
 - `decoherence_impossibility` — parallel composition stays ZFA-balanced
@@ -942,7 +942,7 @@ wasm_capability_valid(hex: string): boolean
 | Cross-peer persistence | ✓ `/persist @lemma to <peer>` — agreed replication of public state with explicit accept/reject |
 | RhoQu macro language | ✓ `/rhoqu` — `process` / `new` / `\|` parallel / `if` / `on channel` / `for` transpile to dispatcher commands; handlers persist per-room |
 | Mobile viewport | ✓ `100dvh` + `interactive-widget=resizes-content` — input stays above the Android keyboard; not clipped on mobile Firefox |
-| GitHub Pages | ✓ https://jimscarver.github.io/quantum-os/ |
+| GitHub Pages | ✓ https://rchain-community.github.io/quantum-os/ |
 | Headless CLI peer | ✓ `scripts/qos-cli` — one-shot join + broadcast (Node + werift); ZFA/dyncap ported and self-tested |
 | Memory-peer daemon | ✓ persistent signed peer — persists + re-serves lemmas/currencies/transcript; stable identity; verified werift↔browser live |
 | Native Rust peer | Planned |
@@ -951,25 +951,25 @@ wasm_capability_valid(hex: string): boolean
 
 ## Related
 
-**[quantum-logical-framework](https://github.com/jimscarver/quantum-logical-framework)** — the Lean 4 formal proof repo that underpins this app. Zero `sorry` blocks across 16 modules. Key documents:
+**[quantum-logical-framework](https://github.com/rchain-community/quantum-logical-framework)** — the Lean 4 formal proof repo that underpins this app. Zero `sorry` blocks across 16 modules. Key documents:
 
 | Document | Relevant to |
 |---|---|
-| [README.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/README.md) | Overview; "Try in the browser" section with `/braket` and `/qucalc` examples |
-| [AI.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/AI.md) | Quantum AI and syllogism solving — live collaboration script showing two peers prove "Socrates is Mortal" with `/qucalc`, `/braket`, `/grant` |
-| [BraKetRhoQuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) | `/braket` — `action`=ket, `lift`=bra, `parallel`=superposition; `bra_ket_always_balanced` proof |
-| [QuantumOS.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuantumOS.md) | `/qucalc` — ZFA as OS kernel; `full_zeno_prune` as security, GC, and error correction |
-| [QuCalc.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/QuCalc.md) | The 8-twist alphabet `{^v<>/\+-}`; ZFA generation engine |
-| [Maxwell.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Maxwell.md) | Maxwell equations from ZFA; `no_magnetic_monopoles` (∇·B=0) |
-| [Lagrangian_Formulation.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Lagrangian_Formulation.md) | ZFA as ℒ=0 (null Lagrangian = condition of origin); variational grounding |
-| [Philosophy.md](https://github.com/jimscarver/quantum-logical-framework/blob/main/Philosophy.md) | Possibilist ontology; ZFA as the sole selection principle |
+| [README.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/README.md) | Overview; "Try in the browser" section with `/braket` and `/qucalc` examples |
+| [AI.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/AI.md) | Quantum AI and syllogism solving — live collaboration script showing two peers prove "Socrates is Mortal" with `/qucalc`, `/braket`, `/grant` |
+| [BraKetRhoQuCalc.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/BraKetRhoQuCalc.md) | `/braket` — `action`=ket, `lift`=bra, `parallel`=superposition; `bra_ket_always_balanced` proof |
+| [QuantumOS.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/QuantumOS.md) | `/qucalc` — ZFA as OS kernel; `full_zeno_prune` as security, GC, and error correction |
+| [QuCalc.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/QuCalc.md) | The 8-twist alphabet `{^v<>/\+-}`; ZFA generation engine |
+| [Maxwell.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Maxwell.md) | Maxwell equations from ZFA; `no_magnetic_monopoles` (∇·B=0) |
+| [Lagrangian_Formulation.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Lagrangian_Formulation.md) | ZFA as ℒ=0 (null Lagrangian = condition of origin); variational grounding |
+| [Philosophy.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Philosophy.md) | Possibilist ontology; ZFA as the sole selection principle |
 
 **Lean source files** (machine-verified, zero `sorry`):
 
 | File | Theorems |
 |---|---|
-| [lean/RhoQuCalc.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) | `rho_process_always_zfa`, `action`, `lift`, `parallel` — `/id`, `/qucalc` |
-| [lean/BraKetRhoQuCalc.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean) | `bra_ket_always_balanced`, `action_topo_is_ket`, `lift_topo_is_bra` — `/braket` |
-| [lean/SpacetimeDynamics.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/SpacetimeDynamics.lean) | `Form.toMatrix_adjoint` — Hermitian matrix used by `/braket` |
-| [lean/QLF_Axioms.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean) | `achieves_ZFA`, `spectral_gap`, `full_zeno_prune` — `/zfa`, `/qucalc` |
-| [lean/QLF_Universality.lean](https://github.com/jimscarver/quantum-logical-framework/blob/main/lean/QLF_Universality.lean) | `qlf_universality` — every terminating computation IS a ZFA string |
+| [lean/RhoQuCalc.lean](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/RhoQuCalc.lean) | `rho_process_always_zfa`, `action`, `lift`, `parallel` — `/id`, `/qucalc` |
+| [lean/BraKetRhoQuCalc.lean](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/BraKetRhoQuCalc.lean) | `bra_ket_always_balanced`, `action_topo_is_ket`, `lift_topo_is_bra` — `/braket` |
+| [lean/SpacetimeDynamics.lean](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/SpacetimeDynamics.lean) | `Form.toMatrix_adjoint` — Hermitian matrix used by `/braket` |
+| [lean/QLF_Axioms.lean](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_Axioms.lean) | `achieves_ZFA`, `spectral_gap`, `full_zeno_prune` — `/zfa`, `/qucalc` |
+| [lean/QLF_Universality.lean](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_Universality.lean) | `qlf_universality` — every terminating computation IS a ZFA string |

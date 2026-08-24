@@ -34,9 +34,9 @@ npm install          # pulls ws + werift (werift = pure-TS headless WebRTC)
 ```bash
 # Announce to the public room (someone must be in it):
 node qos-cli.mjs \
-  --room "https://jimscarver.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
+  --room "https://rchain-community.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
   --name "release-bot" \
-  --message "QLF v1.6.0 released — https://github.com/jimscarver/quantum-logical-framework/releases/tag/v1.6.0"
+  --message "QLF v1.6.0 released — https://github.com/rchain-community/quantum-logical-framework/releases/tag/v1.6.0"
 
 # A bare cap works too:
 node qos-cli.mjs --room cap:room:0521… -m "hello room"
@@ -64,7 +64,7 @@ continuous peer.
 
 ```bash
 node qos-daemon.mjs \
-  --room "https://jimscarver.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
+  --room "https://rchain-community.github.io/quantum-os/#room=cap%3Aroom%3A05214747236101414325074505234721" \
   --name "memory" --state ./.qos-state
 ```
 
@@ -377,3 +377,56 @@ persist under `--state`.
   only **warns** and proceeds (the cap is still a valid rendezvous id).
 - Trust model unchanged: possessing the room cap **is** authorization; the
   signaling server is an untrusted relay; data channels are DTLS-encrypted.
+
+## RChain capability macros — the `/global` agent (`global-agent.mjs`)
+
+The `/global` agent joins the room and turns chat messages into RChain capability
+operations. It maps macro requests to the rchain-rust system contracts and shares
+the results back into the room chat:
+
+```bash
+node global-agent.mjs --room <cap:room:… | room-URL> [--name global]
+```
+
+While connected, any peer types in the room chat:
+
+- `/global help` — usage.
+- `/global macros` — list the approved macro library.
+- `/global <macro> <args…>` — expand a macro.
+
+**Read macros are answered by the agent** (locally, via the ZFA engine) and the
+result is broadcast to the room:
+
+- `zfa 01` → `zfa(01) → ZFA true (pauli-closed true)`
+- `verify cap:room:…` → `verify(cap:room:…) → valid`
+
+**Write macros return a human-readable rholang preview** for the requestor to
+review and sign *client-side* (the agent never holds keys — zero-trust):
+
+- `grant 01`, `ballot lunch pizza,tacos`, `directory notes`, `mailbox inbox`,
+  `group rchain`, `delegate alice`, `transfer 10 bob`
+
+Macros are **typed templates** (`global-macros.mjs`): arguments are structurally
+validated and interpolated (never raw string-appended), and a restricted-pattern
+guard rejects injection (`rho:io:`, `new …`, `for(`, `!*`/`*!`, …). Run
+`node global-macros.mjs --selftest` to verify.
+
+`run-agents.sh` launches it by default (set `NO_GLOBAL=1` to skip).
+
+### Browser side (the zero-trust signing loop)
+
+The agent only *expands*; the browser validates and signs. `packages/browser/src/global.ts`
+provides the client half of the pipeline:
+
+- `lintRholang(source)` — runs the WASM linter (`crates/zfa-core/src/lint.rs`,
+  exposed as `wasm_lint_ok` / `wasm_lint_errors`) on the expanded rholang.
+- `generateKeyPair` / `storeKeyPair` / `loadKeyPair` — a passphrase-wrapped
+  (PBKDF2 → AES-GCM) ECDSA keypair persisted in IndexedDB; the private key never
+  leaves the browser.
+- `signPayload` / `deployToNode` — sign and POST the deploy to the target node.
+- `runGlobalPipeline(source, { nodeUrl, passphrase })` — preview → lint → sign →
+  deploy, returning a staged result the UI can display.
+
+> Signing is ECDSA P-256 (Web Crypto has no secp256k1); swap `generateKeyPair` /
+> `signPayload` for secp256k1 (`@noble/curves` or a WASM secp256k1) for real
+> RChain deploys. The key-storage + lint + deploy flow is unchanged.

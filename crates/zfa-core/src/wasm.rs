@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::capability::Capability;
 use crate::coupling::coupling_json;
 use crate::history::{achieves_zfa, achieves_zfa_pairwise, charge, div_b, is_pairwise_balanced, spectral_gap};
+use crate::lint::lint;
 use crate::pauli::is_pauli_closed;
 use crate::twist::Twist;
 
@@ -84,4 +85,20 @@ pub fn wasm_capability_valid(hex: &str) -> bool {
         .filter_map(|c| c.to_digit(16).map(|d| d as u8))
         .collect();
     achieves_zfa(&parse_twists(&twist_bytes))
+}
+
+/// Lint a rholang source string; true when it has no findings.
+#[wasm_bindgen]
+pub fn wasm_lint_ok(source: &str) -> bool {
+    lint(source).is_empty()
+}
+
+/// Lint a rholang source string; returns findings joined by newlines ("" = clean).
+#[wasm_bindgen]
+pub fn wasm_lint_errors(source: &str) -> String {
+    lint(source)
+        .into_iter()
+        .map(|f| f.message)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
