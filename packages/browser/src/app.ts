@@ -26,8 +26,8 @@ import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, del
 import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
-         generateKey as generateDeployKey, publicKeyOf, nodeStatus, evalTerm, deployTerm,
-         type NodeConfig } from "./rholang.js";
+         generateKey as generateDeployKey, publicKeyOf, revAddressOf, nodeStatus, evalTerm, deployTerm,
+         readResults, powerboxNames, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1632,6 +1632,7 @@ function startRholangCapture(mode: "eval" | "deploy", seed: string, sys: (t: str
     ? "rholang to evaluate — type the program, then an empty line to run it (/cancel to abort):"
     : "rholang to deploy — type the program, then an empty line to sign and submit it (/cancel to abort):");
   if (seed) sys("  " + seed);
+  sys(`in scope: return, ${powerboxNames(mode).join(", ")}`);
 }
 
 /** Run whatever the capture collected. */
@@ -1675,6 +1676,12 @@ function finishRholangCapture(): void {
     try {
       const r = await deployTerm(cfg, source);
       say((r.ok ? "✓ " : "✗ ") + r.message);
+      if (r.ok && r.resultName) {
+        say("waiting for the block, then reading what it sent to return…");
+        const values = await readResults(cfg, r.resultName);
+        if (values.length) for (const v of values) say("  → " + v);
+        else say(`  (nothing on return yet — read it later at @"${r.resultName}")`);
+      }
     } catch (e) {
       say("✗ " + ((e as Error)?.message ?? e));
     }
@@ -3975,6 +3982,7 @@ function handleCommand(raw: string): string[] {
             saveNodeConfig({ ...cfg, key: k });
             sys("✓ deploy key generated (stored in this browser only)");
             sys(`  public ${publicKeyOf(k)}`);
+            sys(`  address ${revAddressOf(k)}`);
             sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
             break;
           }

@@ -5,3 +5,6 @@ pkg/
 packages/zfa-core-wasm/
 *.wasm
 .DS_Store
+
+# localnet helper deps (installed with its own npm install, like scripts/qos-cli)
+scripts/localnet/node_modules/

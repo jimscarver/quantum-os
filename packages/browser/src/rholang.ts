@@ -23,6 +23,7 @@
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { blake2b } from "@noble/hashes/blake2.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 
 // ---------------------------------------------------------------------------
 // Configuration — where the node is and how a deploy is charged
@@ -95,6 +96,17 @@ const unhex = (s: string): Uint8Array => {
   return new Uint8Array((t.match(/../g) ?? []).map((p) => parseInt(p, 16)));
 };
 
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58(bytes: Uint8Array): string {
+  let n = 0n;
+  for (const b of bytes) n = (n << 8n) | BigInt(b);
+  let out = "";
+  while (n > 0n) { out = BASE58[Number(n % 58n)] + out; n /= 58n; }
+  for (const b of bytes) { if (b !== 0) break; out = BASE58[0] + out; }
+  return out;
+}
+
 export function generateKey(): string {
   return hex(secp256k1.utils.randomSecretKey());
 }
@@ -105,16 +117,19 @@ export function publicKeyOf(secretHex: string): string {
 }
 
 /**
- * The REV address for a key — base58check over a keccak/blake digest of the
- * public key. This is derived locally for display only; the node computes its
- * own, and a deploy is charged to whatever the node derives.
+ * The REV address a deploy is charged to, derived the way the node derives it
+ * (rholang/src/util/rev_address.rs) so what is shown is what is charged:
+ *
+ *   eth     = last 20 bytes of keccak256(public key without its 0x04 prefix)
+ *   payload = 00000000 ++ keccak256(eth)
+ *   address = base58(payload ++ first 4 bytes of blake2b256(payload))
  */
 export function revAddressOf(secretHex: string): string {
-  // The node exposes `rho:rev:address` for the authoritative derivation. Rather
-  // than reimplement base58check here and risk showing an address that differs
-  // from the one actually charged, report the key's identity and let the node
-  // speak for the balance.
-  return `derived by the node from ${publicKeyOf(secretHex).slice(0, 16)}…`;
+  const pub = secp256k1.getPublicKey(unhex(secretHex), false);
+  const eth = hex(keccak_256(pub.slice(1))).slice(-40);
+  const payload = new Uint8Array([0, 0, 0, 0, ...keccak_256(unhex(eth))]);
+  const checksum = blake2b(payload, { dkLen: 32 }).slice(0, 4);
+  return base58(new Uint8Array([...payload, ...checksum]));
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +190,68 @@ export function signDeployData(d: DeployData, secretHex: string): { deployer: st
   const digest = blake2b(encodeDeployData(d), { dkLen: 32 });
   const sig = secp256k1.sign(digest, unhex(secretHex), { prehash: false, format: "der" });
   return { deployer: publicKeyOf(secretHex), signature: hex(sig) };
+}
+
+// ---------------------------------------------------------------------------
+// The powerbox, and the wrapper every program gets
+//
+// Two problems, one answer. A deploy's output goes to the node's log, which
+// nobody running a browser can read; and the node's own capabilities are URNs
+// that have to be `new`-bound before anything can be sent to them, which is a
+// line of ceremony in front of every program.
+//
+// So every program is wrapped: `return` is in scope to report on, and so is
+// every system process, under a short name. What you type is the body.
+// ---------------------------------------------------------------------------
+
+/** name → URN. `deployerId` is deploy-only: an eval has no deployer, and merely
+ *  binding it there fails to normalize ("No value set for rho:rchain:deployerId"). */
+const POWERBOX: [name: string, urn: string, deployOnly?: boolean][] = [
+  ["stdout", "rho:io:stdout"],
+  ["stderr", "rho:io:stderr"],
+  ["zfa", "rho:qucalc:zfa"],
+  ["grant", "rho:qucalc:grant"],
+  ["verify", "rho:qucalc:verify"],
+  ["fuse", "rho:qucalc:fuse"],
+  ["resolveWeights", "rho:gov:resolveWeights"],
+  ["trustLevels", "rho:gov:trustLevels"],
+  ["censure", "rho:gov:censure"],
+  ["tally", "rho:gov:tally"],
+  ["lookup", "rho:registry:lookup"],
+  ["insertArbitrary", "rho:registry:insertArbitrary"],
+  ["revVault", "rho:rchain:revVault"],
+  ["revAddress", "rho:rev:address"],
+  ["blockData", "rho:block:data"],
+  ["deployerId", "rho:rchain:deployerId", true],
+];
+
+/** The names a program can use without declaring them. */
+export function powerboxNames(mode: "eval" | "deploy"): string[] {
+  return POWERBOX.filter(([, , deployOnly]) => mode === "deploy" || !deployOnly).map(([n]) => n);
+}
+
+/** A public name to read a deploy's results back from, unique per deploy. */
+export function resultName(): string {
+  return `qos-result-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Wrap a program body.
+ *
+ * eval reads its values straight off `return`, so `return` is left alone.
+ *
+ * A deploy cannot: its `return` is unforgeable and the deploy is long gone by
+ * the time anyone asks. So the deploy wrapper adds a persistent forwarder that
+ * copies everything sent to `return` onto a public name, which is then readable
+ * by anyone who knows it — including us, a moment later.
+ */
+export function wrapProgram(body: string, mode: "eval" | "deploy", forwardTo?: string): string {
+  const decls = ["return", ...POWERBOX.filter(([, , d]) => mode === "deploy" || !d).map(([n, urn]) => `${n}(\`${urn}\`)`)];
+  const indented = body.split("\n").map((l) => (l.trim() ? "  " + l : l)).join("\n");
+  const forwarder = forwardTo
+    ? `\n  |\n  for (@__value <= return) { @${JSON.stringify(forwardTo)}!(__value) | stdout!(__value) }`
+    : "";
+  return `new ${decls.join(", ")} in {\n${indented}${forwarder}\n}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,8 +349,9 @@ export async function evalTerm(cfg: NodeConfig, term: string): Promise<EvalResul
     };
   };
 
+  const program = wrapProgram(term, "eval");
   try {
-    return unwrap(await postJson(cfg, "/api/explore-deploy", term));
+    return unwrap(await postJson(cfg, "/api/explore-deploy", program));
   } catch (e) {
     const msg = (e as Error).message ?? "";
     if (!/finalized fringe/i.test(msg)) throw e;
@@ -282,7 +360,7 @@ export async function evalTerm(cfg: NodeConfig, term: string): Promise<EvalResul
     if (!blockHash) throw e;
     return unwrap(
       await postJson(cfg, "/api/explore-deploy-by-block-hash", {
-        term,
+        term: program,
         blockHash,
         usePreStateHash: false,
       })
@@ -297,6 +375,38 @@ export async function evalTerm(cfg: NodeConfig, term: string): Promise<EvalResul
 export interface DeployOutcome {
   ok: boolean;
   message: string;
+  /** The public name this deploy's `return` values were forwarded to. */
+  resultName?: string;
+}
+
+/**
+ * Read what a deploy sent to `return`.
+ *
+ * A deploy answers in the tuplespace, not in the reply to the submission: the
+ * block has to be produced first. So this polls the newest block for data at the
+ * deploy's result name, and gives up rather than waiting forever — the value is
+ * still there to read later.
+ */
+export async function readResults(cfg: NodeConfig, name: string, attempts = 12): Promise<string[]> {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const blocks = (await getJson(cfg, "/api/blocks/1")) as { blockHash?: string }[];
+      const blockHash = blocks?.[0]?.blockHash;
+      if (!blockHash) continue;
+      const r = await postJson(cfg, "/api/data-at-name-by-block-hash", {
+        name: { ExprString: name },
+        blockHash,
+        usePreStateHash: false,
+      });
+      if (typeof r === "string") continue;
+      const expr = ((r ?? {}) as { expr?: unknown[] }).expr ?? [];
+      if (expr.length) return expr.map(renderExpr);
+    } catch {
+      // a block in flight, or the name not written yet — keep waiting
+    }
+  }
+  return [];
 }
 
 export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployOutcome> {
@@ -304,8 +414,9 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
     return { ok: false, message: "no deploy key — /rholang key generate, or /rholang key <hex>" };
   }
   const status = await nodeStatus(cfg).catch(() => ({} as NodeStatus));
+  const forwardTo = resultName();
   const data: DeployData = {
-    term,
+    term: wrapProgram(term, "deploy", forwardTo),
     timestamp: Date.now(),
     phloPrice: cfg.phloPrice,
     phloLimit: cfg.phloLimit,
@@ -324,5 +435,6 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
   // Success and failure both come back as a JSON string; the node says "Success!"
   // on the happy path and names the reason otherwise.
   const text = typeof reply === "string" ? reply : JSON.stringify(reply);
-  return { ok: /success/i.test(text), message: text };
+  const ok = /success/i.test(text);
+  return { ok, message: text, resultName: ok ? forwardTo : undefined };
 }

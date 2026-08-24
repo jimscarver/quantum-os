@@ -1,0 +1,16 @@
+{
+  "name": "qos-localnet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keys, wallet and run script for a local RChain node to develop /rholang against.",
+  "scripts": {
+    "addresses": "node keys.mjs",
+    "wallet": "node keys.mjs --wallet 1000000000000"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0"
+  },
+  "engines": { "node": ">=18" }
+}
