@@ -29,6 +29,7 @@ export const ROLES = {
     duties: {
       intro: true, greet: true, namePrompt: true, silentQuarter: true,
       dominator: true, discrepancy: true, stimulate: true, synthesize: true,
+      verify: false,
     },
   },
 
@@ -42,6 +43,7 @@ export const ROLES = {
     duties: {
       intro: true, greet: false, namePrompt: false, silentQuarter: false,
       dominator: false, discrepancy: true, stimulate: false, synthesize: false,
+      verify: false,
     },
   },
 
@@ -55,6 +57,7 @@ export const ROLES = {
     duties: {
       intro: true, greet: true, namePrompt: true, silentQuarter: false,
       dominator: false, discrepancy: false, stimulate: false, synthesize: false,
+      verify: false,
     },
   },
 
@@ -68,6 +71,8 @@ export const ROLES = {
     duties: {
       intro: true, greet: false, namePrompt: false, silentQuarter: false,
       dominator: false, discrepancy: true, stimulate: false, synthesize: true,
+      // Only the skeptic verifies: which predicate did that history actually pass?
+      verify: true,
     },
   },
 };

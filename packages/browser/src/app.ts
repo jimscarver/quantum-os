@@ -138,6 +138,9 @@ const RDV_TIMEOUT_MS = 60_000;
 // Each room is its own Markov blanket — independent state, independent
 // dyncap chain trajectory (seqs tracked in dyncapState.seqByRoom), independent
 // signaling/data-channel connection. RoomContext holds everything per-room.
+/** A history a peer put on the table with /qlf-action. */
+interface ActionProposal { twists: Uint8Array; at: number; }
+
 interface RoomContext {
   roomId: string;
   qpeer: QOSPeer | null;
@@ -168,6 +171,11 @@ interface RoomContext {
   // series this user has accepted (seriesKey -> AcceptedTerms).
   seriesTerms: Map<string, SeriesTerms>;
   acceptedTerms: Map<string, AcceptedTerms>;
+  // Histories peers have proposed with /qlf-action, latest per peer. These are
+  // what /coupling cuts: a peer's capability token is a random identity bearer
+  // and says nothing about what that peer contributed, but a history someone
+  // deliberately typed does. Live-session state, not persisted.
+  actionProposals: Map<string, ActionProposal>;
   // Rendezvous
   lockedNotes: Map<string, LockedNote>;
   proposals: Map<string, ProposalState>;
@@ -224,6 +232,7 @@ function createRoom(roomId: string): RoomContext {
     knownCurrencies: new Map(),
     seriesTerms: new Map(),
     acceptedTerms: new Map(),
+    actionProposals: new Map(),
     lockedNotes: new Map(),
     proposals: new Map(),
     proposalTimers: new Map(),
@@ -290,6 +299,7 @@ let knownCurrencies: Map<string, KnownCurrency> = new Map();
 let seriesTerms: Map<string, SeriesTerms> = new Map();
 let acceptedTerms: Map<string, AcceptedTerms> = new Map();
 let lockedNotes: Map<string, LockedNote> = new Map();
+let actionProposals: Map<string, ActionProposal> = new Map();
 let proposals: Map<string, ProposalState> = new Map();
 let proposalTimers: Map<string, number> = new Map();
 let dyncapChains: Map<string, ChainEntry> = new Map();
@@ -329,6 +339,7 @@ function setActiveRoom(ctx: RoomContext): void {
   seriesTerms        = ctx.seriesTerms;
   acceptedTerms      = ctx.acceptedTerms;
   lockedNotes        = ctx.lockedNotes;
+  actionProposals    = ctx.actionProposals;
   proposals          = ctx.proposals;
   proposalTimers     = ctx.proposalTimers;
   dyncapChains       = ctx.dyncapChains;
@@ -2242,9 +2253,11 @@ function handleCommand(raw: string): string[] {
       const sym = twistsToSymbolic(tw);
       const cb = (() => { const s = twistStats(tw); return s.pos === s.neg; })();
       const pc = isPauliClosed(tw);
+      if (qpeer) actionProposals.set(qpeer.peerId, { twists: tw, at: Date.now() });
       sys(`/qlf-action: ${sym}  (${tw.length} twists)  proposed by ${myName || "you"}`);
       sys(`  count-balanced: ${cb ? "✓" : "✗"}   pauli-closed: ${pc ? "✓" : "✗"}   ZFA: ${cb && pc ? "✓" : "✗"}`);
       sys("  RhoProcess: action(history)  → broadcast for /zfa-check (rho_process_always_zfa)");
+      if (actionProposals.size >= 2) sys(`  ${actionProposals.size} proposals on the table — /coupling to see if they form one shared closure`);
       break;
     }
 
@@ -2294,15 +2307,25 @@ function handleCommand(raw: string): string[] {
         }
         if (parts.length === 0) break;
       } else {
-        const allPeers = qpeer ? [qpeer.peerId, ...[...peers]] : [...peers];
-        for (const id of allPeers) {
-          const tw = tokenTwists(id);
-          if (!tw) continue;
-          parts.push(tw);
+        // Cut the room along what peers CONTRIBUTED, not along who they are.
+        // A capability token is a random identity bearer minted against the
+        // aggregate predicate; joining two of them is not a process, and the
+        // verdict came back `open` for essentially every real room. A history
+        // someone deliberately typed with /qlf-action is a contribution, so a
+        // join of two peers' proposals closing means they built one closure
+        // together — which is the question this command exists to ask.
+        const entries = [...actionProposals.entries()]
+          .filter(([id]) => id === qpeer?.peerId || peers.has(id))
+          .sort((a, b) => a[1].at - b[1].at);
+        for (const [id, p] of entries) {
+          parts.push(p.twists);
           labels.push(id === qpeer?.peerId ? (myName || shortId(id)) + " (you)" : peerLabel(id));
         }
         if (parts.length < 2) {
-          sys("/coupling: needs at least two peers in the room (or pass histories directly)");
+          sys("/coupling: needs at least two /qlf-action proposals from peers in the room");
+          sys("  each peer proposes a history (/qlf-action ^v), then /coupling asks whether");
+          sys("  they formed one shared closure or several side by side");
+          sys("  or pass histories directly: /coupling ^ v");
           break;
         }
       }
@@ -3803,6 +3826,12 @@ function connect(): void {
           addMessage(from, `/${cmdStr}${argStr ? " " + argStr : ""}`, "peer", peerLabel(from));
           for (const line of pLines) addMessage("", line, "system");
           sessionLog.push({ who: peerLabel(from), cmd: cmdStr, arg: argStr, summary: pLines[0] ?? "" });
+          // Keep each peer's latest proposed history so /coupling can cut the room
+          // along what people actually contributed (see actionProposals).
+          if (cmdStr === "qlf-action") {
+            const ptw = parseSymbolicTwists(argStr.trim());
+            if (ptw && ptw.length) actionProposals.set(from, { twists: ptw, at: Date.now() });
+          }
           return;
         }
         if (d.kind === "cap-grant") {

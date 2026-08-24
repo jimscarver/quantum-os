@@ -26,7 +26,8 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { QOSPeer } from "./qospeer.mjs";
-import { generateCapability, validateCapability } from "./zfa.mjs";
+import { generateCapability, validateCapability, parseTwists,
+         achievesZfa, achievesZfaPairwise, signedAction, CENSUS_ADMITTED } from "./zfa.mjs";
 import { newDynCapState, signEnvelope, serializeState, deserializeState } from "./dyncap.mjs";
 import { makeAdvisor } from "./facilitator-advisor.mjs";
 import { ROLES, DEFAULT_ROLE, resolveRole, dutiesOf } from "./agent-roles.mjs";
@@ -159,7 +160,7 @@ export async function run(args) {
   const GREET_DELAY_MS = 4_000;
   const ACTIVE_MS   = 4 * 60_000;
   const DOMINATE_FRAC = 0.6, DOMINATE_MIN = 6;
-  const CD = { greet: 0, name: 0, silent: Math.round(10 * 60_000 * scale), dominate: Math.round(8 * 60_000 * scale), discrepancy: Math.round(5 * 60_000 * scale), stimulate: Math.round(12 * 60_000 * scale), synthesize: Math.round(9 * 60_000 * scale) };
+  const CD = { greet: 0, name: 0, silent: Math.round(10 * 60_000 * scale), dominate: Math.round(8 * 60_000 * scale), discrepancy: Math.round(5 * 60_000 * scale), verify: Math.round(3 * 60_000 * scale), stimulate: Math.round(12 * 60_000 * scale), synthesize: Math.round(9 * 60_000 * scale) };
   const TICK_MS = 30_000;
   const LULL_MS = Math.round(2 * 60_000 * scale);
   const CHAT_RETAIN_MS = 15 * 60_000;
@@ -634,6 +635,15 @@ export async function run(args) {
         break;
       }
       case "state-discrepancy": bg(surfaceDiscrepancy(d), "discrepancy"); break;
+      // Twist-bearing claims the room is about to build on — see checkClaim.
+      case "qlf":
+        if (d.cmd === "qlf-action" || d.cmd === "zfa-check") {
+          checkClaim(parseTwists(String(d.arg ?? "").trim()), d.cmd === "qlf-action" ? "proposal" : "history");
+        }
+        break;
+      case "lemma":
+        if (typeof d.twists === "string") checkClaim(parseTwists(d.twists), `lemma @${String(d.name ?? "").slice(0, 40)}`);
+        break;
       // governance ingestion → recompute the agent's own trust standing (self-throttle only)
       case "group-open":
         if (d.id && !groups.has(d.id)) groups.set(d.id, normalizeGroup({ id: d.id, name: d.name, creator: from, creatorLabel: d.creatorLabel ?? short(from), createdAt: d.createdAt, members: { [from]: { peerId: from, role: "admin", label: d.creatorLabel ?? short(from), at: d.createdAt ?? Date.now() } } }));
@@ -683,6 +693,40 @@ export async function run(args) {
       }
       say(`We don't have consensus on **${label}** yet — want to deliberate it, or defer and record it as unresolved?`, key, CD.discrepancy);
     } else say(`Looks like we've converged on **${label}**. Want me to flag it so someone can record the decision (\`/lemma\`)?`, key, CD.discrepancy);
+  }
+
+  // ---- verifier duty (skeptic): which predicate did that history actually pass? ----
+  //
+  // The room's `achieves_zfa` conjoins Pauli closure with the AGGREGATE count
+  // (count_pos == count_neg), where QLF's `is_zfa` wants PAIRWISE balance — the signed
+  // action vector vanishing, which is what Zero Free Action names. The aggregate
+  // predicate over-accepts, so a history can read "ZFA ✓" in the room and not be a QLF
+  // closure at all. At length 6 that is 20,480 admitted against QLF's 5,120: three out
+  // of four "closures" the room accepts are not closures under the census.
+  //
+  // That is a claim the group is about to build on, it is checkable from the twists
+  // alone, and nothing else in the room says it — which makes it the skeptic's job
+  // exactly: name the unexamined assumption, once, with the number attached.
+  const flagged = new Set();          // histories already flagged, so we say it once
+  function checkClaim(tw, what) {
+    if (!role.duties.verify || !leadGate("verify")) return;
+    if (!tw || tw.length < 2) return;
+    // Only the gap is interesting. A history that fails both predicates is already
+    // visibly not closed, and one that passes both needs no comment.
+    if (!achievesZfa(tw) || achievesZfaPairwise(tw)) return;
+    const key = `${what}:${[...tw].join("")}`;
+    if (flagged.has(key)) return;
+    flagged.add(key);
+    const action = signedAction(tw);
+    const off = ["^/v", ">/<", "//\\", "+/-"].filter((_, i) => action[i] !== 0);
+    const c = CENSUS_ADMITTED[tw.length];
+    const scale = c && c.aggregate
+      ? ` At length ${tw.length} the room's predicate admits ${c.aggregate.toLocaleString()} histories where QLF admits ${c.pairwise.toLocaleString()}.`
+      : "";
+    say(`⚖️ Worth a second look before we build on that ${what}: it passes the room's ZFA check, but not QLF's. `
+      + `The room checks *aggregate* count balance; QLF wants every conjugate pair balanced on its own, and here `
+      + `the signed action is (${action.join(", ")}) — ${off.join(" and ")} ${off.length > 1 ? "are" : "is"} off.`
+      + scale, "verify", CD.verify);
   }
 
   function checkDominator() {

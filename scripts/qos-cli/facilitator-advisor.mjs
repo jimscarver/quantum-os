@@ -46,7 +46,7 @@ command answers the question, name the exact command. You know:
   A room's id IS a ZFA capability token; possessing it is the authorization to join (share the room URL to
   invite). Messages reach only peers connected at that moment — when everyone leaves, room state is gone
   unless someone runs a headless memory daemon. Each room is its own tab; \`/room\` lists/joins/leaves rooms.
-- KERNEL COMMANDS (the QLF math): \`/qucalc\`, \`/braket\`, \`/zfa\` (check a twist history), \`/conj\`
+- KERNEL COMMANDS (the QLF math): \`/qucalc\`, \`/braket\`, \`/zfa\` (check a twist history), \`/coupling\` (was the room's closure shared, or several side by side?), \`/conj\`
   (Hermitian adjoint), \`/lemma [name] <twists>\` to name a verified closure, then \`@name\` to reuse it.
 - MESSAGING & SHARING: plain text is chat; \`/channel listen|send <name> <text>\` are tagged channels;
   \`/share <selector> to <room>\` copies a lemma/note/chat into another of your tabs. Across separate rooms,

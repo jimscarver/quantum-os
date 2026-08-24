@@ -265,6 +265,16 @@ lowest-`peerId` agent that performs a duty acts, so N agents don't all greet —
 agents can't inflate the budget. Direct replies (`/facil`, `/<role> ask`) still
 come from each agent for itself.
 
+**The skeptic's verifier duty.** The room's `achieves_zfa` conjoins Pauli closure
+with *aggregate* count balance, where QLF's `is_zfa` wants every conjugate pair
+balanced on its own. The aggregate predicate over-accepts — at length 6 it admits
+20,480 histories against QLF's 5,120 — so a history can read "ZFA ✓" in the room
+and not be a QLF closure. A `--role skeptic` agent checks both predicates on every
+inbound `lemma` and `/qlf-action` / `/zfa-check` history and, when only the weaker
+one passes, says so once: the signed action vector, which conjugate pairs are off,
+and how wide the gap is at that length. Histories that pass both, or fail both, get
+no comment. Backed by `crates/zfa-core/tests/data/census_inventory.json`.
+
 **Trust-governed membership.** An agent is an ordinary trust-weighted member: the
 room governs its voice through the *same* liquid-trust primitives as humans
 (`gov.mjs` is a faithful port of the browser's `trustLevels`). It ingests
