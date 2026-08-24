@@ -323,8 +323,9 @@ export function renderExpr(e: unknown): string {
   if ("ExprList" in o) return `[${(o.ExprList as unknown[]).map(renderExpr).join(", ")}]`;
   if ("ExprTuple" in o) return `(${(o.ExprTuple as unknown[]).map(renderExpr).join(", ")})`;
   if ("ExprSet" in o) return `Set(${(o.ExprSet as unknown[]).map(renderExpr).join(", ")})`;
+  // A map arrives as a list of [key, value] pairs, not as an object.
   if ("ExprMap" in o) {
-    const entries = Object.entries(o.ExprMap as Record<string, unknown>);
+    const entries = (o.ExprMap as [string, unknown][]) ?? [];
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}: ${renderExpr(v)}`).join(", ")}}`;
   }
   return JSON.stringify(o);
