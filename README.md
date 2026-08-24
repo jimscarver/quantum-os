@@ -240,9 +240,9 @@ Lean anchors: [`Twist.conj`](https://github.com/jimscarver/quantum-logical-frame
 
 ### `/coupling [<twists> …]`
 
-Classifies a **joint** closure by how its parts relate to it. With no arguments it classifies this room's own `parallel(peer1, peer2, …)`; with arguments it classifies the histories you give it, one part per argument.
+Classifies a **joint** closure by how its parts relate to it. With arguments it classifies the histories you give it, one part per argument. With no arguments it cuts the room along **what peers put on the table with `/qlf-action`** — one part per contributor, latest proposal each.
 
-The room process is ZFA-balanced *by construction* — `rho_process_always_zfa` is a theorem about the constructor, so it holds of every room and therefore distinguishes nothing. Cutting the join into per-peer factors is what makes the balance carry information. Exactly one of four things is true:
+The room process is ZFA-balanced *by construction* — `rho_process_always_zfa` is a theorem about the constructor, so it holds of every room and therefore distinguishes nothing. Cutting the join into one factor per contributor is what makes the balance carry information. Exactly one of four things is true:
 
 | verdict | meaning |
 |---|---|
@@ -262,6 +262,25 @@ The room process is ZFA-balanced *by construction* — `rho_process_always_zfa` 
     only the join closes — a shared closure (QLF's entanglement)
     census baseline: 80.3% of shared closures are coupled
 ```
+
+In a room the parts are contributions, so the workflow is: each peer proposes a
+history, then anyone asks how they combined.
+
+```
+Ana:  /qlf-action ^
+Ben:  /qlf-action v
+      2 proposals on the table — /coupling to see if they form one shared closure
+      /coupling
+      /coupling: parallel(Ana, Ben (you))
+        verdict: coupled
+```
+
+The parts are deliberately **not** the peers' capability tokens. A token is a
+random identity bearer minted against the aggregate predicate — it says nothing
+about what its holder contributed, and joining tokens returns `open` ("no event")
+for essentially every real room. A history someone chose and typed is a
+contribution, so a join of two proposals closing means they built one closure
+together.
 
 The gauge pair splits the other way — `/coupling + -` is **product**, because `+` and `-` each fold to a scalar alone. That contrast is the point: the axis pair `^v` is ER=EPR's primordial entanglement witness and the gauge pair is not, so indexing cannot simply replace concatenation.
 

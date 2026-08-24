@@ -2286,7 +2286,9 @@ function handleCommand(raw: string): string[] {
       // Was this one shared closure, or several closures that happened side by
       // side? A room process is parallel(peer1, peer2, …) and is ZFA-balanced
       // by construction, so its balance distinguishes nothing. Cutting it into
-      // per-peer factors does: see crates/zfa-core/src/coupling.rs.
+      // one factor per contributor does: see crates/zfa-core/src/coupling.rs.
+      // With no arguments the factors are the room's /qlf-action proposals — see
+      // actionProposals for why peer tokens are the wrong cut.
       const src = arg.trim();
       let labels: string[] = [];
       let parts: Uint8Array[] = [];
@@ -2295,7 +2297,7 @@ function handleCommand(raw: string): string[] {
         const chunks = src.split(/[|\s]+/).filter(Boolean);
         if (chunks.length < 2) {
           sys("usage: /coupling [<twists> <twists> …]");
-          sys("  with no arguments, classifies this room's own joint closure");
+          sys("  with no arguments, classifies the room's /qlf-action proposals");
           sys("  e.g. /coupling ^ v      ·   /coupling +- ^v<>");
           break;
         }
@@ -5153,7 +5155,7 @@ const CMD_HELP: Record<string, string[]> = {
   "qlf-action": ["/qlf-action <twists> — propose a QuCalc history string for the room to verify.", "The collaborative-study surface over the ZFA kernel; broadcast for /zfa-check.", "e.g. /qlf-action ^v<>/\\+-"],
   "zfa-check": ["/zfa-check <twists> — verify ZFA closure locally: is_zfa = is_count_balanced ∧ is_pauli_closed.", "Each peer runs its own kernel; no trusted evaluator. e.g. /zfa-check ^v^v"],
   coupling: ["/coupling [<twists> …] — classify a joint closure: independent, product, or coupled.",
-             "No arguments classifies this room's own parallel(peer1, peer2, …).",
+             "No arguments cuts the room along what peers proposed with /qlf-action, one part each.",
              "Coupled means only the join closes — a shared closure, not two side by side.",
              "Sector counts are the QLF census's; baseline 80.3% coupled. e.g. /coupling ^ v"],
   estimate: ["/estimate new <question> — open a robust group numeric estimate (median by default).",
