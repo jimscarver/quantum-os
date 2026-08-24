@@ -154,8 +154,8 @@ const MACROS = {
     argSpec: [["twists", "twists"]],
     expand(args) {
       const list = args.twists.join(", ");
-      return `new ret in {
-  rho:qucalc:grant!([${list}], *ret) |
+      return `new grant(\`rho:qucalc:grant\`), ret in {
+  grant!([${list}], *ret) |
   for (@cap <- ret) { Nil }
 }`;
     },
@@ -167,8 +167,8 @@ const MACROS = {
     argSpec: [["issue", "string"], ["options", "list"]],
     expand(args) {
       const options = args.options.map(q).join(", ");
-      return `new ret in {
-  rho:gov:tally!({"issue": ${q(args.issue)}}, [${options}], "ranked", *ret) |
+      return `new tally(\`rho:gov:tally\`), ret in {
+  tally!({"issue": ${q(args.issue)}}, [${options}], "ranked", *ret) |
   for (@winner <- ret) { Nil }
 }`;
     },
@@ -179,8 +179,8 @@ const MACROS = {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"directory": ${q(args.name)}}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
+  insertArbitrary!({"directory": ${q(args.name)}}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
     },
@@ -191,8 +191,8 @@ const MACROS = {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"mailbox": ${q(args.name)}}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
+  insertArbitrary!({"mailbox": ${q(args.name)}}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
     },
@@ -203,8 +203,8 @@ const MACROS = {
     write: true,
     argSpec: [["name", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"group": ${q(args.name)}, "admin": *deployerId}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), deployerId(\`rho:rchain:deployerId\`), ret in {
+  insertArbitrary!({"group": ${q(args.name)}, "admin": *deployerId}, *ret) |
   for (@uri <- ret) { Nil }
 }`;
     },
@@ -215,8 +215,8 @@ const MACROS = {
     write: true,
     argSpec: [["to", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(args.to)}}, {}, *ret) |
+      return `new resolveWeights(\`rho:gov:resolveWeights\`), deployerId(\`rho:rchain:deployerId\`), ret in {
+  resolveWeights!([*deployerId], {*deployerId: ${q(args.to)}}, {}, *ret) |
   for (@weights <- ret) { Nil }
 }`;
     },
@@ -231,8 +231,8 @@ const MACROS = {
     write: true,
     argSpec: [["subject", "twists"], ["predicate", "twists"]],
     expand(args) {
-      return `new ret in {
-  rho:qucalc:fuse!([${args.subject.join(", ")}], [${args.predicate.join(", ")}], *ret) |
+      return `new fuse(\`rho:qucalc:fuse\`), ret in {
+  fuse!([${args.subject.join(", ")}], [${args.predicate.join(", ")}], *ret) |
   for (@out <- ret) { Nil }
 }`;
     },
@@ -246,8 +246,8 @@ const MACROS = {
     write: true,
     argSpec: [["ratings", "term"], ["admins", "term"]],
     expand(args) {
-      return `new ret in {
-  rho:gov:trustLevels!(${args.ratings}, ${args.admins}, *ret) |
+      return `new trustLevels(\`rho:gov:trustLevels\`), ret in {
+  trustLevels!(${args.ratings}, ${args.admins}, *ret) |
   for (@levels <- ret) { Nil }
 }`;
     },
@@ -258,8 +258,8 @@ const MACROS = {
     write: true,
     argSpec: [["voters", "term"], ["delegations", "term"], ["levels", "term"]],
     expand(args) {
-      return `new ret in {
-  rho:gov:resolveWeights!(${args.voters}, ${args.delegations}, ${args.levels}, *ret) |
+      return `new resolveWeights(\`rho:gov:resolveWeights\`), ret in {
+  resolveWeights!(${args.voters}, ${args.delegations}, ${args.levels}, *ret) |
   for (@weights <- ret) { Nil }
 }`;
     },
@@ -270,8 +270,8 @@ const MACROS = {
     write: true,
     argSpec: [["ballots", "term"], ["weights", "term"], ["mode", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:gov:tally!(${args.ballots}, ${args.weights}, ${q(args.mode)}, *ret) |
+      return `new tally(\`rho:gov:tally\`), ret in {
+  tally!(${args.ballots}, ${args.weights}, ${q(args.mode)}, *ret) |
   for (@winner <- ret) { Nil }
 }`;
     },
@@ -282,8 +282,8 @@ const MACROS = {
     write: true,
     argSpec: [["censures", "term"], ["levels", "term"], ["vouchers", "term"]],
     expand(args) {
-      return `new ret in {
-  rho:gov:censure!(${args.censures}, ${args.levels}, ${args.vouchers}, *ret) |
+      return `new censure(\`rho:gov:censure\`), ret in {
+  censure!(${args.censures}, ${args.levels}, ${args.vouchers}, *ret) |
   for (@out <- ret) { Nil }
 }`;
     },
@@ -298,8 +298,8 @@ const MACROS = {
     write: true,
     argSpec: [["currency", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"kind": "issuer", "currency": ${q(args.currency)}}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
+  insertArbitrary!({"kind": "issuer", "currency": ${q(args.currency)}}, *ret) |
   for (@authority <- ret) { Nil }
 }`;
     },
@@ -310,8 +310,8 @@ const MACROS = {
     write: true,
     argSpec: [["authority", "string"], ["amount", "int"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"kind": "note", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
+  insertArbitrary!({"kind": "note", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
   for (@note <- ret) { Nil }
 }`;
     },
@@ -322,8 +322,8 @@ const MACROS = {
     write: true,
     argSpec: [["authority", "string"], ["amount", "int"]],
     expand(args) {
-      return `new ret in {
-  rho:registry:insertArbitrary!({"kind": "receipt", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
+  insertArbitrary!({"kind": "receipt", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
   for (@receipt <- ret) { Nil }
 }`;
     },
@@ -398,9 +398,13 @@ ${seats.join(" |\n")}
     write: true,
     argSpec: [["amount", "int"], ["to", "string"]],
     expand(args) {
-      return `new ret in {
-  rho:rchain:revVault!("transfer", ${args.amount}, ${q(args.to)}, *ret) |
-  for (@r <- ret) { Nil }
+      return `new revAddress(\`rho:rev:address\`), revVault(\`rho:rchain:revVault\`),
+    deployerId(\`rho:rchain:deployerId\`), fromCh, ret in {
+  revAddress!("fromDeployerId", *deployerId, *fromCh) |
+  for (@from <- fromCh) {
+    revVault!("transfer", [from, ${q(args.to)}, ${args.amount}, *ret]) |
+    for (@r <- ret) { Nil }
+  }
 }`;
     },
   },
@@ -661,13 +665,13 @@ function selftest() {
   const cases = [
     ["zfa 01", (r) => r.kind === "result" && r.text.includes("ZFA true")],
     ["zfa 0", (r) => r.kind === "result" && r.text.includes("ZFA false")],
-    ["grant 01", (r) => r.kind === "rholang" && r.source.includes("rho:qucalc:grant!")],
-    ["ballot lunch pizza,tacos", (r) => r.kind === "rholang" && r.source.includes("rho:gov:tally!")],
+    ["grant 01", (r) => r.kind === "rholang" && r.source.includes("grant(`rho:qucalc:grant`)") && r.source.includes("grant!(")],
+    ["ballot lunch pizza,tacos", (r) => r.kind === "rholang" && r.source.includes("tally(`rho:gov:tally`)") && r.source.includes("tally!(")],
     ["directory notes", (r) => r.kind === "rholang" && r.source.includes("insertArbitrary!")],
     ["transfer 10 bob", (r) => r.kind === "rholang" && r.source.includes("revVault!")],
     // amounts past 2^53 must survive verbatim, not be rounded through a double:
     ["transfer 12345678901234567890 bob",
-      (r) => r.source.includes('"transfer", 12345678901234567890,')],
+      (r) => r.source.includes("12345678901234567890, *ret]")],
     ["transfer 0x10 bob", () => { throw new Error("should have been rejected"); }],
     ["transfer 1e9 bob", () => { throw new Error("should have been rejected"); }],
     // hygiene / injection must be rejected:
