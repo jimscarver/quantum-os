@@ -161,15 +161,20 @@ const MACROS = {
     },
   },
 
+  // Casting a ballot records a signed fact; folding the collected facts is
+  // what `tally` does. The node draws that line itself — the rho:gov:*
+  // processes are pure and read no state — so a ballot goes to the registry
+  // keyed by its voter, and %tally reads them back.
   ballot: {
-    help: "Cast a ranked-choice ballot for an issue (rho:gov:tally).",
+    help: "Record a ranked-choice ballot for an issue, signed by the voter.",
     write: true,
     argSpec: [["issue", "string"], ["options", "list"]],
     expand(args) {
       const options = args.options.map(q).join(", ");
-      return `new tally(\`rho:gov:tally\`), ret in {
-  tally!({"issue": ${q(args.issue)}}, [${options}], "ranked", *ret) |
-  for (@winner <- ret) { Nil }
+      return `new insertArbitrary(\`rho:registry:insertArbitrary\`),
+    deployerId(\`rho:rchain:deployerId\`), ret in {
+  insertArbitrary!({"kind": "ballot", "issue": ${q(args.issue)}, "ranked": [${options}], "voter": *deployerId}, *ret) |
+  for (@uri <- ret) { Nil }
 }`;
     },
   },
@@ -666,7 +671,7 @@ function selftest() {
     ["zfa 01", (r) => r.kind === "result" && r.text.includes("ZFA true")],
     ["zfa 0", (r) => r.kind === "result" && r.text.includes("ZFA false")],
     ["grant 01", (r) => r.kind === "rholang" && r.source.includes("grant(`rho:qucalc:grant`)") && r.source.includes("grant!(")],
-    ["ballot lunch pizza,tacos", (r) => r.kind === "rholang" && r.source.includes("tally(`rho:gov:tally`)") && r.source.includes("tally!(")],
+    ["ballot lunch pizza,tacos", (r) => r.kind === "rholang" && r.source.includes("\"kind\": \"ballot\"") && r.source.includes("*deployerId")],
     ["directory notes", (r) => r.kind === "rholang" && r.source.includes("insertArbitrary!")],
     ["transfer 10 bob", (r) => r.kind === "rholang" && r.source.includes("revVault!")],
     // amounts past 2^53 must survive verbatim, not be rounded through a double:
