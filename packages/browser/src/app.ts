@@ -7137,4 +7137,35 @@ async function init(): Promise<void> {
   }
 }
 
-init();
+/**
+ * A startup failure used to be invisible: `init` is async, nothing awaited it,
+ * so a throw became an unhandled rejection and every line after the throw —
+ * including the `connectBtn` listener — simply never ran. The button rendered
+ * and did nothing, with no clue anywhere but a devtools console nobody had open.
+ *
+ * Report it in the page instead. This deliberately touches the DOM directly
+ * rather than going through `addMessage`/`renderChatLine`: init may have died
+ * before the state those depend on exists.
+ */
+init().catch((err: unknown) => {
+  const detail = err instanceof Error ? err.message : String(err);
+  console.error("[quantum-os] startup failed:", err);
+  try {
+    setStatus("disconnected", "startup failed");
+  } catch { /* status bar may not be wired yet */ }
+  try {
+    const box = document.createElement("div");
+    box.className = "msg system-line";
+    const who = document.createElement("span");
+    who.className = "from system";
+    who.textContent = "·";
+    const what = document.createElement("span");
+    what.className = "text";
+    what.textContent = `quantum-os failed to start: ${detail}`;
+    box.appendChild(who);
+    box.appendChild(what);
+    messagesEl.appendChild(box);
+  } catch {
+    // Even the chat pane is unavailable — the console line above is all we have.
+  }
+});

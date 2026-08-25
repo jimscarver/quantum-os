@@ -77,7 +77,26 @@ export function fromHex(hex: string): Uint8Array {
 // SHA-256 (browser-built-in)
 // ---------------------------------------------------------------------------
 
+/**
+ * `crypto.subtle` exists only in a **secure context**: https, or a loopback
+ * origin (`localhost`, `127.0.0.1`, `[::1]`). Served from a LAN address over
+ * plain http it is `undefined`, and every hash here fails with a bare
+ * "cannot read properties of undefined" that says nothing about the cause.
+ *
+ * Identity is hashes all the way down, so there is no degraded mode to fall
+ * back to — but the failure should name itself.
+ */
+export function secureContextError(): string | null {
+  if (typeof crypto !== "undefined" && crypto.subtle) return null;
+  const origin = typeof location !== "undefined" ? location.origin : "this origin";
+  return `Web Crypto is unavailable on ${origin}. quantum-os derives every identity `
+       + `from SHA-256, which browsers expose only in a secure context: use `
+       + `http://localhost or http://127.0.0.1 (loopback counts as secure), or serve over https.`;
+}
+
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  const why = secureContextError();
+  if (why) throw new Error(why);
   // The `data as BufferSource` cast quiets a TS strictness about
   // `Uint8Array<ArrayBufferLike>` potentially being SharedArrayBuffer-backed.
   // Our Uint8Arrays come from `new Uint8Array(n)`, `getRandomValues`, or
