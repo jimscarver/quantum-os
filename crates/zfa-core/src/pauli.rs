@@ -147,27 +147,21 @@ mod tests {
     }
 
     #[test]
-    fn count_balanced_but_not_pauli_closed() {
-        // Construct a count-balanced history that is NOT Pauli-closed.
-        // Need an order where the matrix product is a single non-trivial Pauli.
-        // ^ > v < gives σ_y σ_x -σ_y -σ_x; compute:
-        //   σ_y σ_x = -i σ_z
-        //   -i σ_z · -σ_y = i σ_z σ_y = i · -i σ_x = σ_x
-        //   σ_x · -σ_x = -I
-        // Actually closed. Try ^ < > v:
-        //   σ_y · -σ_x = -σ_y σ_x = i σ_z
-        //   i σ_z · σ_x = i (σ_z σ_x) = i · iσ_y = -σ_y
-        //   -σ_y · -σ_y = σ_y² = I
-        // Also closed. The orthogonality-filtered length-4 ensemble is fully Pauli-closed.
-        // Look at a violation in length-6 without orthogonality.
-        // ^ ^ < > v v: σ_y σ_y (-σ_x)(σ_x)(-σ_y)(-σ_y) = I · -σ_x² · σ_y² = I · -I · I = -I ✓
-        // Try ^ ^ v v + - (no order constraint violations):
-        //   σ_y² = I, then -σ_y² = -I, then I, then -I → I·-I·I·-I = I. Closed.
-        // Most "natural" count-balanced histories happen to be Pauli-closed.
-        // Random byte-derived sequences are not — see capability.rs tests.
-        // For this unit test, use a forced ordering:
-        let h = vec![Up, Right]; // σ_y σ_x = -iσ_z — NOT closed
-        assert!(!is_pauli_closed(&h));
+    fn aggregate_balance_does_not_imply_pauli_closure() {
+        // The test this replaces was named `count_balanced_but_not_pauli_closed`
+        // and asserted on `[Up, Right]`, which has two positives and no
+        // negatives — not balanced under any reading, so it demonstrated
+        // nothing about count balance. It also could not have found what it
+        // was looking for under QLF's count balance: `count_balanced_pauli_closed`
+        // proves there is no such history.
+        //
+        // Under this crate's *aggregate* `is_count_balanced` there are plenty.
+        // `^ <` has one positive and one negative and folds to `-iσ_z`.
+        use crate::history::{is_count_balanced, is_pairwise_balanced};
+        let h = vec![Up, Left];
+        assert!(is_count_balanced(&h), "one positive, one negative");
+        assert!(!is_pairwise_balanced(&h), "but #^ = 1 ≠ 0 = #v");
+        assert!(!is_pauli_closed(&h), "and the fold is -iσ_z, not a scalar");
     }
 
     #[test]

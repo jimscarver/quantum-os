@@ -53,6 +53,7 @@ QLF slash commands:
   /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n
   /qlf-action <tw> — propose a history string for the room to verify
   /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)
+  /coupling [tw …] — was the room's closure shared, or several side by side?
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
@@ -236,6 +237,56 @@ Hermitian adjoint (H†):
 Self-adjoint histories `Σ_sa = {H : H = H†}` form the operator-side counterpart of the Riemann ξ critical line — see [ReverseMathematics §4.9](https://github.com/rchain-community/quantum-logical-framework/blob/main/ReverseMathematics.md). The vacuum-alignment principle in [VacuumEnergy §6](https://github.com/rchain-community/quantum-logical-framework/blob/main/VacuumEnergy.md) reads the adjoint operator as the framework's negation; under [Magic_numbers.md](https://github.com/rchain-community/quantum-logical-framework/blob/main/Magic_numbers.md) the same adjoint structure drives the vacuum-as-intruder selection in nuclear shells.
 
 Lean anchors: [`Twist.conj`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_TwistAlphabet.lean) · [`vacuum_alignment_selects_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`global_alignment_selects_zfa`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_VacuumAlignment.lean) · [`rho_process_alignment_saturates`](https://github.com/rchain-community/quantum-logical-framework/blob/main/lean/QLF_RhoProcessBridge.lean)
+
+### `/coupling [<twists> …]`
+
+Classifies a **joint** closure by how its parts relate to it. With arguments it classifies the histories you give it, one part per argument. With no arguments it cuts the room along **what peers put on the table with `/qlf-action`** — one part per contributor, latest proposal each.
+
+The room process is ZFA-balanced *by construction* — `rho_process_always_zfa` is a theorem about the constructor, so it holds of every room and therefore distinguishes nothing. Cutting the join into one factor per contributor is what makes the balance carry information. Exactly one of four things is true:
+
+| verdict | meaning |
+|---|---|
+| **open** | the join does not close at all — there is no event |
+| **independent** | every part closes on its own — several closures that happened side by side, not one |
+| **product** | no part closes alone, yet each folds to a Pauli scalar — separable, `σ ⊗ I` and `I ⊗ σ` reproduce it |
+| **coupled** | some part neither closes nor folds to a scalar — only the join closes |
+
+**Coupled** is QLF's `SharedClosure`: the parts are not separately describable, and indexing them as independent subsystems cannot reproduce the join — it is a genuine Pauli string. In a room that is the difference between *"we decided this together"* and *"we each happened to be fine."*
+
+```
+/coupling ^ v
+/coupling: parallel(^, v)
+  ^  ^  — open
+  v  v  — open
+  verdict: coupled
+    only the join closes — a shared closure (QLF's entanglement)
+    census baseline: 80.3% of shared closures are coupled
+```
+
+In a room the parts are contributions, so the workflow is: each peer proposes a
+history, then anyone asks how they combined.
+
+```
+Ana:  /qlf-action ^
+Ben:  /qlf-action v
+      2 proposals on the table — /coupling to see if they form one shared closure
+      /coupling
+      /coupling: parallel(Ana, Ben (you))
+        verdict: coupled
+```
+
+The parts are deliberately **not** the peers' capability tokens. A token is a
+random identity bearer minted against the aggregate predicate — it says nothing
+about what its holder contributed, and joining tokens returns `open` ("no event")
+for essentially every real room. A history someone chose and typed is a
+contribution, so a join of two proposals closing means they built one closure
+together.
+
+The gauge pair splits the other way — `/coupling + -` is **product**, because `+` and `-` each fold to a scalar alone. That contrast is the point: the axis pair `^v` is ER=EPR's primordial entanglement witness and the gauge pair is not, so indexing cannot simply replace concatenation.
+
+The sectors are not a heuristic. They are the same cut-and-classify the QLF census performs over every balanced history, so a room's verdict has an exact baseline to read against: of all shared closures cut from a balanced history, **80.3%** are coupled rather than product (0.750, 0.791, 0.804, 0.803 at lengths 2, 4, 6, 8 — nearly flat, so the comparison does not depend on picking a length). `crates/zfa-core/tests/census_conformance.rs` re-derives those sector counts from the kernel and requires them to match the census exactly.
+
+Rust: [`crates/zfa-core/src/coupling.rs`](crates/zfa-core/src/coupling.rs) · census: [`data/census_inventory.json`](https://github.com/jimscarver/quantum-logical-framework/blob/main/data/census_inventory.json) in QLF · Lean anchors: `QLF_IndexedFactors.phase_factorizes`, `count_balanced_pauli_closed`
 
 ### `/grant [label]` [shared]
 Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.

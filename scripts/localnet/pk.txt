@@ -1,0 +1,18 @@
+# pk.txt — private keys for a LOCAL node only.
+#
+# THROWAWAY KEYS. They are in the repository on purpose: a local devnet needs a
+# funded key, and a key nobody can read funds nobody. They are worthless on any
+# real network, and using them anywhere with value would hand it away.
+#
+#   validator  bonds.txt's validator; also proposes blocks. From rchain-rust's
+#              tools/devnet.sh, where it is published for exactly this use.
+#   deployer   generated for this repo. Point the browser at it with
+#              /rholang key <hex>.
+#
+# Regenerate a key with:  node keys.mjs --generate
+# Addresses:              node keys.mjs
+#
+# Format: <name>=<secp256k1 secret key, base16>
+
+validator=a68a6e6cca30f81bd24a719f3145d20e8424bd7b396309b0708a16c7d8000b76
+deployer=d3ad764ae57434401de9c39ec9e7c685152ffbd5da348656904e2622125a8f05

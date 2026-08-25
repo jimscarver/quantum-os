@@ -14,18 +14,25 @@
 /// return reading of half-spin closure. Count balance is the same closure
 /// read as a Hermitian-pair multiset count.
 ///
-/// The implication runs **one way**, and this comment used to say it ran
-/// neither way. Count balance *entails* Pauli closure, for every history
-/// including cross-axis interleavings — that is QLF's machine-verified
-/// keystone `count_balanced_pauli_closed` (lean/QLF_TwistAlphabet.lean), so
-/// the non-abelian face follows from the abelian one and is not an
-/// independent requirement. The converse genuinely fails: `^^` folds to
-/// σ_y² = I, which is Pauli closed, while its counts are (2,0,0,0).
+/// **Which count balance.** QLF's keystone `count_balanced_pauli_closed`
+/// (lean/QLF_TwistAlphabet.lean) proves count balance entails Pauli closure
+/// for every history, cross-axis interleavings included — but its hypothesis
+/// is *pairwise* balance, `#^=#v ∧ #>=#< ∧ #/=#\ ∧ #+=#-`, the vanishing of
+/// the signed action vector. `isCountBalanced` below is the weaker aggregate
+/// `count_pos == count_neg`, and the keystone does **not** hold for it:
+/// 61,440 histories of length 6 are aggregate-balanced and not Pauli-closed
+/// (`crates/zfa-core/tests/census_conformance.rs` counts them). `^<` is the
+/// two-twist case — one positive, one negative, folding to −iσ_z.
 ///
-/// So checking both is not wrong, just redundant in one direction, and the
-/// redundancy is worth keeping — it is a live cross-check that this kernel
-/// and the Lean proof still agree. What must not be inferred from the
-/// conjunction is that two independent things are being demanded.
+/// So the conjunction below is not redundant, it is load-bearing, and it is
+/// still weaker than QLF's ZFA: `^^<<` folds to +I with two positives and
+/// two negatives, so `achievesZfa` accepts it, while its signed action
+/// vector is (2,−2,0,0), so `is_zfa` in twist_core.py rejects it. Use
+/// [`achievesZfaPairwise`] where QLF's predicate is meant. `achievesZfa` is
+/// kept as-is because it is what deployed capability tokens validate against.
+///
+/// The converse genuinely fails in both readings: `^^` folds to σ_y² = I,
+/// which is Pauli closed, while its counts are (2,0,0,0).
 ///
 /// The 8-twist alphabet is the SU(2) generator set up to sign (≅ unit
 /// quaternions; see HALF-SPIN-ZFA-EMBEDDING.md §6).
@@ -35,7 +42,10 @@
 
 interface ZfaWasm {
   wasm_achieves_zfa(bytes: Uint8Array): boolean;
+  wasm_achieves_zfa_pairwise(bytes: Uint8Array): boolean;
+  wasm_is_pairwise_balanced(bytes: Uint8Array): boolean;
   wasm_is_pauli_closed(bytes: Uint8Array): boolean;
+  wasm_coupling(parts: string): string;
   wasm_spectral_gap(bytes: Uint8Array): number;
   wasm_div_b(bytes: Uint8Array): number;
   wasm_charge(bytes: Uint8Array): number;
@@ -72,6 +82,26 @@ function countPos(bytes: Uint8Array): number {
 function isCountBalanced(twists: Uint8Array): boolean {
   const pos = countPos(twists);
   return pos === twists.length - pos;
+}
+
+/// The signed action vector `(#^-#v, #>-#<, #/-#\, #+-#-)`. ZFA is *Zero Free
+/// Action* — this vector vanishing. Mirrors `calculate_action` in twist_core.py
+/// and `signed_action` in history.rs, component order included.
+export function signedAction(twists: Uint8Array): [number, number, number, number] {
+  const n = (t: T) => { let c = 0; for (const b of twists) if (b === t) c++; return c; };
+  return [
+    n(T.Up) - n(T.Down),
+    n(T.Right) - n(T.Left),
+    n(T.Slash) - n(T.BSlash),
+    n(T.Plus) - n(T.Minus),
+  ];
+}
+
+/// QLF's count balance: every conjugate pair balances on its own. This is the
+/// keystone's hypothesis; the aggregate `isCountBalanced` is not.
+export function isPairwiseBalanced(twists: Uint8Array): boolean {
+  if (_wasm) return _wasm.wasm_is_pairwise_balanced(twists);
+  return signedAction(twists).every(c => c === 0);
 }
 
 // ---- Pauli matrix algebra (pure TS, mirrors pauli.rs / twist_core.py) ----
@@ -127,6 +157,29 @@ function pauliFold(twists: Uint8Array): M2 {
   return m;
 }
 
+const TWIST_SYMBOL: Record<string, number> = {
+  "^": 0, v: 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7,
+};
+
+/// Parse a twist sequence from hex digits (`0167`), symbols (`^v`), or a
+/// `cap:label:hex` token. Mirrors `parseTwists` in scripts/qos-cli/zfa.mjs.
+export function parseTwists(str: string): Uint8Array | null {
+  if (typeof str !== "string" || str.length === 0) return null;
+  let s = str;
+  if (s.startsWith("cap:")) {
+    const parts = s.split(":");
+    if (parts.length < 3) return null;
+    s = parts[2];
+  }
+  if (/^[0-7]+$/.test(s)) return Uint8Array.from([...s].map((c) => parseInt(c, 10)));
+  const out: number[] = [];
+  for (const ch of s) {
+    if (!(ch in TWIST_SYMBOL)) return null;
+    out.push(TWIST_SYMBOL[ch]);
+  }
+  return Uint8Array.from(out);
+}
+
 export function isPauliClosed(twists: Uint8Array): boolean {
   if (_wasm) return _wasm.wasm_is_pauli_closed(twists);
   const [a, b, c, d] = pauliFold(twists);
@@ -140,6 +193,74 @@ export function isPauliClosed(twists: Uint8Array): boolean {
 export function achievesZfa(twists: Uint8Array): boolean {
   if (_wasm) return _wasm.wasm_achieves_zfa(twists);
   return isCountBalanced(twists) && isPauliClosed(twists);
+}
+
+/// QLF's ZFA exactly: pairwise count balance and Pauli closure. Strictly
+/// narrower than [`achievesZfa`] — see the note at the top of this file.
+export function achievesZfaPairwise(twists: Uint8Array): boolean {
+  if (_wasm) return _wasm.wasm_achieves_zfa_pairwise(twists);
+  return isPairwiseBalanced(twists) && isPauliClosed(twists);
+}
+
+// ---- Coupling: how a room's parts relate to the closure they form ----
+
+export type Coupling = "open" | "independent" | "product" | "coupled";
+
+export interface CouplingReading {
+  verdict: Coupling;
+  /// True for `product` and `coupled` — the join is one event, not several.
+  shared: boolean;
+  /// Indices of the parts that neither close nor fold to a scalar alone.
+  open: number[];
+  /// The census fraction of shared closures that are coupled, for comparison.
+  baseline: number;
+}
+
+/// The census baseline (`factors` at length 8): of all shared closures cut
+/// from a balanced history, this fraction is coupled rather than product.
+/// Nearly flat in length — 0.750, 0.791, 0.804, 0.803 at lengths 2, 4, 6, 8.
+export const COUPLED_BASELINE = 0.802893;
+
+/// True iff the Pauli fold is a scalar, decided by axis parity instead of by
+/// multiplying matrices: the fold is `phase • axisMatrix(axisProd)`, so it is
+/// scalar exactly when the X, Y and Z multiplicities share a parity.
+export function foldsToScalar(twists: Uint8Array): boolean {
+  let x = 0, y = 0, z = 0;
+  for (const b of twists) {
+    if (b === T.Right || b === T.Left) x++;
+    else if (b === T.Up || b === T.Down) y++;
+    else if (b === T.Slash || b === T.BSlash) z++;
+  }
+  return (x % 2) === (y % 2) && (y % 2) === (z % 2);
+}
+
+/// Classify a room's joint closure by how its per-peer factors relate to it.
+/// `parts` are the peers' histories, in the order the room composed them.
+export function classifyCoupling(parts: Uint8Array[]): CouplingReading {
+  if (_wasm) {
+    const encoded = parts.map(p => [...p].join("")).join("|");
+    return JSON.parse(_wasm.wasm_coupling(encoded)) as CouplingReading;
+  }
+  const joint = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { joint.set(p, at); at += p.length; }
+
+  const open = parts
+    .map((p, i) => (!isPairwiseBalanced(p) && !foldsToScalar(p) ? i : -1))
+    .filter(i => i >= 0);
+
+  let verdict: Coupling;
+  if (!achievesZfaPairwise(joint)) verdict = "open";
+  else if (parts.every(isPairwiseBalanced)) verdict = "independent";
+  else if (parts.every(foldsToScalar)) verdict = "product";
+  else verdict = "coupled";
+
+  return {
+    verdict,
+    shared: verdict === "product" || verdict === "coupled",
+    open,
+    baseline: COUPLED_BASELINE,
+  };
 }
 
 export function spectralGap(twists: Uint8Array): number {

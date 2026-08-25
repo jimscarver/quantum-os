@@ -1,5 +1,7 @@
 import { loadZfa, generateCapability, validateCapability,
-         spectralGap, achievesZfa, isPauliClosed } from "./zfa.js";
+         spectralGap, achievesZfa, isPauliClosed,
+         classifyCoupling, isPairwiseBalanced, signedAction,
+         foldsToScalar, COUPLED_BASELINE } from "./zfa.js";
 import { QOSPeer } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
          mintCurrencyToken, mintNote, mintNoteSeries, mintReceipt,
@@ -21,7 +23,11 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
-import { expandGlobalMacro, lintRholang, runGlobalPipeline } from "./global.js";
+import { expandGlobalMacro, expandGlobalProgram, lintRholang,
+         listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
+import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
+         generateKey as generateDeployKey, publicKeyOf, revAddressOf, nodeStatus, evalTerm, deployTerm,
+         readResults, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -137,6 +143,9 @@ const RDV_TIMEOUT_MS = 60_000;
 // Each room is its own Markov blanket — independent state, independent
 // dyncap chain trajectory (seqs tracked in dyncapState.seqByRoom), independent
 // signaling/data-channel connection. RoomContext holds everything per-room.
+/** A history a peer put on the table with /qlf-action. */
+interface ActionProposal { twists: Uint8Array; at: number; }
+
 interface RoomContext {
   roomId: string;
   qpeer: QOSPeer | null;
@@ -167,6 +176,11 @@ interface RoomContext {
   // series this user has accepted (seriesKey -> AcceptedTerms).
   seriesTerms: Map<string, SeriesTerms>;
   acceptedTerms: Map<string, AcceptedTerms>;
+  // Histories peers have proposed with /qlf-action, latest per peer. These are
+  // what /coupling cuts: a peer's capability token is a random identity bearer
+  // and says nothing about what that peer contributed, but a history someone
+  // deliberately typed does. Live-session state, not persisted.
+  actionProposals: Map<string, ActionProposal>;
   // Rendezvous
   lockedNotes: Map<string, LockedNote>;
   proposals: Map<string, ProposalState>;
@@ -223,6 +237,7 @@ function createRoom(roomId: string): RoomContext {
     knownCurrencies: new Map(),
     seriesTerms: new Map(),
     acceptedTerms: new Map(),
+    actionProposals: new Map(),
     lockedNotes: new Map(),
     proposals: new Map(),
     proposalTimers: new Map(),
@@ -289,6 +304,7 @@ let knownCurrencies: Map<string, KnownCurrency> = new Map();
 let seriesTerms: Map<string, SeriesTerms> = new Map();
 let acceptedTerms: Map<string, AcceptedTerms> = new Map();
 let lockedNotes: Map<string, LockedNote> = new Map();
+let actionProposals: Map<string, ActionProposal> = new Map();
 let proposals: Map<string, ProposalState> = new Map();
 let proposalTimers: Map<string, number> = new Map();
 let dyncapChains: Map<string, ChainEntry> = new Map();
@@ -328,6 +344,7 @@ function setActiveRoom(ctx: RoomContext): void {
   seriesTerms        = ctx.seriesTerms;
   acceptedTerms      = ctx.acceptedTerms;
   lockedNotes        = ctx.lockedNotes;
+  actionProposals    = ctx.actionProposals;
   proposals          = ctx.proposals;
   proposalTimers     = ctx.proposalTimers;
   dyncapChains       = ctx.dyncapChains;
@@ -1574,6 +1591,105 @@ function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"):
   });
 }
 
+// ---------------------------------------------------------------------------
+// /rholang — multi-line program capture
+//
+// A rholang program is not a command line: it has newlines, braces and quotes,
+// and a chat input takes one line at a time. So `/rholang eval` and
+// `/rholang deploy` open a capture: every line typed after them is program text
+// until an empty line, which runs it. That is the only terminator — there is
+// nothing to escape and nothing to quote.
+// ---------------------------------------------------------------------------
+
+const RHOLANG_HELP = [
+  "/rholang — run rholang on an RChain node.",
+  "  /rholang eval          — run a program and read the result back. Nothing is signed,",
+  "                           nothing is stored, no block is produced.",
+  "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
+  "  /rholang status        — what the node is: version, shard, height, phlo floor.",
+  "  /rholang powerbox      — the names every program gets, and what each one takes.",
+  "",
+  "  eval and deploy take the program from the lines you type next.",
+  "  End with an empty line to run it, or type /cancel to throw it away.",
+  "",
+  "  Configuration:",
+  "  /rholang config               — show all of it",
+  "  /rholang node <url>           — node HTTP API (default http://127.0.0.1:40403)",
+  "  /rholang shard <id>           — shard the deploy is valid in (default root)",
+  "  /rholang phlo <limit> [price] — what a deploy may spend",
+  "  /rholang key generate|<hex>|show|forget — the secp256k1 deploy key (this browser only)",
+  "",
+  "  eval runs in a read-only sandbox over finalized state, where the node does not",
+  "  run its system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*,",
+  "  rho:registry:* and rho:rchain:* yield nothing. Reaching those means deploy.",
+];
+
+interface RholangCapture { mode: "eval" | "deploy"; lines: string[] }
+let rholangCapture: RholangCapture | null = null;
+
+function startRholangCapture(mode: "eval" | "deploy", seed: string, sys: (t: string) => void): void {
+  rholangCapture = { mode, lines: seed ? [seed] : [] };
+  sys(mode === "eval"
+    ? "rholang to evaluate — type the program, then an empty line to run it (/cancel to abort):"
+    : "rholang to deploy — type the program, then an empty line to sign and submit it (/cancel to abort):");
+  if (seed) sys("  " + seed);
+  sys(`in scope: return, ${powerboxNames(mode).join(", ")}`);
+  sys("  /rholang powerbox — what each one takes and returns");
+}
+
+/** Run whatever the capture collected. */
+function finishRholangCapture(): void {
+  const cap = rholangCapture;
+  rholangCapture = null;
+  if (!cap) return;
+  const source = cap.lines.join("\n").trim();
+  const say = (t: string) => addMessage("", t, "system");
+  if (!source) { say("nothing typed — cancelled"); return; }
+
+  const cfg = loadNodeConfig();
+  void (async () => {
+    // Never ask anyone to sign what cannot parse. The linter checks the shape of
+    // the program, not what it is permitted to reach — that is the node's call.
+    const lint = await lintRholang(source);
+    if (!lint.ok) {
+      say("✗ malformed rholang — not running:");
+      for (const e of lint.errors) say("  • " + e);
+      return;
+    }
+
+    if (cap.mode === "eval") {
+      say("evaluating on " + cfg.url + "…");
+      try {
+        const r = await evalTerm(cfg, source);
+        if (r.values.length) for (const v of r.values) say("  → " + v);
+        else say("  → (no value — a term reports by sending on a name called `return`)");
+        if (r.blockNumber !== undefined) say("  at block " + r.blockNumber);
+      } catch (e) {
+        say("✗ " + ((e as Error)?.message ?? e));
+      }
+      return;
+    }
+
+    if (!cfg.key) { say("✗ no deploy key — /rholang key generate, or /rholang key <hex>"); return; }
+    const confirmText = "Sign and deploy this to " + cfg.url + "?\n\n"
+      + "phlo limit " + cfg.phloLimit + " × price " + cfg.phloPrice + ", shard " + cfg.shard;
+    if (!window.confirm(confirmText)) { say("cancelled — nothing deployed"); return; }
+    say("signing and deploying to " + cfg.url + "…");
+    try {
+      const r = await deployTerm(cfg, source);
+      say((r.ok ? "✓ " : "✗ ") + r.message);
+      if (r.ok && r.resultName) {
+        say("waiting for the block, then reading what it sent to return…");
+        const values = await readResults(cfg, r.resultName);
+        if (values.length) for (const v of values) say("  → " + v);
+        else say(`  (nothing on return yet — read it later at @"${r.resultName}")`);
+      }
+    } catch (e) {
+      say("✗ " + ((e as Error)?.message ?? e));
+    }
+  })();
+}
+
 function handleCommand(raw: string): string[] {
   const parts = raw.slice(1).trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -1605,6 +1721,7 @@ function handleCommand(raw: string): string[] {
       sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
       sys("  /qlf-action <tw> — propose a history string for the room to verify");
       sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
+      sys("  /coupling [tw …] — was the room's closure shared, or several side by side?");
       sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
@@ -1625,6 +1742,7 @@ function handleCommand(raw: string): string[] {
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
+      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · status · config (multi-line, end with a blank line)");
       sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros · node <url> (lint→sign→deploy)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
@@ -2241,9 +2359,11 @@ function handleCommand(raw: string): string[] {
       const sym = twistsToSymbolic(tw);
       const cb = (() => { const s = twistStats(tw); return s.pos === s.neg; })();
       const pc = isPauliClosed(tw);
+      if (qpeer) actionProposals.set(qpeer.peerId, { twists: tw, at: Date.now() });
       sys(`/qlf-action: ${sym}  (${tw.length} twists)  proposed by ${myName || "you"}`);
       sys(`  count-balanced: ${cb ? "✓" : "✗"}   pauli-closed: ${pc ? "✓" : "✗"}   ZFA: ${cb && pc ? "✓" : "✗"}`);
       sys("  RhoProcess: action(history)  → broadcast for /zfa-check (rho_process_always_zfa)");
+      if (actionProposals.size >= 2) sys(`  ${actionProposals.size} proposals on the table — /coupling to see if they form one shared closure`);
       break;
     }
 
@@ -2265,6 +2385,84 @@ function handleCommand(raw: string): string[] {
       sys(`  is_count_balanced: ${cb ? "✓" : "✗"}  (${s.pos} pos / ${s.neg} neg)`);
       sys(`  is_pauli_closed:   ${pc ? "✓" : "✗"}  (folds to {±I, ±iI})`);
       sys(`  is_zfa = ${cb} ∧ ${pc} = ${cb && pc ? "✓ closed" : "✗ not closed"}   gap=${s.gap}`);
+      break;
+    }
+
+    case "coupling": {
+      // Was this one shared closure, or several closures that happened side by
+      // side? A room process is parallel(peer1, peer2, …) and is ZFA-balanced
+      // by construction, so its balance distinguishes nothing. Cutting it into
+      // one factor per contributor does: see crates/zfa-core/src/coupling.rs.
+      // With no arguments the factors are the room's /qlf-action proposals — see
+      // actionProposals for why peer tokens are the wrong cut.
+      const src = arg.trim();
+      let labels: string[] = [];
+      let parts: Uint8Array[] = [];
+
+      if (src) {
+        const chunks = src.split(/[|\s]+/).filter(Boolean);
+        if (chunks.length < 2) {
+          sys("usage: /coupling [<twists> <twists> …]");
+          sys("  with no arguments, classifies the room's /qlf-action proposals");
+          sys("  e.g. /coupling ^ v      ·   /coupling +- ^v<>");
+          break;
+        }
+        for (const c of chunks) {
+          const tw = parseSymbolicTwists(c);
+          if (!tw) { sys(`not a twist string: ${c}`); parts = []; break; }
+          parts.push(tw);
+          labels.push(twistsToSymbolic(tw));
+        }
+        if (parts.length === 0) break;
+      } else {
+        // Cut the room along what peers CONTRIBUTED, not along who they are.
+        // A capability token is a random identity bearer minted against the
+        // aggregate predicate; joining two of them is not a process, and the
+        // verdict came back `open` for essentially every real room. A history
+        // someone deliberately typed with /qlf-action is a contribution, so a
+        // join of two peers' proposals closing means they built one closure
+        // together — which is the question this command exists to ask.
+        const entries = [...actionProposals.entries()]
+          .filter(([id]) => id === qpeer?.peerId || peers.has(id))
+          .sort((a, b) => a[1].at - b[1].at);
+        for (const [id, p] of entries) {
+          parts.push(p.twists);
+          labels.push(id === qpeer?.peerId ? (myName || shortId(id)) + " (you)" : peerLabel(id));
+        }
+        if (parts.length < 2) {
+          sys("/coupling: needs at least two /qlf-action proposals from peers in the room");
+          sys("  each peer proposes a history (/qlf-action ^v), then /coupling asks whether");
+          sys("  they formed one shared closure or several side by side");
+          sys("  or pass histories directly: /coupling ^ v");
+          break;
+        }
+      }
+
+      const reading = classifyCoupling(parts);
+      sys(`/coupling: parallel(${labels.join(", ")})`);
+      parts.forEach((tw, i) => {
+        const state = isPairwiseBalanced(tw) ? "closes alone"
+                    : foldsToScalar(tw)      ? "folds to a scalar"
+                    :                          "open";
+        sys(`  ${labels[i]}  ${twistsToSymbolic(tw)}  — ${state}`);
+      });
+      sys(`  verdict: ${reading.verdict}`);
+      switch (reading.verdict) {
+        case "coupled":
+          sys("    only the join closes — a shared closure (QLF's entanglement)");
+          sys(`    census baseline: ${(COUPLED_BASELINE * 100).toFixed(1)}% of shared closures are coupled`);
+          break;
+        case "product":
+          sys("    separable — each part folds to a scalar on its own");
+          break;
+        case "independent":
+          sys("    each part closed alone — two closures, not one shared event");
+          break;
+        case "open":
+          sys(`    the join is not a ZFA closure; signed action = (${signedAction(
+                new Uint8Array(parts.flatMap(p => [...p]))).join(", ")})`);
+          break;
+      }
       break;
     }
 
@@ -3641,21 +3839,42 @@ function handleCommand(raw: string): string[] {
         break;
       }
       try {
-        const x = expandGlobalMacro(`/global ${g}`);
-        if (x.kind === "help" || x.kind === "list") {
-          for (const l of x.text.split("\n")) sys(l);
-          break;
+        // Two shapes: a bare single macro (`transfer 100 bob` — the whole program
+        // is one macro), or a rholang program, one line or many, with %name(…)
+        // call sites embedded in it. The rholang itself is not parsed; call sites
+        // expand in place and everything else is left as written, so whatever the
+        // result means is the linter's question and then the node's.
+        const head = g.split(/\s+/)[0]?.toLowerCase() ?? "";
+        const bare = !g.includes("%") && head !== "";
+        let source: string;
+        let title: string;
+        if (bare) {
+          const x = expandGlobalMacro(`/global ${g}`);
+          if (x.kind === "help") { for (const l of GLOBAL_HELP.split("\n")) sys(l); break; }
+          if (x.kind === "list") { for (const l of globalListMacros().split("\n")) sys(l); break; }
+          if (x.kind === "result") { sys(x.text); break; }
+          source = x.source;
+          title = `/global ${x.macro} → expanded (review, then sign & deploy):`;
+        } else {
+          const p = expandGlobalProgram(g);
+          for (const e of p.errors) sys(`✗ line ${e.line}: ${e.message}`);
+          if (!p.expansions.length) {
+            sys(p.errors.length ? "nothing expanded — fix the errors above" : "no %macro(…) call sites found — /global macros lists them");
+            break;
+          }
+          source = p.source;
+          const names = p.expansions.map((e) => `%${e.name}`).join(", ");
+          title = `/global → expanded ${p.expansions.length} macro${p.expansions.length === 1 ? "" : "s"} (${names})`
+                + `${p.errors.length ? `, ${p.errors.length} left unexpanded` : ""} — review, then sign & deploy:`;
         }
-        if (x.kind === "result") { sys(x.text); break; }
-        // x.kind === "rholang" → preview, then the client-side sign & deploy loop.
         const nodeUrl = localStorage.getItem("qos-node-url") ?? "http://127.0.0.1:40403";
-        sys(`/global ${x.macro} → expanded (review, then sign & deploy):`);
-        for (const l of x.source.split("\n")) sys("  " + l);
+        sys(title);
+        for (const l of source.split("\n")) sys("  " + l);
         sys(`target node: ${nodeUrl}  (change with /global node <url>)`);
         void (async () => {
-          const lint = await lintRholang(x.source);
+          const lint = await lintRholang(source);
           if (!lint.ok) {
-            sys("✗ lint failed — not signing:");
+            sys("✗ malformed rholang — not signing:");
             for (const e of lint.errors) sys("  • " + e);
             return;
           }
@@ -3664,13 +3883,141 @@ function handleCommand(raw: string): string[] {
             sys("cancelled — nothing deployed");
             return;
           }
-          const pass = window.prompt("Passphrase for your signing key (creates one on first use):") ?? "";
-          const r = await runGlobalPipeline(x.source, { nodeUrl, passphrase: pass });
-          if (r.ok) sys(`✓ ${r.message}${r.deployId ? ` — id ${r.deployId}` : ""}`);
-          else sys(`✗ ${r.stage}: ${r.message}`);
+          // Deploy through the same client /rholang uses: a secp256k1 signature
+          // over the node's own DeployData encoding. The old passphrase-wrapped
+          // P-256 key signed a packet no RChain node would ever verify.
+          const r = await deployTerm(loadNodeConfig(), source);
+          sys((r.ok ? "✓ " : "✗ ") + r.message);
         })();
       } catch (e) {
         sys(`✗ ${(e as Error)?.message ?? e}`);
+      }
+      break;
+    }
+
+    case "rholang": {
+      // Talk to an RChain node: run a program, or sign and submit one. A room is
+      // ephemeral; a deploy is not. `eval` and `deploy` take their program from
+      // the lines that follow, so a multi-line program needs no escaping.
+      const parts2 = arg.trim().split(/\s+/);
+      const sub = (parts2[0] ?? "").toLowerCase();
+      const rest = arg.trim().slice(sub.length).trim();
+      const cfg = loadNodeConfig();
+
+      switch (sub) {
+        case "":
+        case "help": {
+          for (const l of RHOLANG_HELP) sys(l);
+          break;
+        }
+
+        case "status": {
+          sys(`asking ${cfg.url}…`);
+          void (async () => {
+            try {
+              const st = await nodeStatus(cfg);
+              sys(`✓ node ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
+              sys(`  network ${st.networkId ?? "?"} · shard ${st.shardId ?? "?"} · peers ${st.peers ?? 0}`);
+              sys(`  latest block ${st.latestBlockNumber ?? "?"} · min phlo price ${st.minPhloPrice ?? "?"}`);
+              if (st.shardId && st.shardId !== cfg.shard) {
+                sys(`  ⚠ your shard is "${cfg.shard}" but the node is "${st.shardId}" — deploys will be rejected`);
+                sys(`    fix with /rholang shard ${st.shardId}`);
+              }
+            } catch (e) {
+              sys(`✗ cannot reach ${cfg.url} — ${(e as Error)?.message ?? e}`);
+              sys("  is the node running, and is --api-host set so it listens for the browser?");
+            }
+          })();
+          break;
+        }
+
+        case "eval":
+        case "deploy": {
+          startRholangCapture(sub, rest, sys);
+          break;
+        }
+
+        case "powerbox":
+        case "names": {
+          sys("declared for you in every program — send to these, read the answer on return:");
+          sys("");
+          for (const l of powerboxSpec("deploy")) sys("  " + l);
+          sys("");
+          sys("Under eval the system processes bind but never reply — only pure rholang");
+          sys("returns values there. A call that must answer needs deploy.");
+          break;
+        }
+
+        case "config": {
+          for (const l of describeNodeConfig(cfg)) sys("  " + l);
+          break;
+        }
+
+        case "node": {
+          if (!rest) { sys(`node ${cfg.url}`); break; }
+          saveNodeConfig({ ...cfg, url: rest });
+          sys(`✓ node set to ${rest}`);
+          break;
+        }
+
+        case "shard": {
+          if (!rest) { sys(`shard ${cfg.shard}`); break; }
+          saveNodeConfig({ ...cfg, shard: rest });
+          sys(`✓ shard set to ${rest}`);
+          break;
+        }
+
+        case "phlo": {
+          const [limitTxt, priceTxt] = rest.split(/\s+/);
+          const limit = Number(limitTxt);
+          if (!limitTxt || !Number.isFinite(limit) || limit <= 0) {
+            sys(`phlo limit ${cfg.phloLimit}, price ${cfg.phloPrice}   (set with /rholang phlo <limit> [price])`);
+            break;
+          }
+          const price = priceTxt ? Number(priceTxt) : cfg.phloPrice;
+          if (!Number.isFinite(price) || price <= 0) { sys("✗ phlo price must be a positive number"); break; }
+          saveNodeConfig({ ...cfg, phloLimit: limit, phloPrice: price });
+          sys(`✓ phlo limit ${limit}, price ${price}`);
+          break;
+        }
+
+        case "key": {
+          if (!rest || rest.toLowerCase() === "show") {
+            sys(cfg.key ? `public key ${publicKeyOf(cfg.key)}` : "no deploy key — /rholang key generate, or /rholang key <hex>");
+            break;
+          }
+          if (rest.toLowerCase() === "generate") {
+            if (cfg.key && !window.confirm("Replace the existing deploy key? The old one is not recoverable.")) {
+              sys("cancelled — key unchanged");
+              break;
+            }
+            const k = generateDeployKey();
+            saveNodeConfig({ ...cfg, key: k });
+            sys("✓ deploy key generated (stored in this browser only)");
+            sys(`  public ${publicKeyOf(k)}`);
+            sys(`  address ${revAddressOf(k)}`);
+            sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
+            break;
+          }
+          if (rest.toLowerCase() === "forget") {
+            const { key: _drop, ...without } = cfg;
+            saveNodeConfig(without as NodeConfig);
+            sys("✓ deploy key removed from this browser");
+            break;
+          }
+          try {
+            const pub = publicKeyOf(rest);
+            saveNodeConfig({ ...cfg, key: rest.trim().replace(/^0x/, "") });
+            sys("✓ deploy key set (stored in this browser only)");
+            sys(`  public ${pub}`);
+          } catch {
+            sys("✗ not a secp256k1 secret key — expected 32 bytes of base16");
+          }
+          break;
+        }
+
+        default:
+          sys(`unknown: /rholang ${sub}  — try /rholang help`);
       }
       break;
     }
@@ -3781,6 +4128,12 @@ function connect(): void {
           addMessage(from, `/${cmdStr}${argStr ? " " + argStr : ""}`, "peer", peerLabel(from));
           for (const line of pLines) addMessage("", line, "system");
           sessionLog.push({ who: peerLabel(from), cmd: cmdStr, arg: argStr, summary: pLines[0] ?? "" });
+          // Keep each peer's latest proposed history so /coupling can cut the room
+          // along what people actually contributed (see actionProposals).
+          if (cmdStr === "qlf-action") {
+            const ptw = parseSymbolicTwists(argStr.trim());
+            if (ptw && ptw.length) actionProposals.set(from, { twists: ptw, at: Date.now() });
+          }
           return;
         }
         if (d.kind === "cap-grant") {
@@ -4816,6 +5169,24 @@ function connect(): void {
 // ---------------------------------------------------------------------------
 
 function send(): void {
+  // A rholang capture is in progress: every line is program text, an empty line
+  // runs it. Checked before anything else — indentation is significant to read,
+  // a leading slash is legal rholang-adjacent text, and no peer is needed to
+  // talk to a node.
+  if (rholangCapture) {
+    const line = msgInput.value.replace(/\s+$/, "");
+    msgInput.value = "";
+    if (line.trim() === "") { finishRholangCapture(); return; }
+    if (line.trim().toLowerCase() === "/cancel") {
+      rholangCapture = null;
+      addMessage("", "cancelled — nothing run", "system");
+      return;
+    }
+    rholangCapture.lines.push(line);
+    addMessage("", "  " + line, "self");
+    return;
+  }
+
   const text = msgInput.value.trim();
   if (!text || !qpeer) return;
   pushHistory(text);
@@ -4835,7 +5206,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -5101,6 +5472,10 @@ const CMD_HELP: Record<string, string[]> = {
   freq: ["/freq [n | twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n (the 2:1 harmonic ladder)."],
   "qlf-action": ["/qlf-action <twists> — propose a QuCalc history string for the room to verify.", "The collaborative-study surface over the ZFA kernel; broadcast for /zfa-check.", "e.g. /qlf-action ^v<>/\\+-"],
   "zfa-check": ["/zfa-check <twists> — verify ZFA closure locally: is_zfa = is_count_balanced ∧ is_pauli_closed.", "Each peer runs its own kernel; no trusted evaluator. e.g. /zfa-check ^v^v"],
+  coupling: ["/coupling [<twists> …] — classify a joint closure: independent, product, or coupled.",
+             "No arguments cuts the room along what peers proposed with /qlf-action, one part each.",
+             "Coupled means only the join closes — a shared closure, not two side by side.",
+             "Sector counts are the QLF census's; baseline 80.3% coupled. e.g. /coupling ^ v"],
   estimate: ["/estimate new <question> — open a robust group numeric estimate (median by default).",
              "/estimate <number> — submit your estimate · /estimate status — median + IQR · /estimate close.",
              "--mean for the mean tally; median is whale/outlier-resistant. Used by gov-9stage & colab-study."],
@@ -5138,12 +5513,21 @@ const CMD_HELP: Record<string, string[]> = {
   script: ["/script <c1>; <c2>; … — run a sequential command chain; // skips a segment."],
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
+  rholang: [
+    "/rholang eval — run a rholang program on the node and read the result back. Nothing is signed, nothing stored, no block.",
+    "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
+    "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
+    "eval and deploy read the program from the lines you type after the command — end with an empty line to run it, /cancel to discard.",
+    "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
+    "eval runs read-only over finalized state, where the node does not run system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*, rho:registry:* and rho:rchain:* yield nothing. Those need deploy.",
+  ],
   global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library. · /global node <url> — set the deploy target (default http://127.0.0.1:40403).", "Writes are linted (WASM), previewed, then signed with your passphrase-wrapped browser key and POSTed to the node — the key never leaves the browser."],
 };
 
 interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
   { name: "help",    template: "/help",       desc: "show all commands" },
+  { name: "rholang", template: "/rholang ",    desc: "run rholang on an RChain node: eval · deploy · status" },
   { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
   { name: "password", template: "/password",  desc: "password-protect your identity (+ publish to groups)" },
   { name: "login",   template: "/login ",     desc: "restore identity: /login <handle> (from group) or paste a string" },
@@ -5154,6 +5538,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: "qucalc",  template: "/qucalc ",    desc: "evaluate a RhoQuCalc twist sequence" },
   { name: "conj",    template: "/conj ",      desc: "Hermitian adjoint of a twist sequence" },
   { name: "freq",    template: "/freq ",      desc: "ZFA frequency spectrum / C(2n,n)" },
+  { name: "coupling", template: "/coupling ", desc: "shared closure, or several side by side?" },
   { name: "dump",    template: "/dump",       desc: "summary of logic shared this session" },
   { name: "lemma",   template: "/lemma ",     desc: "register / list named lemmas" },
   { name: "request", template: "/request ",   desc: "request a lemma from its holder" },

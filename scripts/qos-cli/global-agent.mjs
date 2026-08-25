@@ -12,7 +12,7 @@
 //   node global-agent.mjs --room <cap:room:… | room-URL> [--name global] [--signal <url>]
 
 import { generateCapability } from "./zfa.mjs";
-import { expandMacro, listMacros, HELP } from "./global-macros.mjs";
+import { expandGlobal, listMacros, HELP } from "./global-macros.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
 const TAG = "[global]";
@@ -95,12 +95,28 @@ export async function run(args) {
     const s = String(text ?? "").trim();
     if (!/^\/?\s*global(\s|$)/i.test(s)) return false;
     try {
-      const r = expandMacro(s);
+      const r = expandGlobal(s);
       if (r.kind === "help") { reply(HELP); return true; }
       if (r.kind === "list") { reply(listMacros()); return true; }
       if (r.kind === "result") { reply(`✓ ${r.text}`); return true; }
       if (r.kind === "rholang") {
         reply(`/global ${r.macro} → expanded (review, then sign & deploy client-side):\n\`\`\`\n${r.source}\n\`\`\``);
+        return true;
+      }
+      if (r.kind === "program") {
+        // A rholang program with %macro(…) call sites. Errors do not suppress the
+        // expansion: the user sees what expanded and what did not, together, so a
+        // typo in one call site does not hide the other five.
+        const n = r.expansions.length;
+        if (!n && !r.errors.length) { reply("no %macro(…) call sites found — `/global macros` lists them"); return true; }
+        const head = n
+          ? `/global → expanded ${n} macro${n === 1 ? "" : "s"} (${r.expansions.map((e) => `%${e.name}`).join(", ")}) — review, then sign & deploy client-side:`
+          : `/global → nothing expanded:`;
+        const errs = r.errors.length
+          ? `\n✗ ${r.errors.length} error${r.errors.length === 1 ? "" : "s"}:\n` +
+            r.errors.map((e) => `  line ${e.line}: ${e.message}`).join("\n")
+          : "";
+        reply(`${head}\n\`\`\`\n${r.source}\n\`\`\`${errs}`);
         return true;
       }
     } catch (e) {

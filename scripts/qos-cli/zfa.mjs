@@ -58,6 +58,53 @@ export function achievesZfa(tw) {
   return isCountBalanced(tw) && isPauliClosed(tw);
 }
 
+// ---- QLF's predicate: pairwise balance ----
+//
+// `achievesZfa` above conjoins Pauli closure with the AGGREGATE count
+// (count_pos == count_neg). QLF's `is_zfa` requires the stronger PAIRWISE
+// balance — the signed action vector vanishing, which is what Zero Free Action
+// names. The aggregate predicate over-accepts: at length 6 it admits 20,480
+// histories where QLF admits 5,120. It is what live room links and minted
+// identities validate against and is deliberately not narrowed; these mirror
+// `is_pairwise_balanced` / `achieves_zfa_pairwise` in crates/zfa-core so an
+// agent can tell a room which predicate a history actually passed.
+
+/** The signed action vector `(#^-#v, #>-#<, #/-#\, #+-#-)`. */
+export function signedAction(tw) {
+  const n = (t) => { let c = 0; for (const b of tw) if (b === t) c++; return c; };
+  return [
+    n(T.Up) - n(T.Down),
+    n(T.Right) - n(T.Left),
+    n(T.Slash) - n(T.BSlash),
+    n(T.Plus) - n(T.Minus),
+  ];
+}
+
+/** QLF's count balance: every conjugate pair balances on its own. */
+export function isPairwiseBalanced(tw) {
+  return signedAction(tw).every((c) => c === 0);
+}
+
+/** QLF's ZFA exactly. Strictly narrower than `achievesZfa`. */
+export function achievesZfaPairwise(tw) {
+  return isPairwiseBalanced(tw) && isPauliClosed(tw);
+}
+
+/**
+ * How many histories each predicate admits, by history length. `pairwise` is
+ * the census's own `folds.by_length[n].count` from
+ * crates/zfa-core/tests/data/census_inventory.json (QLF 54fcc9b), which
+ * tests/census_conformance.rs re-derives by brute force. `aggregate` is not a
+ * census field — it is this crate's weaker predicate, counted here by
+ * exhaustive enumeration (null where enumeration is too large to have run).
+ */
+export const CENSUS_ADMITTED = {
+  2: { aggregate: 8,     pairwise: 8,      total: 64 },
+  4: { aggregate: 384,   pairwise: 168,    total: 4096 },
+  6: { aggregate: 20480, pairwise: 5120,   total: 262144 },
+  8: { aggregate: null,  pairwise: 190120, total: 16777216 },
+};
+
 // Each byte → [pos, neg]: pos ∈ {0,2,4,6}, neg ∈ {1,3,5,7}. Always count-balanced.
 function bytesToTwists(bytes) {
   const tw = new Uint8Array(bytes.length * 2);

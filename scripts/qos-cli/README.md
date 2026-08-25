@@ -265,6 +265,16 @@ lowest-`peerId` agent that performs a duty acts, so N agents don't all greet —
 agents can't inflate the budget. Direct replies (`/facil`, `/<role> ask`) still
 come from each agent for itself.
 
+**The skeptic's verifier duty.** The room's `achieves_zfa` conjoins Pauli closure
+with *aggregate* count balance, where QLF's `is_zfa` wants every conjugate pair
+balanced on its own. The aggregate predicate over-accepts — at length 6 it admits
+20,480 histories against QLF's 5,120 — so a history can read "ZFA ✓" in the room
+and not be a QLF closure. A `--role skeptic` agent checks both predicates on every
+inbound `lemma` and `/qlf-action` / `/zfa-check` history and, when only the weaker
+one passes, says so once: the signed action vector, which conjugate pairs are off,
+and how wide the gap is at that length. Histories that pass both, or fail both, get
+no comment. Backed by `crates/zfa-core/tests/data/census_inventory.json`.
+
 **Trust-governed membership.** An agent is an ordinary trust-weighted member: the
 room governs its voice through the *same* liquid-trust primitives as humans
 (`gov.mjs` is a faithful port of the browser's `trustLevels`). It ingests
@@ -288,7 +298,11 @@ answer about the room, facilitation, or decisions (needs `--ai`); `/facil optimi
 <objective + constraints>` facilitates an annealing-style optimization round —
 proposes candidates and the next `/estimate`/`/poll` step (needs `--ai`; see
 [`Collective_Optimization.md`](../../Collective_Optimization.md)); `/facil chair
-<topic>` chairs a structured deliberation (needs `--ai`; see below); `/facil off` /
+<topic>` chairs a structured deliberation (needs `--ai`; see below); `/facil health`
+reports diagnostics for a long-running daemon — uptime, RSS, CPU, signaling/channel
+state, present peers, posts used against the budget, trust standing, and the last
+error. CPU is given both as a lifetime average and as a delta since the previous
+check, because a lifetime average hides a runaway; `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 
@@ -378,7 +392,24 @@ While connected, any peer types in the room chat:
 
 - `/global help` — usage.
 - `/global macros` — list the approved macro library.
-- `/global <macro> <args…>` — expand a macro.
+- `/global <rholang…>` — expand the `%name(…)` call sites in a rholang program.
+- `/global <macro> <args…>` — the bare form, when the whole program is one macro.
+
+**The body is rholang.** Macro call sites are written `%name(arg, …)` and expand
+in place inside an ordinary program, one line or many:
+
+```
+/global
+new ret in {
+  %ballot("Q4 budget", ["ship auth", "pay down debt"]) |
+  %directory("Q4 notes")
+}
+```
+
+The rholang is not parsed — the scanner finds call sites (skipping string
+literals and comments, balancing brackets) and passes every other byte through
+as written. Errors never abort: each carries its line, and a failed site is left
+exactly as typed.
 
 **Read macros are answered by the agent** (locally, via the ZFA engine) and the
 result is broadcast to the room:
@@ -389,13 +420,32 @@ result is broadcast to the room:
 **Write macros return a human-readable rholang preview** for the requestor to
 review and sign *client-side* (the agent never holds keys — zero-trust):
 
-- `grant 01`, `ballot lunch pizza,tacos`, `directory notes`, `mailbox inbox`,
-  `group rchain`, `delegate alice`, `transfer 10 bob`
+- proofs — `%grant(twists)`, `%fuse(subject, predicate)`
+- group decisions — `%trust(…)`, `%weights(…)`, `%tally(…)`, `%censure(…)`,
+  `%ballot(issue, options)`, `%delegate(to)`
+- bearer capabilities — `%issuer(currency)`, `%note(authority, amount)`,
+  `%redeem(…)`, `%directory(name)`, `%mailbox(name)`, `%group(name)`,
+  `%transfer(amount, to)`
+- structural patterns — `%swap(a, b, toA, toB)`, `%philosophers([names])`,
+  `%multisig(nonce, proposal, quorum)`
 
-Macros are **typed templates** (`global-macros.mjs`): arguments are structurally
-validated and interpolated (never raw string-appended), and a restricted-pattern
-guard rejects injection (`rho:io:`, `new …`, `for(`, `!*`/`*!`, …). Run
-`node global-macros.mjs --selftest` to verify.
+Macros are **typed templates**, and the registry lives in
+[`packages/browser/src/global-macros.js`](../../packages/browser/src/global-macros.js) —
+**one source shared with the browser**, so the rholang posted in chat is the
+rholang the browser signs. `global-macros.mjs` is a thin binding that supplies
+the node-side ZFA kernel. Arguments are structurally validated and interpolated:
+a string always lands inside a rholang string literal (so it cannot escape its
+position), an amount is always a BigInt of decimal digits (so the value approved
+is the value signed).
+
+Arguments are **not** content-policed, and the linter checks only that the
+expansion is well-formed. There is no forbidden rholang — capability security
+decides what a deploy can reach. Run `node global-macros.mjs --selftest` to
+verify (26 cases).
+
+Twenty macros, mirroring the `qucalc/examples/*.rho` in rchain-rust — see
+[`RChain_Macros.md`](../../RChain_Macros.md) for the full library and for running
+a local node.
 
 `run-agents.sh` launches it by default (set `NO_GLOBAL=1` to skip).
 

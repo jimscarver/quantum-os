@@ -5,7 +5,9 @@
 // browser:
 //
 //   lint   → the WASM linter (crates/zfa-core/src/lint.rs) checks the expanded
-//            code for restricted patterns before anything is signed.
+//            code is well-formed, so nobody is asked to sign something that
+//            cannot parse. It does not restrict which rholang is permitted —
+//            capability security decides what a deploy can reach.
 //   sign   → the deploy is signed with a locally-generated keypair, wrapped by a
 //            passphrase-derived AES key and stored in IndexedDB. The private key
 //            never leaves the browser.
@@ -277,169 +279,43 @@ export async function runGlobalPipeline(
 // The agent is the authority in a room with one; this is the offline fallback.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Macro expansion — the shared engine.
+//
+// The registry, validators, templates and rholang scanner live in
+// ./global-macros.js, which scripts/qos-cli/global-macros.mjs imports too.
+// This file only binds the browser's ZFA kernel to it, so the rholang a user
+// sees the agent post in chat is the same rholang this module lints and signs.
+// ---------------------------------------------------------------------------
+
+import { createMacroEngine } from "./global-macros.js";
+import { achievesZfa, isPauliClosed, parseTwists, validateCapability } from "./zfa.js";
+
+const engine = createMacroEngine({ achievesZfa, isPauliClosed, parseTwists, validateCapability });
+
+export const MACROS = engine.MACROS;
+export const listMacros = engine.listMacros;
+export const HELP = engine.HELP;
+
 export type GlobalExpansion =
-  | { kind: "help"; text: string }
-  | { kind: "list"; text: string }
-  | { kind: "result"; text: string }
+  | { kind: "help" }
+  | { kind: "list" }
+  | { kind: "result"; macro: string; text: string }
   | { kind: "rholang"; macro: string; source: string };
 
-const RESTRICTED = [
-  /rho:io:/i,
-  /rho:rchain:deployerId/i,
-  /\*\s*!/,
-  /!\s*\*/,
-  /new\s+[a-zA-Z]/i,
-  /for\s*\(/i,
-];
-
-function cleanStr(v: string, name: string): string {
-  const s = (v ?? "").trim();
-  if (!s) throw new Error(`${name}: expected a non-empty string`);
-  if (s.length > 120) throw new Error(`${name}: too long`);
-  for (const re of RESTRICTED) if (re.test(s)) throw new Error(`${name}: restricted pattern`);
-  return s;
+export interface GlobalProgram {
+  kind: "program";
+  source: string;
+  expansions: { name: string; line: number; write: boolean }[];
+  errors: { line: number; message: string }[];
 }
 
-const SYM: Record<string, number> = { "^": 0, v: 1, ">": 2, "<": 3, "/": 4, "\\": 5, "+": 6, "-": 7 };
-
-function cleanTwists(v: string, name: string): number[] {
-  const s = (v ?? "").trim().replace(/^\[|\]$/g, "");
-  if (/[^0-7\s,]/.test(s)) {
-    const out: number[] = [];
-    for (const ch of s) {
-      if (!(ch in SYM)) throw new Error(`${name}: unknown twist symbol`);
-      out.push(SYM[ch]);
-    }
-    return out;
-  }
-  const digits = s.replace(/[\s,]+/g, "");
-  if (!digits.length || !/^[0-7]+$/.test(digits)) throw new Error(`${name}: expected twist values 0..7`);
-  return [...digits].map(Number);
-}
-
-function cleanList(v: string, name: string): string[] {
-  const parts = (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  if (!parts.length) throw new Error(`${name}: expected a comma-separated list`);
-  return parts.map((p) => cleanStr(p, name));
-}
-
-const q = (s: string) => JSON.stringify(s);
-
-interface MacroDef {
-  help: string;
-  write: boolean;
-  argSpec: [string, string][];
-  run: (a: Record<string, unknown>) => string;
-}
-
-const MACROS: Record<string, MacroDef> = {
-  grant: {
-    help: "Mint a ZFA-balanced proof as a capability (rho:qucalc:grant).",
-    write: true,
-    argSpec: [["twists", "twists"]],
-    run: (a) =>
-      `// mint a ZFA proof as a capability\nnew ret in {\n  rho:qucalc:grant!([${(a.twists as number[]).join(", ")}], *ret) |\n  for (@cap <- ret) { Nil }\n}`,
-  },
-  ballot: {
-    help: "Cast a ranked-choice ballot (rho:gov:tally).",
-    write: true,
-    argSpec: [["issue", "string"], ["options", "list"]],
-    run: (a) =>
-      `// cast a ranked-choice ballot for ${q(a.issue as string)}\nnew ret in {\n  rho:gov:tally!({"issue": ${q(a.issue as string)}}, [${(a.options as string[]).map(q).join(", ")}], "ranked", *ret) |\n  for (@winner <- ret) { Nil }\n}`,
-  },
-  directory: {
-    help: "Create a capability-facet directory (rho:registry:insertArbitrary).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `// create a capability-facet directory\nnew ret in {\n  rho:registry:insertArbitrary!({"directory": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  mailbox: {
-    help: "Create a capability-facet inbox (rho:registry:insertArbitrary).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `// create a capability-facet inbox\nnew ret in {\n  rho:registry:insertArbitrary!({"mailbox": ${q(a.name as string)}}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  group: {
-    help: "Create a governance group (deployer becomes admin).",
-    write: true,
-    argSpec: [["name", "string"]],
-    run: (a) =>
-      `// create a governance group — the deployer becomes admin\nnew ret in {\n  rho:registry:insertArbitrary!({"group": ${q(a.name as string)}, "admin": *deployerId}, *ret) |\n  for (@uri <- ret) { Nil }\n}`,
-  },
-  delegate: {
-    help: "Delegate your vote to another member (rho:gov:resolveWeights).",
-    write: true,
-    argSpec: [["to", "string"]],
-    run: (a) =>
-      `// self-signed delegation (signer = *deployerId)\nnew ret in {\n  rho:gov:resolveWeights!([*deployerId], {*deployerId: ${q(a.to as string)}}, {}, *ret) |\n  for (@weights <- ret) { Nil }\n}`,
-  },
-  transfer: {
-    help: "Transfer REV to an address (rho:rchain:revVault).",
-    write: true,
-    argSpec: [["amount", "int"], ["to", "string"]],
-    run: (a) =>
-      `// REV transfer (requires the rev-vault capability)\nnew ret in {\n  rho:rchain:revVault!("transfer", ${a.amount as number}, ${q(a.to as string)}, *ret) |\n  for (@r <- ret) { Nil }\n}`,
-  },
-};
-
+/** Expand a bare single macro — the whole program is one macro. */
 export function expandGlobalMacro(line: string): GlobalExpansion {
-  const body = (line ?? "").trim().replace(/^\/?\s*global\s*/i, "");
-  const tokens = body.split(/\s+/).filter(Boolean);
-  if (!tokens.length) return { kind: "help", text: "usage: /global <macro> <args…>  (or /global help|macros)" };
-  const name = tokens[0].toLowerCase();
-  const rest = tokens.slice(1);
+  return engine.expandGlobal(line) as GlobalExpansion;
+}
 
-  if (name === "help") {
-    return {
-      kind: "help",
-      text:
-        "RChain capability macros — /global\n" +
-        "  /global help            this help\n" +
-        "  /global macros          list the approved macro library\n" +
-        "  /global <macro> <args>  expand (writes: rholang preview to sign; reads: result)",
-    };
-  }
-  if (name === "macros" || name === "list") {
-    const rows = Object.entries(MACROS).map(
-      ([m, d]) => `  ${m.padEnd(10)} ${d.write ? "write" : "read "}  ${d.help}`
-    );
-    return { kind: "list", text: `Approved macros (${rows.length}):\n${rows.join("\n")}` };
-  }
-  if (name === "zfa") {
-    return { kind: "result", text: `local read — use /qucalc ${rest.join(" ")} (or /zfa-check) to verify ZFA` };
-  }
-  if (name === "verify") {
-    return { kind: "result", text: `local read — use /zfa ${rest.join(" ") || "<token>"} to validate a capability` };
-  }
-
-  const macro = MACROS[name];
-  if (!macro) throw new Error(`unknown macro ${JSON.stringify(name)} — try /global macros`);
-
-  const args: Record<string, unknown> = {};
-  const spec = macro.argSpec;
-  if (rest.length < spec.length) {
-    const missing = spec.slice(rest.length).map(([n, t]) => `${n}:${t}`).join(", ");
-    throw new Error(`${name}: missing args — ${missing}`);
-  }
-  if (rest.length > spec.length) throw new Error(`${name}: too many args (expected ${spec.length})`);
-  for (let i = 0; i < spec.length; i++) {
-    const [argName, type] = spec[i];
-    const raw = rest[i];
-    switch (type) {
-      case "string": args[argName] = cleanStr(raw, argName); break;
-      case "twists": args[argName] = cleanTwists(raw, argName); break;
-      case "list": args[argName] = cleanList(raw, argName); break;
-      case "int": {
-        const n = Number(raw);
-        if (!Number.isInteger(n) || n < 0) throw new Error(`${argName}: expected a non-negative integer`);
-        args[argName] = n;
-        break;
-      }
-      default: throw new Error(`${name}: internal — unknown arg type ${type}`);
-    }
-  }
-
-  return { kind: "rholang", macro: name, source: macro.run(args) };
+/** Expand every `%macro(…)` call site in a rholang program. */
+export function expandGlobalProgram(src: string): GlobalProgram {
+  return engine.expandProgram(src) as GlobalProgram;
 }
