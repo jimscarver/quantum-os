@@ -1,5 +1,23 @@
 # RChain capability macros — `/global`
 
+> **Deprecated — being rewritten.**
+>
+> `/global` predates [`/rholang`](CLAUDE.md#slash-commands-appts-handlecommand),
+> and assumes a command line where what a user actually wants to send a node is a
+> program. `/rholang eval` and `/rholang deploy` now take rholang directly — every
+> line you type until an empty one — wrapped in `new return, stdout, zfa, grant,
+> verify, fuse in { … }`, so the connectors are already in scope and there is
+> somewhere to report to.
+>
+> The macros stay for now and still expand, but they are a preliminary
+> implementation and the library will be redesigned around programs rather than
+> argument lists. **Prefer `/rholang`.** Two limits to know while it lasts: the
+> browser signs deploys correctly (secp256k1 over the node's own DeployData
+> encoding) but a local node cannot execute them yet — see
+> [rchain-rust#3](https://github.com/rchain-community/rchain-rust/issues/3) — and
+> macros expand to standalone programs, so embedding one mid-expression yields
+> rholang the linter rejects.
+
 `/global` takes a rholang program, expands the macro call sites in it, and hands
 the result to your browser to lint, sign and deploy to an RChain node. The room
 agent does the expanding; **your browser does the signing, and the key never
