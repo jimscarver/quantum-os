@@ -14,26 +14,17 @@
 #                        on a validating node unless dev mode is on. It does not
 #                        affect block production — measured, both ways.
 #
-# NOT set: --min-phlo-price 0. It looks like the way around the pre-charge
-# problem below, since at price 0 the charge is zero and pre_charge returns
-# before it looks at any balance. But it breaks block production outright: every
-# propose then fails with "Validation of self created block failed with reason:
-# InvalidStateHash". Measured on a fresh genesis, one flag apart — plain flags
-# produce blocks, adding --min-phlo-price 0 produces none.
+# NOT set: --min-phlo-price 0. At price 0 the charge is zero and pre_charge
+# returns before it looks at any balance, which makes it look like a shortcut. It
+# is not: block production then fails outright, every propose ending in
+# "Validation of self created block failed with reason: InvalidStateHash".
+# Measured on a fresh genesis, one flag apart — plain flags produce blocks,
+# adding --min-phlo-price 0 produces none.
 #
-# KNOWN BROKEN, upstream in rchain-rust: a deploy is pre-charged
-# phloLimit x phloPrice against the deployer's REV vault, and nothing ever seeds
-# that vault. Genesis funds the *rholang* RevVault contract
-# (casper/src/genesis/contracts.rs, rev_generator_code, writing into its
-# TreeHashMap) while pre_charge reads the node's *native* vault state
-# (rholang/src/native_state.rs). Two different stores. `set_vault_balance` is
-# called from pre_charge, refund, deposit and the unit tests, and from nowhere
-# else — so no address on any chain has a native balance, and every deploy stops
-# at "preCharge: insufficient funds (0 < ...)".
-#
-# wallet.txt is correct and will fund these keys the moment genesis seeds native
-# vaults. Until then a deploy is signed, accepted and lands in a block having
-# executed nothing, and `/rholang eval` is the working path.
+# wallet.txt funds the keys in pk.txt, and genesis seeds those balances into the
+# node's native vault state, so a deploy from either key is pre-charged and
+# executes. Both `/rholang eval` and `/rholang deploy` reach the qucalc
+# powerbox — verified against rchain-rust dev f3f4759e9.
 set -euo pipefail
 cd "$(dirname "$0")"
 

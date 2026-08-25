@@ -15,11 +15,12 @@
 // is not used here.
 //
 // LIMIT OF `eval`: exploratory deploy runs against already-finalized state in a
-// read-only sandbox, and the node's *system processes do not run there*. Pure
-// rholang evaluates and returns values; `rho:qucalc:*`, `rho:gov:*`,
-// `rho:registry:*` and `rho:rchain:*` all yield nothing. Reaching those means
-// `deploy`. The node must also allow exploratory deploy at all: it answers only
-// when run as a read-only observer or with `--dev-mode`.
+// read-only sandbox. Pure rholang and the qucalc powerbox both return values
+// there. What it cannot give you is a deploy's own identity — `rho:rchain:deployId`
+// and `rho:rchain:deployerId` are unbound, an exploratory deploy having no deploy
+// to name — and a registry lookup of an unregistered uri simply never answers.
+// The node must also allow exploratory deploy at all: it answers only when run as
+// a read-only observer or with `--dev-mode`.
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { blake2b } from "@noble/hashes/blake2.js";

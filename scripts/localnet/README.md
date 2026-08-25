@@ -51,36 +51,44 @@ address = base58(payload ++ first 4 bytes of blake2b256(payload))
 Checked against rchain-rust's own devnet key, which derives to the address its
 `tools/devnet.sh` publishes.
 
-## What works, and what does not
+## What works
 
-**`/rholang eval` works.** It runs the program in a read-only sandbox over
-finalized state and hands back whatever reached `return`.
+Verified against rchain-rust `dev` at `f3f4759e9`.
 
-Two things it cannot do. The node refuses exploratory deploy unless it is a
-read-only observer or in `--dev-mode`, which is why `run-node.sh` sets that flag.
-And the node does not run its **system processes** in that sandbox: pure rholang
-returns values, but `rho:qucalc:*`, `rho:gov:*`, `rho:registry:*` and
-`rho:rchain:*` yield nothing. The names bind — the wrapper declares them — the
-processes simply never reply. Reaching those means a deploy.
-
-**`/rholang deploy` signs correctly and executes nothing.** The signature is
-right: the node verifies a secp256k1 signature over blake2b256 of the protobuf
-encoding of `DeployDataProto`, and it answers `Success!`. The deploy lands in a
-block. It then fails at pre-charge, every time, on every key:
+**`/rholang eval` works**, including the powerbox. It runs the program in a
+read-only sandbox over finalized state and hands back whatever reached `return`,
+and the system processes answer there:
 
 ```
-errored=True  cost=0  preCharge: insufficient funds (0 < 500000)
+new return, zfa(`rho:qucalc:zfa`) in { zfa!([0,1], *return) }
+  -> (true, -1)
 ```
 
-Genesis funds the **rholang RevVault contract**; pre-charge reads the node's
-**native vault state**. Two separate stores, and nothing bridges them —
-`set_vault_balance` is called from `pre_charge`, `refund`, `deposit` and the unit
-tests, and from nowhere else. So no address on any chain has a native balance.
+One flag earns its place here: the node refuses exploratory deploy unless it is a
+read-only observer or in `--dev-mode`, which is why `run-node.sh` sets it.
 
-Setting `--min-phlo-price 0` looks like the way out, since `pre_charge` returns
-immediately when the charge is zero. It is not: block production then fails with
-`InvalidStateHash` on every propose. Measured on a fresh genesis, one flag apart.
+**`/rholang deploy` executes and is charged.** The node verifies a secp256k1
+signature over blake2b256 of the protobuf encoding of `DeployDataProto`, answers
+`Success!`, and the deploy lands in a block having run:
 
-**The fix is upstream**, in rchain-rust: seed the native vault from the genesis
-vaults, so `wallet.txt` means what it says. Until then, `eval` is the working
-path and a deploy is a signed no-op.
+```
+errored=False  cost=1486
+```
+
+A deploy's `return` is unforgeable and the deploy is over by the time anyone
+asks, so the wrapper forwards every value onto a public name. Read it back with
+`/api/data-at-name-by-block-hash` against the newest block — which is what
+`readResults` in `packages/browser/src/rholang.ts` does:
+
+```
+zfa!([2,3,0,1])    -> (true, 1)
+grant!([2,3,0,1])  -> rho:id:wyncu1hpry1gwfq6hoc1kwezkpycwddk51monimmknu4c6azhi9o
+```
+
+Restarting on a chain that already holds an executed deploy is fine — drop the
+`--fresh` and it reconnects to its own state, and further deploys still reach the
+powerbox.
+
+**Note the API wants JSON.** `POST /api/explore-deploy` rejects a `text/plain`
+body with *"Expected request with `Content-Type: application/json`"*; the term
+goes up as a JSON string. `rholang.ts` already does this.

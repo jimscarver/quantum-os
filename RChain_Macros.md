@@ -11,12 +11,9 @@
 >
 > The macros stay for now and still expand, but they are a preliminary
 > implementation and the library will be redesigned around programs rather than
-> argument lists. **Prefer `/rholang`.** Two limits to know while it lasts: the
-> browser signs deploys correctly (secp256k1 over the node's own DeployData
-> encoding) but a local node cannot execute them yet — see
-> [rchain-rust#3](https://github.com/rchain-community/rchain-rust/issues/3) — and
-> macros expand to standalone programs, so embedding one mid-expression yields
-> rholang the linter rejects.
+> argument lists. **Prefer `/rholang`.** One limit to know while it lasts: macros
+> expand to standalone programs, so embedding one mid-expression yields rholang
+> the linter rejects.
 
 `/global` takes a rholang program, expands the macro call sites in it, and hands
 the result to your browser to lint, sign and deploy to an RChain node. The room

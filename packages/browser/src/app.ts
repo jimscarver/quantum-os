@@ -1619,9 +1619,10 @@ const RHOLANG_HELP = [
   "  /rholang phlo <limit> [price] — what a deploy may spend",
   "  /rholang key generate|<hex>|show|forget — the secp256k1 deploy key (this browser only)",
   "",
-  "  eval runs in a read-only sandbox over finalized state, where the node does not",
-  "  run its system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*,",
-  "  rho:registry:* and rho:rchain:* yield nothing. Reaching those means deploy.",
+  "  eval runs in a read-only sandbox over finalized state. Pure rholang and the",
+  "  qucalc powerbox both return values there. What it cannot reach is a deploy's",
+  "  own identity — rho:rchain:deployId and deployerId are unbound, since an",
+  "  exploratory deploy is not a deploy. Those need deploy.",
 ];
 
 interface RholangCapture { mode: "eval" | "deploy"; lines: string[] }
@@ -3943,8 +3944,8 @@ function handleCommand(raw: string): string[] {
           sys("");
           for (const l of powerboxSpec("deploy")) sys("  " + l);
           sys("");
-          sys("Under eval the system processes bind but never reply — only pure rholang");
-          sys("returns values there. A call that must answer needs deploy.");
+          sys("These answer under eval too. What eval cannot give you is a deploy's own");
+          sys("identity — rho:rchain:deployId and deployerId are unbound there.");
           break;
         }
 
@@ -5519,7 +5520,7 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
     "eval and deploy read the program from the lines you type after the command — end with an empty line to run it, /cancel to discard.",
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
-    "eval runs read-only over finalized state, where the node does not run system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*, rho:registry:* and rho:rchain:* yield nothing. Those need deploy.",
+    "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],
   global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library.", "Deprecated, pending a redesign around programs rather than argument lists — prefer /rholang, which takes rholang directly and owns the node setting (/rholang node <url>).", "Expansions are linted (WASM), previewed, then signed with your browser-held secp256k1 key and POSTed to the node — the key never leaves the browser."],
 };
