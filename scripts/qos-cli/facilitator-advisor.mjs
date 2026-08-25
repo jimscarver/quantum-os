@@ -48,6 +48,10 @@ command answers the question, name the exact command. You know:
   unless someone runs a headless memory daemon. Each room is its own tab; \`/room\` lists/joins/leaves rooms.
 - KERNEL COMMANDS (the QLF math): \`/qucalc\`, \`/braket\`, \`/zfa\` (check a twist history), \`/coupling\` (was the room's closure shared, or several side by side?), \`/conj\`
   (Hermitian adjoint), \`/lemma [name] <twists>\` to name a verified closure, then \`@name\` to reuse it.
+- REACHING A CHAIN: \`/rholang eval\` runs a rholang program on an RChain node and reads values back;
+  \`/rholang deploy\` signs and submits one; \`/rholang status\` reports the node. Both take the program from the
+  lines typed after the command, ending with an empty line. \`/rholang powerbox\` lists the connectors already in
+  scope (stdout, zfa, grant, verify, fuse). \`/global\` (macro expansion) is deprecated in its favour.
 - MESSAGING & SHARING: plain text is chat; \`/channel listen|send <name> <text>\` are tagged channels;
   \`/share <selector> to <room>\` copies a lemma/note/chat into another of your tabs. Across separate rooms,
   a headless "room bridge" (scripts/qos-cli/bridge.mjs) relays channels, chat, lemmas, and governance.

@@ -1743,7 +1743,7 @@ function handleCommand(raw: string): string[] {
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
       sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · status · config (multi-line, end with a blank line)");
-      sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros · node <url> (lint→sign→deploy)");
+      sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros (deprecated — prefer /rholang)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
@@ -3834,8 +3834,8 @@ function handleCommand(raw: string): string[] {
       const g = arg.trim();
       if (g.startsWith("node ")) {
         const url = g.slice(5).trim();
-        localStorage.setItem("qos-node-url", url);
-        sys(`✓ deploy node set to ${url}`);
+        saveNodeConfig({ ...loadNodeConfig(), url });
+        sys(`✓ deploy node set to ${url}  (this is /rholang's node setting — one target, not two)`);
         break;
       }
       try {
@@ -3867,10 +3867,10 @@ function handleCommand(raw: string): string[] {
           title = `/global → expanded ${p.expansions.length} macro${p.expansions.length === 1 ? "" : "s"} (${names})`
                 + `${p.errors.length ? `, ${p.errors.length} left unexpanded` : ""} — review, then sign & deploy:`;
         }
-        const nodeUrl = localStorage.getItem("qos-node-url") ?? "http://127.0.0.1:40403";
+        const nodeUrl = loadNodeConfig().url;
         sys(title);
         for (const l of source.split("\n")) sys("  " + l);
-        sys(`target node: ${nodeUrl}  (change with /global node <url>)`);
+        sys(`target node: ${nodeUrl}  (change with /rholang node <url>)`);
         void (async () => {
           const lint = await lintRholang(source);
           if (!lint.ok) {
@@ -5521,7 +5521,7 @@ const CMD_HELP: Record<string, string[]> = {
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state, where the node does not run system processes: pure rholang returns values, but rho:qucalc:*, rho:gov:*, rho:registry:* and rho:rchain:* yield nothing. Those need deploy.",
   ],
-  global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library. · /global node <url> — set the deploy target (default http://127.0.0.1:40403).", "Writes are linted (WASM), previewed, then signed with your passphrase-wrapped browser key and POSTed to the node — the key never leaves the browser."],
+  global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library.", "Deprecated, pending a redesign around programs rather than argument lists — prefer /rholang, which takes rholang directly and owns the node setting (/rholang node <url>).", "Expansions are linted (WASM), previewed, then signed with your browser-held secp256k1 key and POSTed to the node — the key never leaves the browser."],
 };
 
 interface SlashCmd { name: string; template: string; desc: string }
