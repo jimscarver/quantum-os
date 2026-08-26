@@ -799,6 +799,9 @@ export async function run(args) {
       log: (m) => console.log(`${TAG} ${m}`),
       warn: (m) => console.warn(`${TAG} ${m}`),
       verbose: args.verbose,
+      // announceName already sends ours, and it carries `agent: <role>` — the
+      // field the browser badges as an AI peer, and drops the badge without.
+      serveName: false,
     });
     console.log(`${TAG} carrying room memory — ${mem.summary()} loaded  state=${memDir}`);
   }

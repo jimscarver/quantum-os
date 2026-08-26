@@ -61,7 +61,7 @@ const termsHash8 = (text) => {
  * into its peer: serve on channel-open, ingest on message, transcribe, and a
  * flush for shutdown.
  */
-export function openRoomMemory({ roomId, stateDir, myName, signedSend, log = console.log, warn = console.warn, verbose = false, seedLemmas = [] }) {
+export function openRoomMemory({ roomId, stateDir, myName, signedSend, log = console.log, warn = console.warn, verbose = false, seedLemmas = [], serveName = true }) {
   const roomHex = roomId.replace(/^cap:room:/, "");
   const roomDir = path.join(stateDir, "rooms", roomHex);
   const lemmasPath = path.join(roomDir, "lemmas.json");
@@ -107,7 +107,12 @@ const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: tru
 
 function serveStateTo(peerId) {
   log(`serving state to ${peerId.slice(0, 12)}…`);
-  signedSend(peerId, { kind: "name", name: myName });
+  // Only announce a name when the carrier has no announce of its own. A role
+  // agent's announce carries `agent: <role>`, which is what puts the 🤖 AI badge
+  // on it in the browser — and the browser CLEARS that badge on any name
+  // envelope without the field. So a bare name from here would silently strip
+  // the marker off the very agent that sent it.
+  if (serveName) signedSend(peerId, { kind: "name", name: myName });
   signedSend(peerId, { kind: "sync-lemmas", entries: [...lemmas.entries()].map(([name, e]) => ({ name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap })) });
   signedSend(peerId, { kind: "sync-currencies", entries: [...currencies.values()] });
   if (seriesTerms.size) signedSend(peerId, { kind: "sync-series", entries: [...seriesTerms.values()] });
