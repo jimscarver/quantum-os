@@ -10,9 +10,7 @@ Then, in the browser:
 ```
 /rholang node http://127.0.0.1:40403
 /rholang status
-/rholang eval
-return!(6 * 7)
-                             ← empty line runs it
+/rholang eval                ← opens the editor; Ctrl+Enter runs it
 ```
 
 Ports: **40401** deploy gRPC · **40402** eval/propose gRPC · **40403** HTTP (what

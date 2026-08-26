@@ -23,6 +23,7 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
+import { openRholangEditor } from "./rholang-editor.js";
 import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
@@ -1592,13 +1593,13 @@ function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"):
 }
 
 // ---------------------------------------------------------------------------
-// /rholang — multi-line program capture
+// /rholang — the program editor
 //
 // A rholang program is not a command line: it has newlines, braces and quotes,
-// and a chat input takes one line at a time. So `/rholang eval` and
-// `/rholang deploy` open a capture: every line typed after them is program text
-// until an empty line, which runs it. That is the only terminator — there is
-// nothing to escape and nothing to quote.
+// and a chat input takes one line at a time with Enter meaning "send". So
+// `/rholang eval` and `/rholang deploy` open an editor — highlighted, linted as
+// you type, with somewhere to put the indentation. A program passed inline
+// (`/rholang eval return!(42)`) skips it and runs as typed.
 // ---------------------------------------------------------------------------
 
 const RHOLANG_HELP = [
@@ -1609,8 +1610,9 @@ const RHOLANG_HELP = [
   "  /rholang status        — what the node is: version, shard, height, phlo floor.",
   "  /rholang powerbox      — the names every program gets, and what each one takes.",
   "",
-  "  eval and deploy take the program from the lines you type next.",
-  "  End with an empty line to run it, or type /cancel to throw it away.",
+  "  eval and deploy open an editor: syntax-highlighted, linted as you type,",
+  "  Ctrl+Enter to run, Esc to cancel. Open a .rho from disk, or drop one in.",
+  "  A program written inline — /rholang eval return!(42) — runs as typed.",
   "",
   "  Configuration:",
   "  /rholang config               — show all of it",
@@ -1625,27 +1627,32 @@ const RHOLANG_HELP = [
   "  exploratory deploy is not a deploy. Those need deploy.",
 ];
 
-interface RholangCapture { mode: "eval" | "deploy"; lines: string[] }
-let rholangCapture: RholangCapture | null = null;
-
-function startRholangCapture(mode: "eval" | "deploy", seed: string, sys: (t: string) => void): void {
-  rholangCapture = { mode, lines: seed ? [seed] : [] };
-  sys(mode === "eval"
-    ? "rholang to evaluate — type the program, then an empty line to run it (/cancel to abort):"
-    : "rholang to deploy — type the program, then an empty line to sign and submit it (/cancel to abort):");
-  if (seed) sys("  " + seed);
-  sys(`in scope: return, ${powerboxNames(mode).join(", ")}`);
-  sys("  /rholang powerbox — what each one takes and returns");
+/**
+ * Open the editor, then run what it gives back.
+ *
+ * A program is not one line of chat: it needs room, indentation, and a way to
+ * see its own shape. The editor owns the text; this owns lint-and-run.
+ */
+function editRholang(mode: "eval" | "deploy", seed: string): void {
+  const cfg = loadNodeConfig();
+  void (async () => {
+    const source = await openRholangEditor({
+      mode,
+      seed,
+      scope: ["return", ...powerboxNames(mode)],
+      nodeUrl: cfg.url,
+      lint: lintRholang,
+    });
+    if (source === null) { addMessage("", "cancelled — nothing run", "system"); return; }
+    runRholangProgram(mode, source);
+  })();
 }
 
-/** Run whatever the capture collected. */
-function finishRholangCapture(): void {
-  const cap = rholangCapture;
-  rholangCapture = null;
-  if (!cap) return;
-  const source = cap.lines.join("\n").trim();
+/** Lint, then evaluate or sign-and-deploy. */
+function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   const say = (t: string) => addMessage("", t, "system");
-  if (!source) { say("nothing typed — cancelled"); return; }
+  if (!source.trim()) { say("nothing typed — cancelled"); return; }
+  for (const l of source.split("\n")) say("  " + l);
 
   const cfg = loadNodeConfig();
   void (async () => {
@@ -1658,7 +1665,7 @@ function finishRholangCapture(): void {
       return;
     }
 
-    if (cap.mode === "eval") {
+    if (mode === "eval") {
       say("evaluating on " + cfg.url + "…");
       try {
         const r = await evalTerm(cfg, source);
@@ -3934,7 +3941,11 @@ function handleCommand(raw: string): string[] {
 
         case "eval":
         case "deploy": {
-          startRholangCapture(sub, rest, sys);
+          // A program given inline runs as typed — that keeps `/rholang eval
+          // return!(42)` scriptable. With nothing after the verb, open the
+          // editor rather than printing help at someone who asked to write code.
+          if (rest) runRholangProgram(sub, rest);
+          else editRholang(sub, "");
           break;
         }
 
@@ -5170,24 +5181,6 @@ function connect(): void {
 // ---------------------------------------------------------------------------
 
 function send(): void {
-  // A rholang capture is in progress: every line is program text, an empty line
-  // runs it. Checked before anything else — indentation is significant to read,
-  // a leading slash is legal rholang-adjacent text, and no peer is needed to
-  // talk to a node.
-  if (rholangCapture) {
-    const line = msgInput.value.replace(/\s+$/, "");
-    msgInput.value = "";
-    if (line.trim() === "") { finishRholangCapture(); return; }
-    if (line.trim().toLowerCase() === "/cancel") {
-      rholangCapture = null;
-      addMessage("", "cancelled — nothing run", "system");
-      return;
-    }
-    rholangCapture.lines.push(line);
-    addMessage("", "  " + line, "self");
-    return;
-  }
-
   const text = msgInput.value.trim();
   if (!text || !qpeer) return;
   pushHistory(text);
@@ -5518,7 +5511,7 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang eval — run a rholang program on the node and read the result back. Nothing is signed, nothing stored, no block.",
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
-    "eval and deploy read the program from the lines you type after the command — end with an empty line to run it, /cancel to discard.",
+    "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk or accept one dropped on it. A program written inline — /rholang eval return!(42) — runs as typed.",
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],
