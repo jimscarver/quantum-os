@@ -230,7 +230,9 @@
       line-height: 1.5;
     }
     .msg .from { color: #7fdbca; margin-right: 0.5rem; }
-    .msg .from.system { color: #666; }
+    .msg .from.system { color: #666; user-select: none; }
+    /* The gutter mark is generated content, so it is drawn but never copied. */
+    .msg .from.system::before { content: "\00B7"; }
     .msg .from.self { color: #ff9d4a; }
     .msg .text { color: #ccc; }
     .msg.system-line .text { color: #bbb; }

@@ -783,7 +783,11 @@ function renderChatLine(line: ChatLine): void {
   }
   const fromEl = document.createElement("span");
   fromEl.className = `from ${line.kind}`;
-  fromEl.textContent = line.kind === "system" ? "·"
+  // A system line's "·" is a gutter mark, not content: it comes from CSS
+  // (.from.system::before) so that selecting a run of system lines and copying
+  // them yields the text alone. It used to be textContent, which put a "·" in
+  // front of every line of anything copied out of the transcript.
+  fromEl.textContent = line.kind === "system" ? ""
                      : line.kind === "self"   ? (myName || "you")
                      : (line.label ?? shortId(line.from));
   const textEl = document.createElement("span");
@@ -1659,7 +1663,12 @@ function editRholang(mode: "eval" | "deploy", seed: string): void {
 function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   const say = (t: string) => addMessage("", t, "system");
   if (!source.trim()) { say("nothing typed — cancelled"); return; }
-  for (const l of source.split("\n")) say("  " + l);
+  // Echo the program as one fenced block, not a row per line. A row per line
+  // put the system gutter's "·" in front of every line of the copy, and ran
+  // each line through the markdown renderer, whose `*…*` emphasis rule eats
+  // rholang's `*` dereference on any line holding two of them. What is echoed
+  // has to be what you can paste back and run.
+  say("```\n" + source + "\n```");
 
   const cfg = loadNodeConfig();
   void (async () => {
@@ -3960,7 +3969,7 @@ function handleCommand(raw: string): string[] {
         case "names": {
           sys("declared for you in every program — send to these, read the answer on return:");
           sys("");
-          for (const l of powerboxSpec("deploy")) sys("  " + l);
+          sys("```\n" + powerboxSpec("deploy").join("\n") + "\n```");
           sys("");
           sys("These answer under eval too. What eval cannot give you is a deploy's own");
           sys("identity — rho:rchain:deployId and deployerId are unbound there.");
