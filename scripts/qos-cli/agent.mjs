@@ -26,6 +26,7 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { QOSPeer } from "./qospeer.mjs";
+import { openRoomMemory, MEMORY_SIGNED_KINDS } from "./room-memory.mjs";
 import { generateCapability, validateCapability, parseTwists,
          achievesZfa, achievesZfaPairwise, signedAction, CENSUS_ADMITTED } from "./zfa.mjs";
 import { newDynCapState, signEnvelope, serializeState, deserializeState } from "./dyncap.mjs";
@@ -34,7 +35,11 @@ import { ROLES, DEFAULT_ROLE, resolveRole, dutiesOf } from "./agent-roles.mjs";
 import { trustLevels, discreditedMembers, isMember, groupHasRatings, normalizeGroup, TRUST_MAX } from "./gov.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
+// "name" is always signed. When this agent carries the room's memory
+// (--persist), the state it re-serves must be signed too or receiving peers
+// will not trust it — see MEMORY_SIGNED_KINDS in room-memory.mjs.
 const SIGNED_KINDS = new Set(["name"]);
+const PERSIST_SIGNED_KINDS = new Set(["name", ...MEMORY_SIGNED_KINDS]);
 
 const USAGE = `qos agent — measured, trust-governable room-agent daemon
 
@@ -47,6 +52,10 @@ Options:
   --name <s>         Display name (default: the role name).
   --signal <url>     Signaling server (default: ${DEFAULT_SIGNAL}).
   --state <dir>      State directory (default: ./.qos-agent).
+  --persist [dir]    Carry the room's memory: persist lemmas/currencies/series/
+                     gov/transcript and re-serve them to every joiner, the duty
+                     qos-daemon.mjs performs standalone. Costs one fewer peer
+                     against the signaling room-size ceiling. Defaults to --state.
   --budget <n>       Max posts per 5-min window (default: 4).
   --silent-min <m>   Minutes of silence before soliciting a quiet member (default: 6).
   --quiet            Less assertive (halves budget, longer cooldowns).
@@ -78,6 +87,7 @@ export function parseArgs(argv) {
     else if (x === "--name") a.name = argv[++i];
     else if (x === "--signal") a.signal = argv[++i];
     else if (x === "--state") a.state = argv[++i];
+    else if (x === "--persist") a.persist = argv[++i] ?? "";
     else if (x === "--budget") a.budget = Number(argv[++i]);
     else if (x === "--silent-min") a.silentMin = Number(argv[++i]);
     else if (x === "--quiet") a.quiet = true;
@@ -524,6 +534,20 @@ export async function run(args) {
     return false;
   }
 
+  // ---- the room's memory, if this agent is carrying it ----
+  //
+  // A room is p2p: its state lives in the browsers in it and dies with the last
+  // one. --persist makes this agent the peer that keeps it — the same duty
+  // qos-daemon.mjs performs alone, folded in here so it costs no extra peer
+  // against the signaling server's room-size ceiling (see run-agents.sh).
+  //
+  // Deliberately NOT gated on lead election: duties like greeting are lead-only
+  // so N agents don't all greet at once, but state must be served by whoever
+  // holds it, every time, or a joiner gets nothing.
+  const memDir = args.persist === "" ? stateDir : args.persist;
+  let mem = null;
+  const signedKinds = memDir ? PERSIST_SIGNED_KINDS : SIGNED_KINDS;
+
   const peer = new QOSPeer({
     signalingUrl: args.signal, roomId, peerId: identity.peerId,
     onSignalingOpen: () => console.log(`${TAG} signaling connected; joined room`),
@@ -532,15 +556,15 @@ export async function run(args) {
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
     onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); nameAnnouncedAt.delete(id); },
     onError: (e) => noteError("peer", e),
-    onChannelOpen: (id) => onChannelOpen(id),
-    onMessage: (from, d) => onMessage(from, d),
+    onChannelOpen: (id) => { onChannelOpen(id); mem?.serveStateTo(id); },
+    onMessage: (from, d) => { onMessage(from, d); void mem?.ingest(from, d); },
   });
 
   let signQueue = Promise.resolve();
   function signedSend(target, env) {
     signQueue = signQueue.then(async () => {
       const out = { ...env };
-      if (SIGNED_KINDS.has(env.kind)) { try { out.dyncap = await signEnvelope(dyncapState, roomId, env); saveIdentity(); } catch (e) { console.error(`${TAG} sign failed:`, e?.message ?? e); } }
+      if (signedKinds.has(env.kind)) { try { out.dyncap = await signEnvelope(dyncapState, roomId, env); saveIdentity(); } catch (e) { console.error(`${TAG} sign failed:`, e?.message ?? e); } }
       peer.send(target, out);
     }).catch((e) => console.error(`${TAG} send error:`, e?.message ?? e));
     return signQueue;
@@ -613,7 +637,7 @@ export async function run(args) {
     if (args.verbose) console.log(`${TAG} ⇐ ${short(from)}… ${JSON.stringify(d).slice(0, 160)}`);
     switch (d.kind) {
       case "name":
-        if (typeof d.name === "string") { peerNames.set(from, d.name); const r = (known[from] ??= { firstSeen: Date.now() }); r.name = d.name; saveKnown(); }
+        if (typeof d.name === "string") { peerNames.set(from, d.name); mem?.setPeerName(from, d.name); const r = (known[from] ??= { firstSeen: Date.now() }); r.name = d.name; saveKnown(); }
         if (typeof d.agent === "string") agents.set(from, d.agent.toLowerCase());
         introduceTo(from);   // a human just identified → self-introduce (skips agents/dups)
         if (!isAgentPeer(from) && !hasName(from)) setTimeout(() => maybeNamePrompt(from), 3_000);   // joined nameless → prompt
@@ -768,10 +792,21 @@ export async function run(args) {
   }
   const timer = setInterval(() => tick().catch((e) => noteError("tick", e)), TICK_MS);
 
+  if (memDir) {
+    mem = openRoomMemory({
+      roomId, stateDir: memDir, myName,
+      signedSend: (t, e) => signedSend(t, e),
+      log: (m) => console.log(`${TAG} ${m}`),
+      warn: (m) => console.warn(`${TAG} ${m}`),
+      verbose: args.verbose,
+    });
+    console.log(`${TAG} carrying room memory — ${mem.summary()} loaded  state=${memDir}`);
+  }
+
   peer.connect();
   console.log(`${TAG} running as "${myName}" [role=${role.name}]  budget=${MAX_POSTS}/5min  min-gap=${Math.round(MIN_GAP_MS / 1000)}s  silent=${Math.round(SILENT_MS / 60000)}min  AI=${advisor.enabled ? advisor.model : "off"}. Ctrl-C to stop.`);
 
-  const shutdown = () => { console.log(`\n${TAG} shutting down…`); try { clearInterval(timer); saveIdentity(); saveKnown(); } catch {} try { peer.disconnect(); } catch {} setTimeout(() => process.exit(0), 200); };
+  const shutdown = () => { console.log(`\n${TAG} shutting down…`); try { clearInterval(timer); saveIdentity(); saveKnown(); mem?.flush(); } catch {} try { peer.disconnect(); } catch {} setTimeout(() => process.exit(0), 200); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }

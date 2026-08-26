@@ -30,10 +30,17 @@
 #
 # The failing case also churns: `peer: rate limit exceeded`, then a signaling
 # drop, then a rejoin that re-sends the whole peers list and trips the limit
-# again. So the defaults here stay small and slow: one role, facilitator, plus the
-# memory daemon started below — three peers with one browser — and a stagger long
-# enough that the joins do not arrive as a burst. NO_MEMORY=1 drops that to two if
-# you need more room for roles.
+# again. So the defaults here stay small and slow: facilitator and skeptic, with
+# the room's memory carried by the first of them rather than run as its own peer
+# — three peers with one browser — and a stagger long enough that the joins do
+# not arrive as a burst.
+#
+# `scribe` is not among them because it needs no peer of its own: its duties are
+# a strict subset of the facilitator's (see agent-roles.mjs), so a facilitator
+# already does everything a scribe does, and carrying --persist it is literally
+# the one keeping the record. `skeptic` is separate because it is the only role
+# that verifies — which predicate a history actually passed — and nothing else
+# does that.
 #
 # The `/global` macro agent is NOT started here. It is deprecated (see CLAUDE.md),
 # and every agent running is a peer spent against the ceiling above. Start it by
@@ -51,7 +58,13 @@ shift || true
 # no separate greeter is needed. Pass roles explicitly to override, e.g.
 #   bash run-agents.sh "$ROOM" facilitator scribe
 # — see the ceiling note above before adding several.
-ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator)
+ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator skeptic)
+
+# The room's memory rides with the FIRST role rather than running as its own
+# peer. Same duty qos-daemon.mjs performs alone — which still works standalone,
+# see the README — but carried here it costs no peer against the ceiling above.
+# NO_MEMORY=1 turns it off; PERSIST_DIR moves the store.
+PERSIST_DIR="${PERSIST_DIR:-./.qos-memory}"
 
 # Seconds between joins. Override with STAGGER=n for a slower link or a bigger cast.
 STAGGER="${STAGGER:-15}"
@@ -66,28 +79,15 @@ for role in "${ROLES[@]}"; do
   if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
     echo "• $role already running (pid $(cat "$pidf"))"; continue
   fi
+  persist=()
+  if [ -z "${NO_MEMORY:-}" ] && [ "$role" = "${ROLES[0]}" ]; then persist=(--persist "$PERSIST_DIR"); fi
   nohup node agent.mjs --room "$ROOM" --role "$role" --ai --ai-backend claude-code \
-    --state "./.qos-$role" >> ".agents/$role.log" 2>&1 &
+    --state "./.qos-$role" "${persist[@]}" >> ".agents/$role.log" 2>&1 &
   echo $! > "$pidf"
   echo "✓ started $role (pid $!) → scripts/qos-cli/.agents/$role.log"
   sleep "$STAGGER"   # keep joins off each other's heels; see the ceiling note above
 done
 
-# Memory daemon — persists lemmas / gov and re-serves them to joiners, so room
-# state (e.g. /lemma ballots) survives when every browser leaves. Set NO_MEMORY=1
-# to skip. Seeded lemmas live in ./.qos-memory and reload automatically.
-if [ -z "${NO_MEMORY:-}" ]; then
-  mpidf=".agents/memory.pid"
-  if [ -f "$mpidf" ] && kill -0 "$(cat "$mpidf")" 2>/dev/null; then
-    echo "• memory already running (pid $(cat "$mpidf"))"
-  else
-    sleep "$STAGGER"   # let the role agents settle before the memory daemon joins
-    nohup node qos-daemon.mjs --room "$ROOM" --name memory --state ./.qos-memory \
-      >> ".agents/memory.log" 2>&1 &
-    echo $! > "$mpidf"
-    echo "✓ started memory (pid $!) → scripts/qos-cli/.agents/memory.log"
-  fi
-fi
 
 echo
 echo "Tail:  tail -f scripts/qos-cli/.agents/*.log"

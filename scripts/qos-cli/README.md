@@ -239,10 +239,23 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
 ```
 
 **Run the persistent room** (detached, on a Claude subscription): `bash run-agents.sh`
-launches `facilitator` on the `claude-code` backend with a stable per-role identity,
-**plus the memory daemon** (`qos-daemon.mjs`) so lemmas/gov persist and re-serve to
-joiners — room state (e.g. `/lemma` ballots) survives when every browser leaves.
-Logs/pids under `.agents/`; `bash stop-agents.sh` stops everything with a pidfile. Vary the agents by passing a room then roles
+launches `facilitator` and `skeptic` on the `claude-code` backend with stable per-role
+identities. The **room's memory rides with the first role** (`--persist`), so lemmas,
+currencies, note terms-series, gov groups, dyncap chains and the transcript are kept on
+disk and re-served to every joiner — room state survives when every browser leaves —
+without spending a peer on a separate daemon. `NO_MEMORY=1` turns it off, `PERSIST_DIR`
+moves the store. Logs/pids under `.agents/`; `bash stop-agents.sh` stops everything with
+a pidfile.
+
+Why those two roles, and not `scribe`: a scribe's duties are a strict subset of the
+facilitator's (compare `duties` in `agent-roles.mjs` — scribe sets nothing the
+facilitator does not), so it needs no peer of its own, and a facilitator carrying
+`--persist` is literally the one keeping the record. `skeptic` is separate because it
+is the only role with `verify` — which predicate a history actually passed.
+
+`qos-daemon.mjs` still runs the same duty standalone, sharing the implementation in
+`room-memory.mjs`. Prefer it when durability should not depend on an agent that also
+talks: it needs no Claude subscription and fails only if its process dies. Vary the agents by passing a room then roles
 (`bash run-agents.sh <room> facilitator skeptic`); `NO_MEMORY=1 bash run-agents.sh`
 skips the daemon. (nohup'd, so they survive closing the terminal; use tmux/screen or a
 service to survive logout/reboot.)
