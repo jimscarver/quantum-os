@@ -9,6 +9,16 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
+  // The sources import relative modules with an explicit `.js` extension
+  // ("./server.js") — correct TypeScript, and what `tsc` needs to emit a
+  // working commonjs `require` into dist/. Running the *sources* directly is
+  // what breaks: ts-node resolves "./server.js" from src/, where only
+  // server.ts exists, and dies with MODULE_NOT_FOUND. experimentalResolver
+  // maps the .js specifier back to the .ts file, so `pnpm dev` and `pnpm
+  // build` agree on what the imports mean.
+  "ts-node": {
+    "experimentalResolver": true
+  },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

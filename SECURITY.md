@@ -126,6 +126,16 @@ if (this.wsIndex.get(ws) !== msg.from) {
 }
 ```
 
+**Inbound frame validation:** `SignalMsg` is a *claim* about parsed JSON, not a guarantee — the wire is untrusted. Every frame is checked for its required fields before dispatch (`isWellFormed` in `server.ts`), and a malformed one is answered with an error instead of acted on. The socket's `close` handler additionally contains its own throws, so no cleanup failure can end the process.
+
+```typescript
+// packages/signaling/src/server.ts
+if (!isWellFormed(msg)) {
+  this.send(ws, { type: "error", message: `malformed ${msg.type}: missing required field` });
+  return;
+}
+```
+
 **Room ID as capability:** the signaling server does not enforce authentication. Knowing the room ID IS the capability to join — consistent with the ZFA model. The room URL hash (`#room=cap:room:…`) is the bearer token.
 
 ### WebRTC transport security
@@ -252,6 +262,7 @@ In the meantime, the bearer-and-room-scoped trust model should be read literally
 | Full peer/room IDs in logs | Signaling server logs truncated to last 8 chars (`…abcd1234`) |
 | Hardcoded Google STUN | STUN URL now user-configurable in the sidebar; defaults to `stun:stun.l.google.com:19302` |
 | Lenient hex parsing in `validateCapability()` | Rejects tokens with any char outside `[0-7]` before processing |
+| Unauthenticated remote crash of the signaling server | A `join` missing `roomId`/`peerId` registered a peer under the key `undefined` — the throw inside `onJoin` was swallowed by the `invalid JSON` catch *after* the index was poisoned — and the socket's later `close` ran `onLeave` with an undefined peerId outside any try/catch, ending the process and every room with it. Any client could do this by connecting, sending one malformed frame, and hanging up. Fixed by `isWellFormed` validation before dispatch, plus a contained `close` handler |
 
 ---
 

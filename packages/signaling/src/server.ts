@@ -14,6 +14,34 @@ type SignalMsg =
   | { type: "left";      roomId: string; peerId: string }    // server → others
   | { type: "error";     message: string };
 
+/**
+ * Validate an inbound frame before dispatching it.
+ *
+ * `SignalMsg` is a *claim* about parsed JSON, not a guarantee: the wire is
+ * untrusted and a peer can send `{"type":"join"}` with no roomId or peerId.
+ * Without this check that join registered a peer under the key `undefined`
+ * (the throw inside `onJoin` was swallowed by the `invalid JSON` catch, after
+ * the index had already been poisoned), and the socket's later `close` ran
+ * `onLeave` with an undefined peerId — outside any try/catch, so the
+ * `peerId.slice(-8)` TypeError killed the process. Any client could take the
+ * signaling server down for every room by connecting, sending a malformed
+ * join, and hanging up.
+ */
+function isWellFormed(msg: SignalMsg): boolean {
+  const str = (v: unknown): boolean => typeof v === "string" && v.length > 0;
+  switch (msg.type) {
+    case "join":
+    case "leave":
+      return str(msg.roomId) && str(msg.peerId);
+    case "offer":
+    case "answer":
+    case "ice":
+      return str(msg.roomId) && str(msg.from) && str(msg.to);
+    default:
+      return true;   // unknown types are answered by the dispatcher below
+  }
+}
+
 const RATE_LIMIT = 20;       // max messages per window per connection
 const RATE_WINDOW_MS = 1_000; // window size in ms
 
@@ -87,7 +115,15 @@ export class SignalingServer {
       }
     });
 
-    ws.on("close", () => this.onDisconnect(ws));
+    // A throw here runs outside the message handler's try/catch, so an
+    // uncaught one ends the process and every room with it. Contain it.
+    ws.on("close", () => {
+      try {
+        this.onDisconnect(ws);
+      } catch (err) {
+        console.error("[disconnect] cleanup failed:", err);
+      }
+    });
   }
 
   private checkRate(ws: WebSocket): boolean {
@@ -103,6 +139,14 @@ export class SignalingServer {
   }
 
   private handle(ws: WebSocket, msg: SignalMsg): void {
+    if (!msg || typeof msg.type !== "string") {
+      this.send(ws, { type: "error", message: "malformed message" });
+      return;
+    }
+    if (!isWellFormed(msg)) {
+      this.send(ws, { type: "error", message: `malformed ${msg.type}: missing required field` });
+      return;
+    }
     switch (msg.type) {
       case "join":
         this.onJoin(ws, msg.roomId, msg.peerId);
