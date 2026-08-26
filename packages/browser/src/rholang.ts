@@ -415,6 +415,16 @@ export interface DeployOutcome {
   message: string;
   /** The public name this deploy's `return` values were forwarded to. */
   resultName?: string;
+  /** The deploy's signature — how to find it in a block once one carries it. */
+  sig?: string;
+}
+
+/** What a block says happened to a deploy, once one carries it. */
+export interface DeployFate {
+  blockNumber: number;
+  errored: boolean;
+  cost?: number;
+  systemDeployError?: string;
 }
 
 /**
@@ -445,6 +455,40 @@ export async function readName(cfg: NodeConfig, name: string): Promise<string[]>
   if (typeof r === "string") return [];
   const expr = ((r ?? {}) as { expr?: unknown[] }).expr ?? [];
   return expr.map(renderExpr);
+}
+
+/**
+ * Find what a block made of a deploy, by its signature.
+ *
+ * A deploy that fails sends nothing to `return`, so its result name stays empty
+ * forever and looks identical to one still waiting on consensus. The block knows
+ * the difference — it carries `errored` per deploy — and this is the only way to
+ * tell the two apart from outside the node.
+ *
+ * Note what is NOT here: why it failed. The block carries a boolean, the node
+ * logs no message, and `stdout!` from a deploy goes to the node's console rather
+ * than anywhere a caller can reach. "It errored, and cost this much" is the whole
+ * of what a deployer can learn.
+ */
+export async function deployFate(cfg: NodeConfig, sig: string, depth = 12): Promise<DeployFate | null> {
+  const blocks = (await getJson(cfg, `/api/blocks/${depth}`)) as { blockHash?: string }[];
+  for (const b of blocks ?? []) {
+    if (!b.blockHash) continue;
+    const full = (await getJson(cfg, `/api/block/${b.blockHash}`)) as {
+      blockInfo?: { blockNumber?: number };
+      deploys?: { sig?: string; errored?: boolean; cost?: number; systemDeployError?: string }[];
+    };
+    const hit = (full?.deploys ?? []).find((d) => d.sig === sig);
+    if (hit) {
+      return {
+        blockNumber: full?.blockInfo?.blockNumber ?? -1,
+        errored: hit.errored === true,
+        cost: hit.cost,
+        systemDeployError: hit.systemDeployError || undefined,
+      };
+    }
+  }
+  return null;
 }
 
 export async function readResults(cfg: NodeConfig, name: string, attempts = 12): Promise<string[]> {
@@ -496,5 +540,5 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
   // on the happy path and names the reason otherwise.
   const text = typeof reply === "string" ? reply : JSON.stringify(reply);
   const ok = /success/i.test(text);
-  return { ok, message: text, resultName: ok ? forwardTo : undefined };
+  return { ok, message: text, resultName: ok ? forwardTo : undefined, sig: ok ? signature : undefined };
 }

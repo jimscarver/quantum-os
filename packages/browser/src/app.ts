@@ -28,7 +28,7 @@ import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
-         readResults, readName, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
+         readResults, readName, deployFate, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1720,10 +1720,27 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
         // measured: readable immediately, at +90s and at +210s — so there is no
         // window to miss and nothing is lost by not watching.
         lastResultName = r.resultName;
+        lastDeploySig = r.sig ?? "";
         say(`  it will report on @"${r.resultName}" once a block carries it`);
         const values = await readResults(cfg, r.resultName, 6);
-        if (values.length) for (const v of values) say("  → " + v);
-        else say(`  not in a block yet — normal, this can take minutes. /rholang read collects it whenever; it waits on the name.`);
+        if (values.length) { for (const v of values) say("  → " + v); }
+        else {
+          // An empty name means one of two things that look identical from here:
+          // still waiting on consensus, or landed in a block and errored (a failed
+          // deploy sends nothing to `return`, so its name stays empty forever).
+          // The block knows which; ask it rather than leave you watching a name
+          // that will never fill.
+          const fate = r.sig ? await deployFate(cfg, r.sig).catch(() => null) : null;
+          if (fate?.errored) {
+            say(`  ✗ it ran in block ${fate.blockNumber} and errored (cost ${fate.cost ?? "?"}) — nothing was sent to return`);
+            if (fate.systemDeployError) say(`     ${fate.systemDeployError}`);
+            say(`     the node reports no reason: a block records only that a deploy errored, and stdout! from a deploy goes to the node's console`);
+          } else if (fate) {
+            say(`  it ran in block ${fate.blockNumber} but has not reported — /rholang read collects it whenever`);
+          } else {
+            say(`  not in a block yet — normal, this can take minutes. /rholang read collects it whenever; it waits on the name.`);
+          }
+        }
       }
     } catch (e) {
       say("✗ " + ((e as Error)?.message ?? e));
@@ -1737,6 +1754,9 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
  * "later" is any time at all — this just saves retyping a random-suffixed name.
  */
 let lastResultName = "";
+
+/** The last deploy's signature, so `/rholang read` can tell "still waiting" from "errored". */
+let lastDeploySig = "";
 
 function handleCommand(raw: string): string[] {
   const body = raw.slice(1).trim();
@@ -4016,8 +4036,13 @@ function handleCommand(raw: string): string[] {
           void (async () => {
             try {
               const values = await readName(cfg, target);
-              if (values.length) for (const v of values) addMessage("", "  → " + v, "system");
-              else addMessage("", `  (nothing on @"${target}" yet — the deploy may still be unblocked, or it sent nothing)`, "system");
+              if (values.length) { for (const v of values) addMessage("", "  → " + v, "system"); return; }
+              // Empty is ambiguous — waiting, or errored and never coming. Ask the block.
+              const fate = (target === lastResultName && lastDeploySig)
+                ? await deployFate(cfg, lastDeploySig).catch(() => null) : null;
+              if (fate?.errored) addMessage("", `  ✗ that deploy ran in block ${fate.blockNumber} and errored (cost ${fate.cost ?? "?"}) — it sent nothing to return`, "system");
+              else if (fate) addMessage("", `  nothing on @"${target}" — it ran in block ${fate.blockNumber} without sending to return`, "system");
+              else addMessage("", `  nothing on @"${target}" yet — no block carries that deploy so far, which can take minutes`, "system");
             } catch (e) {
               addMessage("", "✗ " + ((e as Error)?.message ?? e), "system");
             }
