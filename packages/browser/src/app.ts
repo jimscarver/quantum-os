@@ -1621,8 +1621,9 @@ const RHOLANG_HELP = [
   "  It keeps what you last wrote,",
   "  so you can change one thing and run it again; Clear empties it.",
   "  A program written inline — /rholang eval return!(42) — runs as typed.",
-  "  In the message box, end a line with \\ to keep writing on the next one,",
-  "  and a pasted program keeps its lines. Enter sends the lot; Esc drops it.",
+  "  In the message box, Shift+Enter (or a line ending in \\) keeps writing on",
+  "  the next line, and a pasted program keeps its lines. Enter sends the lot;",
+  "  Esc drops the held lines.",
   "",
   "  Configuration:",
   "  /rholang config               — show all of it",
@@ -5218,23 +5219,32 @@ const MSG_PLACEHOLDER = msgInput.placeholder;
 function paintPending(): void {
   const n = pendingLines.length;
   msgInput.placeholder = n
-    ? `${n} line${n === 1 ? "" : "s"} held · Enter sends · Esc discards them`
+    ? `${n} line${n === 1 ? "" : "s"} held · Shift+Enter for another · Enter sends · Esc discards`
     : MSG_PLACEHOLDER;
   msgInput.classList.toggle("continued", n > 0);
 }
 
 function discardPending(): void { pendingLines = []; paintPending(); }
 
+/**
+ * Hold the line in the box and start a new one. Two ways to ask for it: end the
+ * line with `\`, or press Shift+Enter. The backslash is the join itself, so it
+ * is dropped; Shift+Enter adds no character, so the line is held as typed —
+ * including an empty one, which is how a blank line gets into a message.
+ */
+function holdLine(dropTrailingBackslash: boolean): void {
+  const line = msgInput.value;
+  pendingLines.push(dropTrailingBackslash ? line.trimEnd().slice(0, -1) : line);
+  msgInput.value = "";
+  // The box is empty now, so any open completion menu is stale. Assigning
+  // .value fires no "input" event, so it will not close itself.
+  hideCmdMenu();
+  paintPending();
+}
+
 function send(): void {
   const line = msgInput.value;
-  // A line ending in `\` continues on the next one. The backslash is the join
-  // itself, so it is not part of the text.
-  if (/\\$/.test(line.trimEnd())) {
-    pendingLines.push(line.trimEnd().slice(0, -1));
-    msgInput.value = "";
-    paintPending();
-    return;
-  }
+  if (/\\$/.test(line.trimEnd())) { holdLine(true); return; }
   // With lines held, drop only surrounding blank lines — trimming the whole
   // block would eat the first line's indentation, and a pasted program is
   // usually indented.
@@ -7158,7 +7168,8 @@ async function init(): Promise<void> {
     if (cmdMenuOpen()) {
       if (e.key === "ArrowDown") { e.preventDefault(); moveCmdSel(1); return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); moveCmdSel(-1); return; }
-      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
+      // Shift+Enter is a continuation, not a completion: let it fall through.
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
       if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
     }
     // Esc drops held lines. The line in the box is left alone — you may well
@@ -7167,6 +7178,9 @@ async function init(): Promise<void> {
     // Command menu closed: ArrowUp/Down recall input history (shell-style).
     if (e.key === "ArrowUp"   && navHistory(-1)) { e.preventDefault(); return; }
     if (e.key === "ArrowDown" && navHistory(+1)) { e.preventDefault(); return; }
+    // Shift+Enter continues the message on a new line. An <input> cannot hold a
+    // newline, so nothing would happen otherwise — the keystroke is ours to use.
+    if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); holdLine(false); return; }
     if (e.key === "Enter") send();
   });
   // Mobile keyboard fallback: when input gains focus, scroll it into view.
