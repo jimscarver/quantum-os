@@ -1612,7 +1612,8 @@ const RHOLANG_HELP = [
   "",
   "  eval and deploy open an editor: syntax-highlighted, linted as you type,",
   "  Ctrl+Enter to run, Esc to cancel. Open a .rho from disk or drop one in,",
-  "  and save what you have written back out.",
+  "  and save what you have written back out. It keeps what you last wrote,",
+  "  so you can change one thing and run it again; Clear empties it.",
   "  A program written inline — /rholang eval return!(42) — runs as typed.",
   "",
   "  Configuration:",
@@ -1643,6 +1644,9 @@ function editRholang(mode: "eval" | "deploy", seed: string): void {
       scope: ["return", ...powerboxNames(mode)],
       nodeUrl: cfg.url,
       lint: lintRholang,
+      // Per device, not per room: a program is written against a node, and the
+      // same one is usually run from whichever room you happen to be in.
+      draftKey: "qos-rholang-draft",
     });
     if (source === null) { addMessage("", "cancelled — nothing run", "system"); return; }
     runRholangProgram(mode, source);
@@ -5512,7 +5516,7 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang eval — run a rholang program on the node and read the result back. Nothing is signed, nothing stored, no block.",
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
-    "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. A program written inline — /rholang eval return!(42) — runs as typed.",
+    "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],

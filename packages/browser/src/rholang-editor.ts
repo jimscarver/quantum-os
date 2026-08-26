@@ -166,6 +166,25 @@ export interface RholangEditorOptions {
   nodeUrl: string;
   /** Check the program's shape; the result is shown live under the editor. */
   lint?: (source: string) => Promise<{ ok: boolean; errors: string[] }>;
+  /**
+   * localStorage key holding the working program. Getting a program right is
+   * iterative — run it, read the error, change one thing, run it again — and
+   * that loop is lost if the editor opens empty every time. Kept until it is
+   * cleared, including after a successful run, so a working program can be
+   * tweaked or saved rather than retyped.
+   */
+  draftKey?: string;
+}
+
+/** localStorage can throw outright (private mode, blocked site data). */
+function readDraft(key: string | undefined): string {
+  if (!key) return "";
+  try { return localStorage.getItem(key) ?? ""; } catch { return ""; }
+}
+
+function writeDraft(key: string | undefined, text: string): void {
+  if (!key) return;
+  try { localStorage.setItem(key, text); } catch { /* nothing to do about it */ }
 }
 
 /**
@@ -200,7 +219,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     const pre = document.createElement("pre");
     const ta = document.createElement("textarea");
     ta.spellcheck = false;
-    ta.value = opts.seed ?? "";
+    ta.value = opts.seed || readDraft(opts.draftKey);
     ta.placeholder = "return!(6 * 7)";
     wrap.appendChild(pre);
     wrap.appendChild(ta);
@@ -229,6 +248,11 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     openBtn.title = "Load a rholang file from this device";
     openBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
 
+    const clearBtn = document.createElement("button");
+    clearBtn.textContent = "Clear";
+    clearBtn.title = "Empty the editor";
+    clearBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
+
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "Save .rho";
     saveBtn.title = "Download what is in the editor";
@@ -245,6 +269,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     okBtn.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
     btnRow.appendChild(openBtn);
     btnRow.appendChild(saveBtn);
+    btnRow.appendChild(clearBtn);
     btnRow.appendChild(hint);
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(okBtn);
@@ -292,6 +317,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
         ta.value = String(reader.result ?? "");
         paint();
         relint();
+        writeDraft(opts.draftKey, ta.value);
         status.textContent = `loaded ${file.name}`;
         status.style.color = "";
         ta.focus();
@@ -344,7 +370,16 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       if (f) loadFile(f);
     });
 
-    ta.addEventListener("input", () => { paint(); relint(); });
+    clearBtn.addEventListener("click", () => {
+      ta.value = "";
+      loadedName = "";
+      writeDraft(opts.draftKey, "");
+      paint();
+      status.textContent = "";
+      ta.focus();
+    });
+
+    ta.addEventListener("input", () => { paint(); relint(); writeDraft(opts.draftKey, ta.value); });
     ta.addEventListener("scroll", () => { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; });
     paint();
     relint();
@@ -372,7 +407,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
         const s = ta.selectionStart, t = ta.selectionEnd;
         ta.value = ta.value.slice(0, s) + "  " + ta.value.slice(t);
         ta.selectionStart = ta.selectionEnd = s + 2;
-        paint(); relint();
+        paint(); relint(); writeDraft(opts.draftKey, ta.value);
       }
     });
 
