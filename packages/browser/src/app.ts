@@ -4021,7 +4021,10 @@ function handleCommand(raw: string): string[] {
 
         case "key": {
           if (!rest || rest.toLowerCase() === "show") {
-            sys(cfg.key ? `public key ${publicKeyOf(cfg.key)}` : "no deploy key — /rholang key generate, or /rholang key <hex>");
+            // The REV address, not the public key: the address is what a wallet
+            // funds and what a deploy is pre-charged against, so it is the one
+            // you can act on. The public key answers no question you have here.
+            sys(cfg.key ? `address ${revAddressOf(cfg.key)}` : "no deploy key — /rholang key generate, or /rholang key <hex>");
             break;
           }
           if (rest.toLowerCase() === "generate") {
@@ -4032,8 +4035,8 @@ function handleCommand(raw: string): string[] {
             const k = generateDeployKey();
             saveNodeConfig({ ...cfg, key: k });
             sys("✓ deploy key generated (stored in this browser only)");
-            sys(`  public ${publicKeyOf(k)}`);
             sys(`  address ${revAddressOf(k)}`);
+            sys(`  public  ${publicKeyOf(k)}`);
             sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
             break;
           }
@@ -4044,10 +4047,11 @@ function handleCommand(raw: string): string[] {
             break;
           }
           try {
-            const pub = publicKeyOf(rest);
+            const addr = revAddressOf(rest);
             saveNodeConfig({ ...cfg, key: rest.trim().replace(/^0x/, "") });
             sys("✓ deploy key set (stored in this browser only)");
-            sys(`  public ${pub}`);
+            sys(`  address ${addr}`);
+            sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
           } catch {
             sys("✗ not a secp256k1 secret key — expected 32 bytes of base16");
           }
