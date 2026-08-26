@@ -28,6 +28,20 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Proxy the local signaling server onto this origin as /signal.
+    //
+    // The page is https, and a browser refuses a ws:// connection from an https
+    // page as mixed content — so a local signaling server would otherwise need a
+    // certificate of its own, and a second interstitial to click through. Coming
+    // through here it is wss:// on the origin the page already loaded from, on
+    // the cert already accepted.
+    //
+    // Point the browser at it with:  /signal wss://<this-host>:5173/signal
+    // Agents run in Node, which has no mixed-content rule, so they connect to
+    // ws://127.0.0.1:4444 directly and skip the proxy.
+    proxy: {
+      "/signal": { target: "ws://127.0.0.1:4444", ws: true, changeOrigin: true },
+    },
     // Listen on every interface: the point of the cert is to be reachable from
     // somewhere that is not this machine's loopback.
     host: true,

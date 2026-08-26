@@ -261,6 +261,28 @@ service to survive logout/reboot.)
 > `NO_MEMORY=1` / `NO_GLOBAL=1` free a slot each. Add roles deliberately, and run your
 > own signaling server if you want a full cast — that removes the ceiling.
 
+**Running your own signaling server** (no ceiling, and nothing leaves the machine):
+
+```bash
+# 1. the server — the raised limit is the whole point
+cd packages/signaling && npx tsc && SIGNAL_RATE_LIMIT=200 PORT=4444 node dist/index.js
+
+# 2. agents — Node has no mixed-content rule, so plain ws is fine
+bash run-agents.sh <room> facilitator scribe skeptic --signal ws://127.0.0.1:4444
+
+# 3. browser — the vite dev server proxies /signal, so this is wss:// on the
+#    origin the page already loaded from, with no second certificate
+open "https://<host>:5173/quantum-os/?signal=wss://<host>:5173/signal#room=<cap>"
+```
+
+`?signal=` presets the sidebar's signaling field, so the whole setup is one link.
+Measured this way: **6 peers in the room → 5 of 5 channels open**, the same room
+size that opened 0 of 6 against the public server.
+
+Note this only works from the vite dev server. A page served from GitHub Pages is
+a different origin and cannot proxy to your machine, so a local signaling server
+needs a certificate of its own there.
+
 **Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
 nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to
 record them as `/lemma`), `greeter` (welcomes newcomers, helps set a name), and

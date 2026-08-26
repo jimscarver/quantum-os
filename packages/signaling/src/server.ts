@@ -42,8 +42,19 @@ function isWellFormed(msg: SignalMsg): boolean {
   }
 }
 
-const RATE_LIMIT = 20;       // max messages per window per connection
-const RATE_WINDOW_MS = 1_000; // window size in ms
+// Max messages per window per connection. The default is what the public
+// deployment runs and is deliberately tight, but it is also the ceiling on how
+// many peers a room can hold: a peer joining a room of N sends N-1 offers and
+// then a burst of ICE candidates, so the join cost per peer is superlinear and
+// blows the window well before the room feels large. Over it, handshakes stop
+// completing while every peer still appears in the room — indistinguishable,
+// from a browser, from the other peers never having started.
+//
+// Env-overridable so a local or self-hosted server can lift it (SIGNAL_RATE_LIMIT
+// =200 comfortably holds a full cast). Defaults unchanged, so the public
+// deployment behaves exactly as before.
+const RATE_LIMIT = parseInt(process.env.SIGNAL_RATE_LIMIT ?? "20", 10);
+const RATE_WINDOW_MS = parseInt(process.env.SIGNAL_RATE_WINDOW_MS ?? "1000", 10);
 
 // Build marker — surfaced at GET / so a deploy can be confirmed from outside
 // (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
