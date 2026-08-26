@@ -239,14 +239,27 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
 ```
 
 **Run the persistent room** (detached, on a Claude subscription): `bash run-agents.sh`
-launches the agents (facilitator + scribe + skeptic + greeter) on the `claude-code`
-backend with stable per-role identities, **plus the memory daemon** (`qos-daemon.mjs`)
-so lemmas/gov persist and re-serve to joiners — room state (e.g. `/lemma` ballots)
-survives when every browser leaves. Logs/pids under `.agents/`; `bash stop-agents.sh`
-stops all of it. Vary the agents by passing a room then roles
+launches `facilitator` on the `claude-code` backend with a stable per-role identity,
+**plus the memory daemon** (`qos-daemon.mjs`) so lemmas/gov persist and re-serve to
+joiners — room state (e.g. `/lemma` ballots) survives when every browser leaves — and
+the `/global` macro agent. Logs/pids under `.agents/`; `bash stop-agents.sh` stops all
+of it. Vary the agents by passing a room then roles
 (`bash run-agents.sh <room> facilitator skeptic`); `NO_MEMORY=1 bash run-agents.sh`
 skips the daemon. (nohup'd, so they survive closing the terminal; use tmux/screen or a
 service to survive logout/reboot.)
+
+> **How many agents a room can hold.** The free signaling server rate-limits, and the
+> limit covers the WebRTC offer/answer/ICE exchange, not just joining. Past a handful
+> of peers, handshakes stop completing: everyone still shows up in the room and no data
+> channel opens, which from a browser is indistinguishable from the agents never
+> starting. Measured on that server, same room, same code, counting *total peers in
+> the room* — an observer joining to watch counts as one: **7 → 0 of 6** channels
+> open, **5 → 1 of 4**, **4 → 3 of 3**. The default set (facilitator, memory, global,
+> plus one browser — four peers, no observer) interconnects when read from the agents'
+> own logs. Four is the most that has been seen to work, and the default sits exactly
+> there. Hence one role by default and a 15s stagger (`STAGGER=n` to change it);
+> `NO_MEMORY=1` / `NO_GLOBAL=1` free a slot each. Add roles deliberately, and run your
+> own signaling server if you want a full cast — that removes the ceiling.
 
 **Roles** (`agent-roles.mjs`): `facilitator` (greet, name-prompts, participation
 nudges, dis/agreement synthesis), `scribe` (quietly tracks decisions, offers to
