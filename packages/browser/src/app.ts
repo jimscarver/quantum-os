@@ -28,7 +28,7 @@ import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
-         readResults, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
+         readResults, readName, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1611,6 +1611,9 @@ const RHOLANG_HELP = [
   "  /rholang eval          — run a program and read the result back. Nothing is signed,",
   "                           nothing is stored, no block is produced.",
   "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
+  "  /rholang read [name]   — read what is on a name now; no name means the last deploy's.",
+  "                           A deploy waits on consensus, which can take minutes. The value sits",
+  "                           on its name until read, so nothing is lost by collecting it later.",
   "  /rholang status        — what the node is: version, shard, height, phlo floor.",
   "  /rholang powerbox      — the names every program gets, and what each one takes.",
   "",
@@ -1706,16 +1709,34 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
       const r = await deployTerm(cfg, source);
       say((r.ok ? "✓ " : "✗ ") + r.message);
       if (r.ok && r.resultName) {
-        say("waiting for the block, then reading what it sent to return…");
-        const values = await readResults(cfg, r.resultName);
+        // The deploy is accepted here; everything after is waiting for consensus,
+        // which is not ours to hurry. Block creation can lag minutes — an hour is
+        // not unheard of — so a short poll that gives up and says "nothing yet"
+        // reports a normal wait as if it were a failure.
+        //
+        // So: name the result, take one brief look in case the block is quick,
+        // and otherwise say plainly that waiting is expected and how to collect
+        // it whenever. The value sits on the name until something reads it —
+        // measured: readable immediately, at +90s and at +210s — so there is no
+        // window to miss and nothing is lost by not watching.
+        lastResultName = r.resultName;
+        say(`  it will report on @"${r.resultName}" once a block carries it`);
+        const values = await readResults(cfg, r.resultName, 6);
         if (values.length) for (const v of values) say("  → " + v);
-        else say(`  (nothing on return yet — read it later at @"${r.resultName}")`);
+        else say(`  not in a block yet — normal, this can take minutes. /rholang read collects it whenever; it waits on the name.`);
       }
     } catch (e) {
       say("✗ " + ((e as Error)?.message ?? e));
     }
   })();
 }
+
+/**
+ * The name the last deploy will report on, so `/rholang read` can be typed with
+ * no argument. A deploy's value sits on its name until something consumes it, so
+ * "later" is any time at all — this just saves retyping a random-suffixed name.
+ */
+let lastResultName = "";
 
 function handleCommand(raw: string): string[] {
   const body = raw.slice(1).trim();
@@ -1776,7 +1797,7 @@ function handleCommand(raw: string): string[] {
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
-      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · status · config (multi-line, end with a blank line)");
+      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · read · status · config (multi-line, end with a blank line)");
       sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros (deprecated — prefer /rholang)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
@@ -3983,6 +4004,24 @@ function handleCommand(raw: string): string[] {
           sys("");
           sys("These answer under eval too. What eval cannot give you is a deploy's own");
           sys("identity — rho:rchain:deployId and deployerId are unbound there.");
+          break;
+        }
+
+        case "read": {
+          // Answers "my deploy has not reported yet". A deploy's result is not
+          // an event you can miss: it stays on the name until read.
+          const target = rest.trim().replace(/^@/, "").replace(/^"|"$/g, "") || lastResultName;
+          if (!target) { sys("usage: /rholang read <name>   — or with no name, the last deploy's"); break; }
+          sys(`reading @"${target}"…`);
+          void (async () => {
+            try {
+              const values = await readName(cfg, target);
+              if (values.length) for (const v of values) addMessage("", "  → " + v, "system");
+              else addMessage("", `  (nothing on @"${target}" yet — the deploy may still be unblocked, or it sent nothing)`, "system");
+            } catch (e) {
+              addMessage("", "✗ " + ((e as Error)?.message ?? e), "system");
+            }
+          })();
           break;
         }
 

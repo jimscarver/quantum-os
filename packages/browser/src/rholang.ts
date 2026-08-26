@@ -425,6 +425,28 @@ export interface DeployOutcome {
  * deploy's result name, and gives up rather than waiting forever — the value is
  * still there to read later.
  */
+/**
+ * Read whatever is at a public name right now, without waiting.
+ *
+ * A deploy's result outlives the deploy: it sits on the name until something
+ * consumes it. So a read is a question you can ask at any time, not a window
+ * you have to catch — which is what makes `/rholang read` a real answer to "my
+ * deploy hasn't reported yet".
+ */
+export async function readName(cfg: NodeConfig, name: string): Promise<string[]> {
+  const blocks = (await getJson(cfg, "/api/blocks/1")) as { blockHash?: string }[];
+  const blockHash = blocks?.[0]?.blockHash;
+  if (!blockHash) return [];
+  const r = await postJson(cfg, "/api/data-at-name-by-block-hash", {
+    name: { ExprString: name },
+    blockHash,
+    usePreStateHash: false,
+  });
+  if (typeof r === "string") return [];
+  const expr = ((r ?? {}) as { expr?: unknown[] }).expr ?? [];
+  return expr.map(renderExpr);
+}
+
 export async function readResults(cfg: NodeConfig, name: string, attempts = 12): Promise<string[]> {
   for (let i = 0; i < attempts; i++) {
     await new Promise((r) => setTimeout(r, 1500));
