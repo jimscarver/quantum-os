@@ -236,17 +236,19 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
 
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px";
-    // Open a .rho from disk. The file never leaves the browser — it is read
-    // into the textarea, and what runs is whatever the editor holds when you
-    // press the button, the same as if it had been typed.
+    // Insert a .rho from disk at the cursor. The file never leaves the browser,
+    // and what runs is whatever the editor holds when you press the button, the
+    // same as if it had been typed. Inserting rather than replacing is what lets
+    // a program be assembled from pieces — a contract from one file, a caller
+    // from another — instead of forcing one file to be the whole program.
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = ".rho,.rholang,text/plain";
     fileInput.style.display = "none";
-    const openBtn = document.createElement("button");
-    openBtn.textContent = "Open .rho…";
-    openBtn.title = "Load a rholang file from this device";
-    openBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
+    const insertBtn = document.createElement("button");
+    insertBtn.textContent = "Insert .rho…";
+    insertBtn.title = "Insert a rholang file from this device at the cursor";
+    insertBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
 
     const clearBtn = document.createElement("button");
     clearBtn.textContent = "Clear";
@@ -259,7 +261,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     saveBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
 
     const hint = document.createElement("div");
-    hint.textContent = "Ctrl+Enter to run · Esc to cancel · drop a .rho here";
+    hint.textContent = "Ctrl+Enter to run · Esc to cancel · drop a .rho at the cursor";
     hint.style.cssText = "margin-right:auto;font-size:12px;opacity:.6";
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "Cancel";
@@ -267,7 +269,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     const okBtn = document.createElement("button");
     okBtn.textContent = opts.mode === "eval" ? "Evaluate" : "Sign and deploy";
     okBtn.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
-    btnRow.appendChild(openBtn);
+    btnRow.appendChild(insertBtn);
     btnRow.appendChild(saveBtn);
     btnRow.appendChild(clearBtn);
     btnRow.appendChild(hint);
@@ -306,22 +308,41 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       }, 300);
     };
 
-    /** Name of the file last opened, so Save offers it back. */
+    /**
+     * Name of the file to offer back when saving. Only a file inserted into an
+     * empty editor claims the name: once a buffer is assembled from more than
+     * one file, no single filename describes it, and saving under one of them
+     * would quietly overwrite a file the buffer is no longer a copy of.
+     */
     let loadedName = "";
 
-    /** Put a file's text in the editor, replacing what is there. */
-    const loadFile = (file: File): void => {
-      loadedName = file.name;
+    /**
+     * Insert a file's text at the cursor, replacing the selection if there is
+     * one. Rholang is newline-sensitive to read even where it is not to parse,
+     * so a body dropped into the middle of a line gets separated from it; a
+     * file inserted at a line of its own is left exactly as written.
+     */
+    const insertFile = (file: File): void => {
       const reader = new FileReader();
       reader.onload = () => {
-        ta.value = String(reader.result ?? "");
+        const text = String(reader.result ?? "");
+        const start = ta.selectionStart, end = ta.selectionEnd;
+        const before = ta.value.slice(0, start), after = ta.value.slice(end);
+        if (!before && !after) loadedName = file.name;
+        const lead = before && !before.endsWith("\n") ? "\n" : "";
+        const tail = after && !after.startsWith("\n") && !text.endsWith("\n") ? "\n" : "";
+        const insert = lead + text + tail;
+        ta.value = before + insert + after;
         paint();
         relint();
         writeDraft(opts.draftKey, ta.value);
-        status.textContent = `loaded ${file.name}`;
+        status.textContent = `inserted ${file.name}`;
         status.style.color = "";
         ta.focus();
-        ta.setSelectionRange(ta.value.length, ta.value.length);
+        // Leave the caret after what was inserted, so a second insert continues
+        // from there rather than landing back at the top.
+        const caret = start + insert.length;
+        ta.setSelectionRange(caret, caret);
       };
       reader.onerror = () => {
         status.textContent = `✗ could not read ${file.name}`;
@@ -330,7 +351,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       reader.readAsText(file);
     };
 
-    openBtn.addEventListener("click", () => fileInput.click());
+    insertBtn.addEventListener("click", () => fileInput.click());
 
     // Save what is in the editor. A program worth deploying is worth keeping,
     // and a deploy is permanent — the source that produced it should not live
@@ -352,14 +373,14 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     });
     fileInput.addEventListener("change", () => {
       const f = fileInput.files?.[0];
-      if (f) loadFile(f);
+      if (f) insertFile(f);
       // Clear it, so choosing the same file twice in a row still fires `change`.
       fileInput.value = "";
     });
 
-    // Drag a .rho onto the editor. preventDefault on dragover is what tells the
-    // browser this is a drop target at all; without it the page navigates to
-    // the file instead.
+    // Drag a .rho onto the editor; it lands at the cursor, same as the button.
+    // preventDefault on dragover is what tells the browser this is a drop target
+    // at all; without it the page navigates to the file instead.
     const stop = (e: DragEvent): void => { e.preventDefault(); e.stopPropagation(); };
     wrap.addEventListener("dragover", (e) => { stop(e); wrap.style.borderColor = "#3b6ef5"; });
     wrap.addEventListener("dragleave", (e) => { stop(e); wrap.style.borderColor = "#3a3d46"; });
@@ -367,7 +388,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       stop(e);
       wrap.style.borderColor = "#3a3d46";
       const f = e.dataTransfer?.files?.[0];
-      if (f) loadFile(f);
+      if (f) insertFile(f);
     });
 
     clearBtn.addEventListener("click", () => {
