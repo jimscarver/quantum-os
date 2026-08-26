@@ -5,6 +5,17 @@ bash run-node.sh --fresh     # first time: build genesis from bonds.txt + wallet
 bash run-node.sh             # after that
 ```
 
+The node binary is `bin/rnode` at the repo root, committed so that a checkout of
+quantum-os alone brings a chain up — no rchain-rust checkout, no PATH symlink.
+To try a candidate build against the same genesis before it replaces `bin/rnode`:
+
+```bash
+RNODE=~/rnode bash run-node.sh --fresh
+```
+
+`run-node.sh` prints which binary it is running, and refuses to start if the path
+is not executable rather than silently falling back to a different node.
+
 Then, in the browser:
 
 ```
@@ -25,6 +36,7 @@ the browser uses) · **40405** admin HTTP.
 | `bonds.txt` | the validator's public key and stake |
 | `keys.mjs` | derives REV addresses; regenerates `wallet.txt` |
 | `run-node.sh` | the node invocation, with why each flag is there |
+| `../../bin/rnode` | the node binary itself; `RNODE=` overrides it |
 
 The keys are in the repository on purpose: a local devnet needs a funded key, and
 a key nobody can read funds nobody. The validator key is rchain-rust's own

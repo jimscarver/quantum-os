@@ -4,6 +4,12 @@
 #   bash run-node.sh          start (reuses existing chain state)
 #   bash run-node.sh --fresh  wipe the data dir and rebuild genesis first
 #
+# The node binary is bin/rnode, committed at the repo root, so a checkout of
+# quantum-os alone is enough to bring a chain up -- no rchain-rust checkout, no
+# PATH symlink. Set RNODE=/path/to/rnode to run a different build against the
+# same genesis, which is how a candidate rnode gets tested before it replaces
+# bin/rnode.
+#
 # The flags are not decoration; each one earns its place:
 #
 #   --host 127.0.0.1     without it the node guesses an external IP and Kademlia
@@ -29,7 +35,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 DATA_DIR="${QOS_RNODE_DATA:-$HOME/.rnode-local}"
+RNODE="${RNODE:-$(cd ../.. && pwd)/bin/rnode}"
 KEY="$(grep '^validator=' pk.txt | cut -d= -f2)"
+
+if [ ! -x "$RNODE" ]; then
+  echo "run-node.sh: no executable rnode at $RNODE" >&2
+  echo "  set RNODE=/path/to/rnode, or restore bin/rnode from the repo." >&2
+  exit 1
+fi
+echo "rnode: $RNODE"
 
 if [ "${1:-}" = "--fresh" ]; then
   echo "wiping $DATA_DIR"
@@ -39,7 +53,7 @@ mkdir -p "$DATA_DIR/genesis"
 cp bonds.txt "$DATA_DIR/genesis/bonds.txt"
 cp wallet.txt "$DATA_DIR/genesis/wallets.txt"
 
-exec rnode run -s \
+exec "$RNODE" run -s \
   --dev-mode \
   --autopropose \
   --no-upnp \
