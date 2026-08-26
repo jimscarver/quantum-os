@@ -1621,6 +1621,8 @@ const RHOLANG_HELP = [
   "  It keeps what you last wrote,",
   "  so you can change one thing and run it again; Clear empties it.",
   "  A program written inline — /rholang eval return!(42) — runs as typed.",
+  "  In the message box, end a line with \\ to keep writing on the next one,",
+  "  and a pasted program keeps its lines. Enter sends the lot; Esc drops it.",
   "",
   "  Configuration:",
   "  /rholang config               — show all of it",
@@ -1715,9 +1717,16 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
 }
 
 function handleCommand(raw: string): string[] {
-  const parts = raw.slice(1).trim().split(/\s+/);
+  const body = raw.slice(1).trim();
+  const parts = body.split(/\s+/);
   const cmd = parts[0].toLowerCase();
-  const arg = parts.slice(1).join(" ");
+  // A single-line argument is normalised the way it always was — whitespace
+  // collapsed to single spaces. A multi-line one keeps its lines: joining them
+  // would put a rholang `//` comment and the rest of the program on one line,
+  // commenting out everything after it.
+  const arg = body.includes("\n")
+    ? body.slice(cmd.length).replace(/^[^\S\n]+/, "")
+    : parts.slice(1).join(" ");
   const lines: string[] = [];
   const sys = (text: string) => { addMessage("", text, "system"); lines.push(text); };
 
@@ -5196,9 +5205,47 @@ function connect(): void {
 // Send
 // ---------------------------------------------------------------------------
 
+/**
+ * Lines held back from a `\`-continued entry or a multi-line paste, waiting for
+ * the line that finishes the message. The composer is a single-line <input> —
+ * it cannot show a newline, let alone hold one — so this is where a message's
+ * earlier lines live until it is sent.
+ */
+let pendingLines: string[] = [];
+const MSG_PLACEHOLDER = msgInput.placeholder;
+
+/** Show how many lines are held, so a half-entered message is never invisible. */
+function paintPending(): void {
+  const n = pendingLines.length;
+  msgInput.placeholder = n
+    ? `${n} line${n === 1 ? "" : "s"} held · Enter sends · Esc discards them`
+    : MSG_PLACEHOLDER;
+  msgInput.classList.toggle("continued", n > 0);
+}
+
+function discardPending(): void { pendingLines = []; paintPending(); }
+
 function send(): void {
-  const text = msgInput.value.trim();
-  if (!text || !qpeer) return;
+  const line = msgInput.value;
+  // A line ending in `\` continues on the next one. The backslash is the join
+  // itself, so it is not part of the text.
+  if (/\\$/.test(line.trimEnd())) {
+    pendingLines.push(line.trimEnd().slice(0, -1));
+    msgInput.value = "";
+    paintPending();
+    return;
+  }
+  // With lines held, drop only surrounding blank lines — trimming the whole
+  // block would eat the first line's indentation, and a pasted program is
+  // usually indented.
+  const text = pendingLines.length
+    ? pendingLines.concat(line).join("\n").replace(/^\n+/, "").replace(/\s+$/, "")
+    : line.trim();
+  // Nothing to send: let go of any held lines too, or Enter on an empty box
+  // would sit there doing nothing with the box still marked as holding some.
+  if (!text) { discardPending(); return; }
+  if (!qpeer) return;
+  discardPending();
   pushHistory(text);
   msgInput.value = "";
   if (text.startsWith("//")) {
@@ -5750,7 +5797,26 @@ function initUx(): void {
     for (const it of Array.from(items)) {
       if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
     }
-    if (files.length) { e.preventDefault(); sendFiles(files); }
+    if (files.length) { e.preventDefault(); sendFiles(files); return; }
+    // Multi-line text. An <input> cannot hold a newline: the browser flattens
+    // the paste, so a pasted program silently arrived as one line — which for
+    // rholang means a `//` comment swallowing everything after it. Hold every
+    // line but the last, and leave the last in the box, so what you see is
+    // where you are and Enter sends the whole paste.
+    const pasted = e.clipboardData?.getData("text") ?? "";
+    if (!pasted.includes("\n")) return;
+    e.preventDefault();
+    const lines = pasted.replace(/\r\n?/g, "\n").split("\n");
+    const last = lines.pop() ?? "";
+    const caret = msgInput.selectionStart ?? msgInput.value.length;
+    const end = msgInput.selectionEnd ?? msgInput.value.length;
+    // Paste at the caret, the same as a single-line paste would.
+    lines[0] = msgInput.value.slice(0, caret) + lines[0];
+    const after = msgInput.value.slice(end);
+    pendingLines.push(...lines);
+    msgInput.value = last + after;
+    msgInput.setSelectionRange(last.length, last.length);
+    paintPending();
   });
 
   // Live-call controls.
@@ -7095,6 +7161,9 @@ async function init(): Promise<void> {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptCmd(); return; }
       if (e.key === "Escape")    { e.preventDefault(); hideCmdMenu(); return; }
     }
+    // Esc drops held lines. The line in the box is left alone — you may well
+    // want to keep typing it; it is the earlier lines you are taking back.
+    if (e.key === "Escape" && pendingLines.length) { e.preventDefault(); discardPending(); return; }
     // Command menu closed: ArrowUp/Down recall input history (shell-style).
     if (e.key === "ArrowUp"   && navHistory(-1)) { e.preventDefault(); return; }
     if (e.key === "ArrowDown" && navHistory(+1)) { e.preventDefault(); return; }

@@ -255,6 +255,11 @@
       padding: 0.5rem 0.75rem;
     }
     #msg-input:focus { outline: none; border-color: #7fdbca; }
+    /* Lines held from a `\`-continuation or a multi-line paste. Must follow
+       :focus (equal specificity) and differ from it, or it is invisible while
+       you are typing — which is exactly when it matters. */
+    #msg-input.continued, #msg-input.continued:focus { border-color: #ff9d4a; }
+    #msg-input.continued::placeholder { color: #ff9d4a; opacity: 0.8; }
 
     #send-btn {
       background: #1e3a3a;
