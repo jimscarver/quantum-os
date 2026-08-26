@@ -229,6 +229,11 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     openBtn.title = "Load a rholang file from this device";
     openBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
 
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save .rho";
+    saveBtn.title = "Download what is in the editor";
+    saveBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
+
     const hint = document.createElement("div");
     hint.textContent = "Ctrl+Enter to run · Esc to cancel · drop a .rho here";
     hint.style.cssText = "margin-right:auto;font-size:12px;opacity:.6";
@@ -239,6 +244,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     okBtn.textContent = opts.mode === "eval" ? "Evaluate" : "Sign and deploy";
     okBtn.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
     btnRow.appendChild(openBtn);
+    btnRow.appendChild(saveBtn);
     btnRow.appendChild(hint);
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(okBtn);
@@ -275,8 +281,12 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       }, 300);
     };
 
+    /** Name of the file last opened, so Save offers it back. */
+    let loadedName = "";
+
     /** Put a file's text in the editor, replacing what is there. */
     const loadFile = (file: File): void => {
+      loadedName = file.name;
       const reader = new FileReader();
       reader.onload = () => {
         ta.value = String(reader.result ?? "");
@@ -295,6 +305,25 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     };
 
     openBtn.addEventListener("click", () => fileInput.click());
+
+    // Save what is in the editor. A program worth deploying is worth keeping,
+    // and a deploy is permanent — the source that produced it should not live
+    // only in a modal. Round-trips the opened name so open/edit/save keeps it.
+    saveBtn.addEventListener("click", () => {
+      const text = ta.value;
+      if (!text.trim()) { status.textContent = "nothing to save"; status.style.color = ""; return; }
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = loadedName || `program-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.rho`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke on the next tick — revoking synchronously can cancel the download.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      status.textContent = `saved ${a.download}`;
+      status.style.color = "";
+    });
     fileInput.addEventListener("change", () => {
       const f = fileInput.files?.[0];
       if (f) loadFile(f);
