@@ -90,3 +90,64 @@ powerbox.
 **Note the API wants JSON.** `POST /api/explore-deploy` rejects a `text/plain`
 body with *"Expected request with `Content-Type: application/json`"*; the term
 goes up as a JSON string. `rholang.ts` already does this.
+
+## What is blocked, in the node
+
+Two open bugs in rchain-rust make most non-trivial rholang unusable here. Both
+were found against `dev` at `f3f4759e9`; neither has a workaround from this side.
+
+**[#10](https://github.com/rchain-community/rchain-rust/issues/10) — `match`
+selects the wrong branch.** Branches are tried in reverse written order, so when
+more than one can match, the last one wins:
+
+```
+match 1 { 1 => { return!("literal") }  x => { return!("catchall") } }   ->  "catchall"
+```
+
+And a `_` wildcard never matches at all, so `_` branches are dead code:
+
+```
+match 1 { _ => { return!("wild") } }                                    ->  []
+```
+
+Nothing errors — the program takes a branch it should not have, or none. This
+reaches any recursive contract, because the idiomatic shape puts the base case in
+a `match`: with `_` the recursive branch is dead and the program returns nothing;
+replace `_` with a binding variable and the catch-all wins even at the base case,
+so it never terminates.
+
+**[#11](https://github.com/rchain-community/rchain-rust/issues/11) — a
+non-terminating term aborts the node.** Exploratory deploy has no phlo ceiling,
+so unbounded recursion overflows the stack and kills the process, not the
+request:
+
+```
+thread 'tokio-rt-worker' has overflowed its stack
+fatal runtime error: stack overflow, aborting
+```
+
+The two compound: #10 turns a terminating program into a non-terminating one and
+#11 turns that into node death. Restarting on the existing chain recovers
+cleanly.
+
+**What still works meanwhile:** everything above — pure rholang, the qucalc
+powerbox under both `eval` and `deploy`, sends and receives, `contract`, linear
+and persistent receives, and recursion that terminates without a `match`. Only
+`match`-based branching is affected.
+
+## Ordering of returned values
+
+Several sends to `return` all come back, but **not in the order they were
+written**, and the two read paths differ. Under `eval` the values arrive in
+reverse source order (deterministic across runs here); read back from a public
+name after a deploy, the order was neither source nor reverse. Rholang's `|` is
+parallel composition with no ordering semantics, so none of this is a guarantee.
+
+If order matters, put it in the program — one list, `return!([a, b, c])`;
+index-tagged tuples the caller sorts; or an accumulator whose single token
+serializes the appends:
+
+```rholang
+acc!("") |
+contract log(@msg, ack) = { for (@s <- acc) { acc!(s ++ msg) | ack!(Nil) } }
+```
