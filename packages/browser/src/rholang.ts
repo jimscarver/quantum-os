@@ -73,7 +73,11 @@ export function describeConfig(cfg: NodeConfig): string[] {
   ];
   if (cfg.key) {
     try {
-      out.push(`key    ${publicKeyOf(cfg.key).slice(0, 24)}…  (public half; the secret stays here)`);
+      // The REV address only. It is the identifier a balance is held against,
+      // the one to share to be paid, and the one to check a deploy's pre-charge
+      // against — so it is the whole answer. A truncated public key alongside it
+      // was two identifiers for one key, neither checkable against the other by
+      // eye. The secret never leaves this browser.
       out.push(`addr   ${revAddressOf(cfg.key)}`);
     } catch {
       out.push("key    ✗ not a valid secp256k1 key");

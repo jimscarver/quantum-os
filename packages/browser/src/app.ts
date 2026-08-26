@@ -27,7 +27,7 @@ import { openRholangEditor } from "./rholang-editor.js";
 import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
-         generateKey as generateDeployKey, publicKeyOf, revAddressOf, nodeStatus, evalTerm, deployTerm,
+         generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
          readResults, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
@@ -4036,7 +4036,6 @@ function handleCommand(raw: string): string[] {
             saveNodeConfig({ ...cfg, key: k });
             sys("✓ deploy key generated (stored in this browser only)");
             sys(`  address ${revAddressOf(k)}`);
-            sys(`  public  ${publicKeyOf(k)}`);
             sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
             break;
           }
