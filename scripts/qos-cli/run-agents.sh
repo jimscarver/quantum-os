@@ -25,17 +25,19 @@
 #   5 (facilitator memory global + browser + observer)                → 1 of 4 open
 #   4 (facilitator memory + browser + observer)                       → 3 of 3 open
 #
-# and the default set below — facilitator, memory, global, browser, no observer,
-# read from the agents own logs — interconnects: facilitator holds channels to the
-# browser and to memory, memory to facilitator and to global. So four is the most
-# that has been seen to work, and the default sits exactly there.
+# Four is the most that has been seen to work against the public server. The
+# default set below — facilitator, memory, and one browser — is three.
 #
 # The failing case also churns: `peer: rate limit exceeded`, then a signaling
 # drop, then a rejoin that re-sends the whole peers list and trips the limit
 # again. So the defaults here stay small and slow: one role, facilitator, plus the
-# memory and global daemons started below — four peers with one browser — and a
-# stagger long enough that the joins do not arrive as a burst. NO_MEMORY=1 and
-# NO_GLOBAL=1 drop that to two if you need more room for roles.
+# memory daemon started below — three peers with one browser — and a stagger long
+# enough that the joins do not arrive as a burst. NO_MEMORY=1 drops that to two if
+# you need more room for roles.
+#
+# The `/global` macro agent is NOT started here. It is deprecated (see CLAUDE.md),
+# and every agent running is a peer spent against the ceiling above. Start it by
+# hand if you want it: node global-agent.mjs --room <cap> --name global
 #
 # More roles work — pass them explicitly — but each one is another peer against
 # that ceiling, and the failure is silent. Running your own signaling server
@@ -84,21 +86,6 @@ if [ -z "${NO_MEMORY:-}" ]; then
       >> ".agents/memory.log" 2>&1 &
     echo $! > "$mpidf"
     echo "✓ started memory (pid $!) → scripts/qos-cli/.agents/memory.log"
-  fi
-fi
-
-# RChain capability macro agent — expands `/global <macro> <args…>` into rholang
-# (or answers read macros locally) and shares the result in the room chat.
-# Deterministic; no AI backend. Set NO_GLOBAL=1 to skip.
-if [ -z "${NO_GLOBAL:-}" ]; then
-  gpidf=".agents/global.pid"
-  if [ -f "$gpidf" ] && kill -0 "$(cat "$gpidf")" 2>/dev/null; then
-    echo "• global already running (pid $(cat "$gpidf"))"
-  else
-    nohup node global-agent.mjs --room "$ROOM" --name global \
-      >> ".agents/global.log" 2>&1 &
-    echo $! > "$gpidf"
-    echo "✓ started global (pid $!) → scripts/qos-cli/.agents/global.log"
   fi
 fi
 

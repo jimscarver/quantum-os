@@ -241,9 +241,8 @@ node agent.mjs --room <cap:room:… | room-URL> [--role facilitator] [--name <s>
 **Run the persistent room** (detached, on a Claude subscription): `bash run-agents.sh`
 launches `facilitator` on the `claude-code` backend with a stable per-role identity,
 **plus the memory daemon** (`qos-daemon.mjs`) so lemmas/gov persist and re-serve to
-joiners — room state (e.g. `/lemma` ballots) survives when every browser leaves — and
-the `/global` macro agent. Logs/pids under `.agents/`; `bash stop-agents.sh` stops all
-of it. Vary the agents by passing a room then roles
+joiners — room state (e.g. `/lemma` ballots) survives when every browser leaves.
+Logs/pids under `.agents/`; `bash stop-agents.sh` stops everything with a pidfile. Vary the agents by passing a room then roles
 (`bash run-agents.sh <room> facilitator skeptic`); `NO_MEMORY=1 bash run-agents.sh`
 skips the daemon. (nohup'd, so they survive closing the terminal; use tmux/screen or a
 service to survive logout/reboot.)
@@ -254,12 +253,11 @@ service to survive logout/reboot.)
 > channel opens, which from a browser is indistinguishable from the agents never
 > starting. Measured on that server, same room, same code, counting *total peers in
 > the room* — an observer joining to watch counts as one: **7 → 0 of 6** channels
-> open, **5 → 1 of 4**, **4 → 3 of 3**. The default set (facilitator, memory, global,
-> plus one browser — four peers, no observer) interconnects when read from the agents'
-> own logs. Four is the most that has been seen to work, and the default sits exactly
-> there. Hence one role by default and a 15s stagger (`STAGGER=n` to change it);
-> `NO_MEMORY=1` / `NO_GLOBAL=1` free a slot each. Add roles deliberately, and run your
-> own signaling server if you want a full cast — that removes the ceiling.
+> open, **5 → 1 of 4**, **4 → 3 of 3**. Four is the most that has been seen to work;
+> the default set (facilitator, memory, one browser) is three. Hence one role by
+> default and a 15s stagger (`STAGGER=n` to change it); `NO_MEMORY=1` frees a slot.
+> Add roles deliberately, and run your own signaling server if you want a full cast —
+> that removes the ceiling.
 
 **Running your own signaling server** (no ceiling, and nothing leaves the machine):
 
@@ -268,7 +266,7 @@ service to survive logout/reboot.)
 cd packages/signaling && npx tsc && SIGNAL_RATE_LIMIT=200 PORT=4444 node dist/index.js
 
 # 2. agents — Node has no mixed-content rule, so plain ws is fine
-bash run-agents.sh <room> facilitator scribe skeptic --signal ws://127.0.0.1:4444
+bash run-agents.sh <room> facilitator scribe skeptic   # then --signal per agent
 
 # 3. browser — the vite dev server proxies /signal, so this is wss:// on the
 #    origin the page already loaded from, with no second certificate
@@ -278,6 +276,10 @@ open "https://<host>:5173/quantum-os/?signal=wss://<host>:5173/signal#room=<cap>
 `?signal=` presets the sidebar's signaling field, so the whole setup is one link.
 Measured this way: **6 peers in the room → 5 of 5 channels open**, the same room
 size that opened 0 of 6 against the public server.
+
+The public server remains the default and the supported path. Run your own only if
+you actually need a bigger cast, and remember agents pointed at it are invisible to
+anyone on the public one — mixing the two silently splits the room.
 
 Note this only works from the vite dev server. A page served from GitHub Pages is
 a different origin and cannot proxy to your machine, so a local signaling server
@@ -482,7 +484,9 @@ Twenty macros, mirroring the `qucalc/examples/*.rho` in rchain-rust — see
 [`RChain_Macros.md`](../../RChain_Macros.md) for the full library and for running
 a local node.
 
-`run-agents.sh` launches it by default (set `NO_GLOBAL=1` to skip).
+`run-agents.sh` no longer launches it — `/global` is deprecated, and every agent is
+a peer spent against the room-size ceiling above. Start it by hand if you want it:
+`node global-agent.mjs --room <cap> --name global`.
 
 ### Browser side (the zero-trust signing loop)
 

@@ -4,7 +4,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ROLES=("$@"); [ ${#ROLES[@]} -eq 0 ] && ROLES=(facilitator scribe skeptic greeter memory)
+# With no arguments, stop everything that has a pidfile — not a hardcoded list.
+# The list used to be spelled out and omitted `global`, so `global` could not be
+# stopped by name and survived every "stop all", outliving the agents around it.
+# Whatever run-agents.sh (or a hand-started agent) recorded, this stops.
+ROLES=("$@")
+if [ ${#ROLES[@]} -eq 0 ]; then
+  ROLES=()
+  for f in .agents/*.pid; do [ -e "$f" ] || continue; ROLES+=("$(basename "$f" .pid)"); done
+  [ ${#ROLES[@]} -eq 0 ] && { echo "nothing to stop"; exit 0; }
+fi
 for role in "${ROLES[@]}"; do
   pidf=".agents/$role.pid"
   [ -f "$pidf" ] || continue
