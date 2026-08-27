@@ -21,11 +21,16 @@ groups, the homebound handicapped, and eventually classrooms.
 **EIES2 (1980s–90s)** — directed by Jim Whitescarver, implementing distributed
 Smalltalk as a research, development and operational environment for distributed
 CSCW. It supported the Virtual Classroom for years, until funding to maintain it
-ran out.
+ran out. That thread continues here — see the
+[Collaborative Learning case study](CollaborativeLearningCaseStudy.md) and
+[Room Best Practices](Room_Best_Practices.md).
 
-**QuantumOS** — this repository. Peer-to-peer rooms, a ZFA kernel, governance by
-liquid democracy, and a bridge to a chain for the things that must outlive the
-room.
+**QuantumOS** — this repository. Peer-to-peer [rooms](MyRoom.md), a ZFA kernel,
+[governance by liquid democracy](Governance.md), and a
+[bridge to a chain](Room_Bridges.md) for the things that must outlive the room.
+The vision it serves is stated in the [Manifesto](Manifesto.md); the
+[README](README.md) is the practical entry point and the
+[User Guide](User_Guide.md) is where to start using it.
 
 ## INTERACT: user programming, and why it matters here
 
@@ -92,22 +97,32 @@ EIES model — it is the EIES model with the suid bit sharpened into an object.
 
 **User programming is the point, not a feature.** EIES's command library was
 written by its users, not its authors. A system where only the maintainers can
-extend the vocabulary gets the vocabulary its maintainers imagined.
+extend the vocabulary gets the vocabulary its maintainers imagined. The current
+library is [RChain_Macros.md](RChain_Macros.md) — deprecated, and being
+redesigned in [#65](https://github.com/rchain-community/quantum-os/issues/65)
+around exactly this; [RhoQuCalc_Macros.md](RhoQuCalc_Macros.md) is the qucalc
+side of it.
 
 **Adoption should be social, mechanism should be boring.** Permissions and
 ownership were enough. What made a command spread was that it was useful and
 someone shared it. Elaborate promotion machinery was not required and is still
-not required — `/gov` exists here for groups that eventually want more, and
-should stay optional.
+not required — [`/gov`](Governance.md) exists here for groups that eventually
+want more, and should stay optional. How groups actually decide is
+[Group_Decisions.md](Group_Decisions.md), with a worked example in the
+[Governance case study](GovernanceCaseStudy.md).
 
 **The enabling primitive is authority, not syntax.** `+mypriv` mattered more than
 anything about INTERACT's grammar. When designing here, the question "what
 authority does this carry, and whose?" is the one that decides whether something
-is shareable.
+is shareable. What this project can and cannot enforce about that is
+[SECURITY.md](SECURITY.md).
 
 **Curation emerges.** "The most useful were made global system commands" was a
 judgment someone made, repeatedly, over time. Worth designing for a curator role
-existing rather than pretending ranking will be automatic.
+existing rather than pretending ranking will be automatic — the roles a room
+already recognises are in [Room_Best_Practices.md](Room_Best_Practices.md), and
+the [Specialist Room case study](SpecialistRoomCaseStudy.md) is one worked
+through.
 
 ## What is deliberately different
 
@@ -116,11 +131,14 @@ their text. That couples a command to the exact wording of an interface and
 breaks when the wording changes. The aim here is the same effect reached *more
 formally*: rholang processes coordinate over named channels, so a macro binds to
 a channel rather than scraping output. Matching on prompt text is what you do
-when there is no channel to bind to; here there is one.
+when there is no channel to bind to; here there is one. `/rholang` is how a room
+reaches a chain at all — see [Room_Bridges.md](Room_Bridges.md) and the
+[Developer Guide](Developer_Guide.md).
 
 **No superusers.** EIES's system command directory was gated by people with root.
 Here the equivalent boundary is holding a capability, which is delegable,
-auditable, and does not require anyone to be trusted with everything.
+auditable, and does not require anyone to be trusted with everything. The
+threat model and what is actually enforced are in [SECURITY.md](SECURITY.md).
 
 **Peer-to-peer, and durable by choice.** EIES was a host everyone dialled into.
 A QuantumOS room is peer-to-peer and ephemeral by default; what needs to outlive
@@ -155,8 +173,22 @@ Where this document states what INTERACT did and why, the source is Jim
 Whitescarver, who was largely responsible for it along with John Howell, Dave
 Harvy and Al Leurck. The reports are the record; he is the primary source.
 
+## Where to go from here
+
+If you are picking up this project, in order:
+
+| read | for |
+|---|---|
+| [README.md](README.md) | what QuantumOS is, and how to run it |
+| [Manifesto.md](Manifesto.md) | why it exists |
+| [User_Guide.md](User_Guide.md) · [Developer_Guide.md](Developer_Guide.md) | using it · building on it |
+| [Governance.md](Governance.md) · [Group_Decisions.md](Group_Decisions.md) | how groups decide |
+| [Consensus.md](Consensus.md) · [SECURITY.md](SECURITY.md) | what a room agrees · what is enforced |
+| [RChain_Macros.md](RChain_Macros.md) · [Room_Bridges.md](Room_Bridges.md) | reaching a chain from a room |
+| [#65](https://github.com/rchain-community/quantum-os/issues/65) | the macro design this document argues for |
+
 ---
 
-*If you are picking up this project: the argument for capabilities in
+*The argument for capabilities in
 [#65](https://github.com/rchain-community/quantum-os/issues/65) is the one to read
 first. It is a forty-year-old result.*
