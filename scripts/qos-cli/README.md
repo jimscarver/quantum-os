@@ -482,7 +482,7 @@ Macros are **typed templates**, and the registry lives in
 [`packages/browser/src/rholang-macros.js`](../../packages/browser/src/rholang-macros.js) —
 **one source shared with the browser**, so the rholang posted in chat is the
 rholang the browser signs. `rholang-macros.mjs` is a thin binding that supplies
-the node-side ZFA kernel. Arguments are structurally validated and interpolated:
+the Node-side ZFA kernel. Arguments are structurally validated and interpolated:
 a string always lands inside a rholang string literal (so it cannot escape its
 position), an amount is always a BigInt of decimal digits (so the value approved
 is the value signed).

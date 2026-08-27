@@ -1659,7 +1659,7 @@ function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"):
 // ---------------------------------------------------------------------------
 
 const RHOLANG_HELP = [
-  "/rholang — run rholang on an RChain node.",
+  "/rholang — run rholang on rnode, an RChain node.",
   "  /rholang eval          — run a program and read the result back. Nothing is signed,",
   "                           nothing is stored, no block is produced.",
   "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
@@ -1668,7 +1668,7 @@ const RHOLANG_HELP = [
   "  /rholang read [name]   — read what is on a name now; no name means the last deploy's.",
   "                           A deploy waits on consensus, which can take minutes. The value sits",
   "                           on its name until read, so nothing is lost by collecting it later.",
-  "  /rholang status        — what the node is: version, shard, height, phlo floor.",
+  "  /rholang status        — what rnode is: version, shard, height, phlo floor.",
   "  /rholang powerbox      — the names every program gets, and what each one takes.",
   "  /rholang macros        — the approved capability macro library (%name sites).",
   "  /rholang macro <n> …   — expand one macro on its own, when it is the whole program.",
@@ -1690,7 +1690,7 @@ const RHOLANG_HELP = [
   "",
   "  Configuration:",
   "  /rholang config               — show all of it",
-  "  /rholang node <url>           — node HTTP API (default http://127.0.0.1:40403)",
+  "  /rholang rnode <url>          — rnode HTTP API (default http://127.0.0.1:40403)",
   "  /rholang shard <id>           — shard the deploy is valid in (default root)",
   "  /rholang phlo <limit> [price] — what a deploy may spend",
   "  /rholang key generate|<hex>|show|forget — the secp256k1 deploy key (this browser only)",
@@ -1716,7 +1716,7 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
       scope: ["return", ...powerboxNames(mode)],
       nodeUrl: cfg.url,
       lint: lintRholang,
-      // Per device, not per room: a program is written against a node, and the
+      // Per device, not per room: a program is written against an rnode, and the
       // same one is usually run from whichever room you happen to be in.
       draftKey: "qos-rholang-draft",
     });
@@ -1745,7 +1745,7 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
  * Built-ins expand first, so a room macro may be written in terms of one.
  *
  * Errors never abort: a site that fails is left exactly as written. A leftover
- * `$` is a hard error at the node, `$` being illegal rholang; a leftover `%` is
+ * `$` is a hard error at rnode, `$` being illegal rholang; a leftover `%` is
  * rholang's modulo operator and will not be, which is why the report matters
  * more for that half.
  */
@@ -1799,7 +1799,7 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   const cfg = loadNodeConfig();
   void (async () => {
     // Never ask anyone to sign what cannot parse. The linter checks the shape of
-    // the program, not what it is permitted to reach — that is the node's call.
+    // the program, not what it is permitted to reach — that is rnode's call.
     const lint = await lintRholang(source);
     if (!lint.ok) {
       say("✗ malformed rholang — not running:");
@@ -2105,7 +2105,7 @@ function handleCommand(raw: string): string[] {
       sys("  /macro [sub]     — write a +command: define · list · show · find · echo (a body of / commands, or of rholang)");
       sys("  +name <args>     — run a command somebody here defined (++text to send a literal + line)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
-      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
+      sys("  /rholang <sub>   — run rholang on rnode: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
@@ -4306,12 +4306,12 @@ function handleCommand(raw: string): string[] {
               sys(`  network ${st.networkId ?? "?"} · shard ${st.shardId ?? "?"} · peers ${st.peers ?? 0}`);
               sys(`  latest block ${st.latestBlockNumber ?? "?"} · min phlo price ${st.minPhloPrice ?? "?"}`);
               if (st.shardId && st.shardId !== cfg.shard) {
-                sys(`  ⚠ your shard is "${cfg.shard}" but the node is "${st.shardId}" — deploys will be rejected`);
+                sys(`  ⚠ your shard is "${cfg.shard}" but rnode is "${st.shardId}" — deploys will be rejected`);
                 sys(`    fix with /rholang shard ${st.shardId}`);
               }
             } catch (e) {
               sys(`✗ cannot reach ${cfg.url} — ${(e as Error)?.message ?? e}`);
-              sys("  is the node running, and is --api-host set so it listens for the browser?");
+              sys("  is rnode running, and is --api-host set so it listens for the browser?");
             }
           })();
           break;
@@ -4401,10 +4401,11 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
-        case "node": {
-          if (!rest) { sys(`node ${cfg.url}`); break; }
+        case "rnode":
+        case "node": {           // `node` still answers; everything says rnode
+          if (!rest) { sys(`rnode ${cfg.url}`); break; }
           saveNodeConfig({ ...cfg, url: rest });
-          sys(`✓ node set to ${rest}`);
+          sys(`✓ rnode set to ${rest}`);
           break;
         }
 
@@ -6073,13 +6074,13 @@ const CMD_HELP: Record<string, string[]> = {
   persist: ["/persist <@lemma | currency <name>> to <peer> — ask a peer to also hold your public state for redundancy.", "/persist accept <id> · reject <id> · list"],
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
   rholang: [
-    "/rholang eval — run a rholang program on the node and read the result back. Nothing is signed, nothing stored, no block.",
+    "/rholang eval — run a rholang program on rnode and read the result back. Nothing is signed, nothing stored, no block.",
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
-    "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
+    "/rholang status — rnode's version, network, shard, height and phlo floor. Warns when your shard does not match rnode's.",
     "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
     "/rholang macros — the approved capability macro library (grant · ballot · directory · mailbox · group · delegate · transfer · swap · philosophers · multisig); /rholang macro <name> <args…> runs one on its own.",
     "A program's macro call sites expand before it is linted or signed: %name(…) from that library, $name(…) from what this room defined with /macro. /rholang echo shows the result.",
-    "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
+    "Configure with /rholang rnode <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],
   macro: [
@@ -6098,7 +6099,7 @@ const CMD_HELP: Record<string, string[]> = {
 interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
   { name: "help",    template: "/help",       desc: "show all commands" },
-  { name: "rholang", template: "/rholang ",    desc: "run rholang on an RChain node: eval · deploy · status" },
+  { name: "rholang", template: "/rholang ",    desc: "run rholang on rnode: eval · deploy · status" },
   { name: "macro",   template: "/macro ",      desc: "write a +command: define · list · show · find · echo" },
   { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
   { name: "password", template: "/password",  desc: "password-protect your identity (+ publish to groups)" },
