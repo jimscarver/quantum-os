@@ -34,8 +34,8 @@ ran out. That thread continues here — see the
 **QuantumOS** — this repository
 ([README](https://github.com/rchain-community/quantum-os#readme)). Peer-to-peer
 [rooms](MyRoom.md), a ZFA kernel, [governance by liquid
-democracy](Governance.md), and a [bridge to a chain](Room_Bridges.md) for the
-things that must outlive the room. The vision it serves is stated in the
+democracy](Governance.md), and a bridge to a chain ([RChain_Macros.md](RChain_Macros.md))
+for the things that must outlive the room. The vision it serves is stated in the
 [Manifesto](Manifesto.md); the [README](README.md) is the practical entry point
 and the [User Guide](User_Guide.md) is where to start using it.
 
@@ -157,7 +157,7 @@ breaks when the wording changes. The aim here is the same effect reached *more
 formally*: rholang processes coordinate over named channels, so a macro binds to
 a channel rather than scraping output. Matching on prompt text is what you do
 when there is no channel to bind to; here there is one. `/rholang` is how a room
-reaches a chain at all — see [Room_Bridges.md](Room_Bridges.md) and the
+reaches a chain at all — see [RChain_Macros.md](RChain_Macros.md) and the
 [Developer Guide](Developer_Guide.md).
 
 **No superusers.** EIES's system command directory was gated by people with root.
@@ -209,7 +209,8 @@ If you are picking up this project, in order:
 | [User_Guide.md](User_Guide.md) · [Developer_Guide.md](Developer_Guide.md) | using it · building on it |
 | [Governance.md](Governance.md) · [Group_Decisions.md](Group_Decisions.md) | how groups decide |
 | [Consensus.md](Consensus.md) · [SECURITY.md](SECURITY.md) | what a room agrees · what is enforced |
-| [RChain_Macros.md](RChain_Macros.md) · [Room_Bridges.md](Room_Bridges.md) | reaching a chain from a room |
+| [Room_Bridges.md](Room_Bridges.md) | joining rooms to each other |
+| [RChain_Macros.md](RChain_Macros.md) | reaching a chain from a room |
 | [#65](https://github.com/rchain-community/quantum-os/issues/65) | the macro design this document argues for |
 | [quantum-logical-framework](https://github.com/rchain-community/quantum-logical-framework#readme) | the ZFA foundation underneath all of it |
 

@@ -131,7 +131,7 @@ unfamiliar macro out of the dictionary, an explanation is a summary you are also
 trusting: most useful for understanding, weakest exactly where the question is
 *should I sign this*. `echo` is what answers that one.
 
-[`/rholang echo`](Room_Bridges.md) already exists — today it shows the wrapper
+`/rholang echo` already exists — today it shows the wrapper
 every program is given before signing, and it is where a macro expansion will
 appear.
 
@@ -437,5 +437,4 @@ transfer means the value you approved is not the value you signed.
 - [`packages/browser/src/global-macros.js`](packages/browser/src/global-macros.js) — the registry, one source for both halves
 - [QuCalc extensions](https://github.com/rchain-community/rchain-rust/blob/dev/docs/src/qucalc/extensions.md) — the system processes these macros call
 - [`Governance.md`](Governance.md) — the in-room liquid democracy the `rho:gov:*` macros mirror
-- [`Room_Bridges.md`](Room_Bridges.md) — how a room reaches a chain at all
 - [`SECURITY.md`](SECURITY.md) — threat model
