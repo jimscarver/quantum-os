@@ -30,8 +30,9 @@ room.
 ## INTERACT: user programming, and why it matters here
 
 The part of EIES most directly ancestral to this project is INTERACT, its
-command language, written by Jim Whitescarver. He and Turoff published on an
-early version as an interface language around 1979.
+command language. Jim Whitescarver was largely responsible for it, along with
+John Howell, Dave Harvy and Al Leurck. He and Turoff published on an early
+version as an interface language around 1979.
 
 INTERACT was BASIC-like — real control flow, powerful array functions,
 dictionaries — and was both an interface language and a general-purpose one.
@@ -39,18 +40,25 @@ Commands were inputs to the system that could read prompts and answer them
 conditionally, matching on the text of the last input to decide what to do next.
 Many commands never touched the system at all and were simply programs.
 
-What happened next is the interesting part, and it is the thing this project
-wants to reproduce:
+Most commands were written by users, or by group effort — tailoring a group's
+communication structures, defining its roles, or simply adding utility. What
+happened next is the interesting part, and it is the thing this project wants to
+reproduce:
 
 > People wrote hundreds of commands, shared them with others, and groups adopted
 > them. The most useful were made global system commands. It was user
 > programming at its finest, and collaborative system development at its finest.
 
-The mechanism was ordinary. Commands lived in text files. `+define` made one.
-`+addgroupcommand` put one in a group's hands, by a moderator role.
-`+addsyscommand` required write permission to the system command directory — held
-by superusers, who were often the students who had broken the security and then
-fixed it.
+The mechanism was ordinary. **A `+command` was one line** — an input to the
+system, the same as anything else a user typed. It did not necessarily involve a
+file. Often that one line was another `+command`, which did a `+get` of a file,
+rather than answering the prompt directly; the file was indirection a command
+could reach for, not the thing a command was.
+
+`+define` made a command. `+addgroupcommand` put one in a group's hands, by a
+moderator role. `+addsyscommand` required write permission to the system command
+directory — held by superusers, who were often the students who had broken the
+security and then fixed it.
 
 So the personal → group → global hierarchy was **ownership and directory
 permissions**, with a human decision at each boundary. Not a governance system.
@@ -59,9 +67,9 @@ around the mechanism rather than inside it.
 
 ### `+mypriv`, the enabling primitive
 
-The most powerful command was `+mypriv`. The owner of a command file could use it
-to do anything they were allowed to do as themselves — **suid, in Unix terms —
-and that is what enabled groupware**.
+The most powerful command was `+mypriv`. Where a command was backed by a file,
+its owner could use `+mypriv` to do anything they were allowed to do as
+themselves — **suid, in Unix terms — and that is what enabled groupware**.
 
 This is worth stating plainly because it is easy to miss: without it, a shared
 command can only do what its *caller* could already do, which is to say nothing
@@ -144,7 +152,8 @@ and further publications on
 [Jim Whitescarver's LinkedIn](https://www.linkedin.com/in/jimscarver/).
 
 Where this document states what INTERACT did and why, the source is Jim
-Whitescarver, who wrote it. The reports are the record; he is the primary source.
+Whitescarver, who was largely responsible for it along with John Howell, Dave
+Harvy and Al Leurck. The reports are the record; he is the primary source.
 
 ---
 
