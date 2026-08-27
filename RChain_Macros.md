@@ -509,7 +509,8 @@ the chain-side library and everything in the tiers above.
 
 ### Used anywhere
 
-INTERACT was called an interface language and was a general-purpose one. The
+[#81](https://github.com/rchain-community/quantum-os/issues/81). INTERACT was
+called an interface language and was a general-purpose one. The
 distinction was never real: a language that can answer a prompt conditionally,
 hold state, and call anything the system exposes is a programming language that
 happens to sit where a person types.

@@ -151,12 +151,18 @@ through.
 
 ## What is deliberately different
 
-**Not an interface language.** INTERACT commands answered prompts by matching on
-their text. That couples a command to the exact wording of an interface and
-breaks when the wording changes. The aim here is the same effect reached *more
-formally*: rholang processes coordinate over named channels, so a macro binds to
-a channel rather than scraping output. Matching on prompt text is what you do
-when there is no channel to bind to; here there is one. `/rholang` is how a room
+**Bound to channels, not to prompt text.** INTERACT was called an interface
+language and was a general-purpose one, and the distinction was never real: a
+language that answers a prompt conditionally, holds state, and reaches anything
+the system exposes is a programming language that happens to sit where a person
+types. The same is true here.
+
+What is different is what a command binds to. INTERACT commands answered prompts
+by matching on their text, which couples a command to the exact wording of an
+interface and breaks when the wording changes. Here rholang processes coordinate
+over named channels, so a macro binds to a channel rather than scraping output.
+Matching on prompt text is what you do when there is no channel to bind to;
+here there is one. `/rholang` is how a room
 reaches a chain at all — see [RChain_Macros.md](RChain_Macros.md) and the
 [Developer Guide](Developer_Guide.md).
 
