@@ -39,16 +39,17 @@
  * right compartments, bind/resolve are isolated per identity (resolving another
  * identity's name returns Nil), and a granted facet writes exactly one key.
  *
- * Two rnode constraints are designed around rather than worked around:
+ * Two shape rules, and the first one is not a preference:
  *
- *   1. Readers CONSUME AND RESTORE (`for (@r <- cell) { cell!(r) | … }`) rather
- *      than peek (`<<-`). Two concurrent peeks on one linear send deadlock, and
- *      a dictionary has concurrent readers by definition.
- *   2. Every contract takes at least two parameters. A persistent receive with
- *      exactly ONE binder does not fire — `contract c(ret) = { ret!(9) }` never
- *      runs, while the same body with a second parameter does. Filed upstream.
- *      Nothing here needs a one-parameter verb, so nothing here is shaped like
- *      one.
+ *   1. Every contract takes at least two parameters. A one-binder persistent
+ *      receive inside a nested `new` does not terminate — it re-fires until the
+ *      reduction budget stops it (rchain-rust#19). These contracts live in a
+ *      `new` that the deploy wrapper nests inside another, so the shape applies
+ *      here. Nothing needs a one-parameter verb, so nothing is written as one.
+ *   2. Readers CONSUME AND RESTORE (`for (@r <- cell) { cell!(r) | … }`). Peek
+ *      (`<<-`) would also work; consuming serialises the readers of a cell,
+ *      which is the behaviour worth having when several verbs mutate the same
+ *      map.
  */
 export const LOCKER_RHO = `new records, names,
     doRegister, doSetSelf, doAddCred, doRead, doBind, doResolve, doGrant,
@@ -219,8 +220,8 @@ export function selftest() {
   ok("every contract takes at least two parameters",
      [...LOCKER_RHO.matchAll(/contract\s+\w+\(([^)]*)\)/g)]
        .every((m) => m[1].split(",").filter((x) => x.trim()).length >= 2),
-     "a one-binder persistent receive does not fire on rnode");
-  ok("readers consume and restore rather than peek", !/<<-/.test(LOCKER_RHO));
+     "a one-binder persistent receive in a nested new runs away — rchain-rust#19");
+  ok("readers consume and restore", !/<<-/.test(LOCKER_RHO));
 
   const reg = registerProgram(URI, "1111alice");
   ok("register is well-formed", balanced(reg));
