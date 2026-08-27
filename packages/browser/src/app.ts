@@ -23,6 +23,9 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
+import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
+         formatDefinition, findMacros, bodyKind, MacroError,
+         MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { openRholangEditor } from "./rholang-editor.js";
 import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
@@ -206,6 +209,8 @@ interface RoomContext {
   pollCards: Map<string, HTMLElement>;
   // Governance: groupId -> Group (liquid-democracy groups; persisted).
   groupStore: Map<string, Group>;
+  // Macros: name -> definition (Interact2 `+commands`; persisted, synced).
+  macroStore: Map<string, MacroDef>;
   // Retraction tombstones: "<kind>:<id>" of removed gossiped items (poll/lemma)
   // so a peer's later sync-* can't heal them back. Persisted per room.
   retracted: Set<string>;
@@ -251,6 +256,7 @@ function createRoom(roomId: string): RoomContext {
     pollStore: new Map(),
     pollCards: new Map(),
     groupStore: new Map(),
+    macroStore: new Map(),
     retracted: new Set(),
     chatLog: loadChat(roomId),
     signalingUrl: DEFAULT_SIGNAL,
@@ -317,6 +323,7 @@ let rhoquHandlers: RhoQuOnHandler[] = [];
 let pollStore: Map<string, Poll> = new Map();
 let pollCards: Map<string, HTMLElement> = new Map();
 let groupStore: Map<string, Group> = new Map();
+let macroStore: Map<string, MacroDef> = new Map();
 // groupId that /gov subcommands act on. Persisted per tab so it survives a
 // reload (set via setFocusedGroup).
 let focusedGroup: string | null = (() => { try { return sessionStorage.getItem("qos-focused-group"); } catch { return null; } })();
@@ -357,6 +364,7 @@ function setActiveRoom(ctx: RoomContext): void {
   pollStore          = ctx.pollStore;
   pollCards          = ctx.pollCards;
   groupStore         = ctx.groupStore;
+  macroStore         = ctx.macroStore;
   retracted          = ctx.retracted;
 }
 
@@ -435,6 +443,48 @@ function loadGroups(): void {
     renderGroups();
   } catch { /* ignore corrupt data */ }
 }
+
+// ---------------------------------------------------------------------------
+// Macros — Interact2 `+commands` (macro-lang.js does the parsing and expanding)
+//
+// A definition is room state: signed with the author's dyncap, broadcast,
+// replayed to whoever joins next, and tombstoned when retracted — the same
+// shape as a lemma. That is the "group" tier of EIES's personal → group →
+// system hierarchy, and it needs no node, no key and no chain to work.
+// ---------------------------------------------------------------------------
+
+interface MacroDef {
+  name: string;                        // canonical, lowercased
+  params: string[];                    // parameter names, without the `$`
+  body: string;                        // `$param` sites unsubstituted
+  doc: string;                         // the comment that followed the name
+  kind: "command" | "rholang";
+  author: string;                      // peerId of the definer
+  authorLabel: string;
+  at: number;
+  // The author's dyncap ANCHOR, not their chain step. A reload mints a new
+  // peerId but keeps the anchor, so this is what says "mine" after a restart —
+  // and what a redefine or a retract from another peer has to match.
+  anchor?: string;
+}
+
+function saveMacros(): void {
+  localStorage.setItem(`qos-macros-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(macroStore.entries())));
+}
+
+function loadMacros(): void {
+  const raw = localStorage.getItem(`qos-macros-${activeRoom.roomId}`);
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw) as Record<string, MacroDef>;
+    for (const [name, def] of Object.entries(data)) macroStore.set(name, def);
+    renderMacros();
+  } catch { /* ignore corrupt data */ }
+}
+
+/** The lookup `macro-lang` expands against — the room's macros, by name. */
+const macroLookup = (name: string): MacroDef | undefined => macroStore.get(String(name).toLowerCase());
 
 function loadPolls(): void {
   const raw = localStorage.getItem(`qos-polls-${activeRoom.roomId}`);
@@ -933,6 +983,7 @@ function applyActiveRoomToUI(): void {
   renderLemmas();
   renderNotes();
   renderPolls();
+  renderMacros();
   // Share link + tab highlight
   updateShareLink();
   renderTabs();
@@ -996,6 +1047,7 @@ function loadRoomState(ctx: RoomContext): void {
   loadNotes();
   loadPolls();
   loadGroups();
+  loadMacros();
   loadRetracted();
   if (previousActive) setActiveRoom(previousActive);
 }
@@ -1675,9 +1727,29 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
  * fresh one per submission, so the name here shows the shape of the forwarder
  * rather than the name any particular deploy will use.
  */
+/**
+ * Expand this room's `$name(…)` macro sites in a rholang program.
+ *
+ * Errors never abort: a site that fails is left exactly as written, and since
+ * `$` is illegal rholang the node refuses it rather than running something
+ * that quietly means the wrong thing. Reported here so the reason is visible
+ * before the linter says only that the program will not parse.
+ */
+function expandRholangMacros(source: string, say: (t: string) => void): string {
+  if (!source.includes("$")) return source;
+  const x = expandCallSites(source, macroLookup);
+  for (const err of x.errors) say(`✗ line ${err.line}: ${err.message}`);
+  if (x.expansions.length) {
+    const names = [...new Set(x.expansions.map((e) => e.name))].map((n) => "$" + n).join(", ");
+    say(`  · expanded ${x.expansions.length} macro site${x.expansions.length === 1 ? "" : "s"}: ${names}`);
+  }
+  return x.source;
+}
+
 function echoRholang(mode: "eval" | "deploy", body: string): void {
   const say = (t: string) => addMessage("", t, "system");
   if (!body.trim()) { say("nothing to echo"); return; }
+  body = expandRholangMacros(body, say);
   const program = mode === "deploy"
     ? wrapProgram(body, "deploy", "qos-result-<minted per deploy>")
     : wrapProgram(body, "eval");
@@ -1689,6 +1761,8 @@ function echoRholang(mode: "eval" | "deploy", body: string): void {
 function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   const say = (t: string) => addMessage("", t, "system");
   if (!source.trim()) { say("nothing typed — cancelled"); return; }
+  // Expand before echoing: what is shown has to be what is signed.
+  source = expandRholangMacros(source, say);
   // Echo the program as one fenced block, not a row per line. A row per line
   // put the system gutter's "·" in front of every line of the copy, and ran
   // each line through the markdown renderer, whose `*…*` emphasis rule eats
@@ -1781,6 +1855,169 @@ let lastResultName = "";
 /** The last deploy's signature, so `/rholang read` can tell "still waiting" from "errored". */
 let lastDeploySig = "";
 
+// ---------------------------------------------------------------------------
+// Macro runtime — defining, retracting and running a `+command`
+// ---------------------------------------------------------------------------
+
+/** Is this macro mine to redefine or retract for everyone? Anchor first: a
+ *  reload changes the peerId but not the identity behind it. */
+/**
+ * A macro definition off the wire, validated the way a lemma is: nothing is
+ * trusted about it beyond the shape, and the body is re-read for its kind
+ * rather than believed. Returns null if it is not a definition.
+ */
+function macroFromWire(d: Record<string, unknown>, from: string): MacroDef | null {
+  const name = String(d.name ?? "").toLowerCase();
+  if (!MACRO_NAME_RE.test(name)) return null;
+  const body = String(d.body ?? "");
+  if (!body.trim() || body.length > MAX_BODY) return null;
+  const params = Array.isArray(d.params) ? d.params.map(String) : [];
+  if (params.some((x) => !MACRO_NAME_RE.test(x))) return null;
+  const wireKind = d.macroKind === "command" || d.macroKind === "rholang" ? d.macroKind : bodyKind(body);
+  // The body decides the kind. A sender claiming `rholang` for a body of slash
+  // commands (or the reverse) would have every peer disagree about what the
+  // same definition is, so the claim is checked rather than taken.
+  const kind = bodyKind(body) === wireKind ? wireKind : bodyKind(body);
+  return {
+    name, params, body,
+    doc: String(d.doc ?? "").slice(0, 200),
+    kind,
+    author: from,
+    authorLabel: String(d.authorLabel ?? peerLabel(from)),
+    at: typeof d.at === "number" ? d.at : Date.now(),
+    anchor: (d.dyncap && typeof d.dyncap === "object")
+      ? String((d.dyncap as DyncapField).anchor || "") || undefined
+      : undefined,
+  };
+}
+
+/** How a macro is called: `+name <arg>` for a command, `$name($arg)` for rholang. */
+function macroCallForm(def: MacroDef): string {
+  return def.kind === "command"
+    ? `+${def.name}${def.params.map((x) => ` <${x}>`).join("")}`
+    : `$${def.name}${def.params.length ? `(${def.params.map((x) => "$" + x).join(", ")})` : ""}`;
+}
+
+/** Is this macro mine to redefine or retract for everyone? Anchor first: a
+ *  reload changes the peerId but not the identity behind it. */
+function isMyMacro(def: MacroDef): boolean {
+  const mine = dyncapState?.anchor;
+  if (def.anchor && mine) return def.anchor === mine;
+  return def.author === myPeerId();
+}
+
+/**
+ * Define (or redefine) a macro and tell the room.
+ *
+ * First writer wins the name, and only that author may replace the definition —
+ * the same author check the lemma retract and the note series use. That is
+ * EIES's rule too: the owner of the file could edit it, and nobody else could.
+ */
+function defineMacro(text: string, say: (t: string) => void): void {
+  let parsed;
+  try { parsed = parseDefinition(text); }
+  catch (e) { say(`· ${e instanceof MacroError ? e.message : String(e)}`); return; }
+
+  const existing = macroStore.get(parsed.name);
+  if (existing && !isMyMacro(existing)) {
+    say(`· $${parsed.name} is defined by ${existing.authorLabel} — pick another name, or /forget macro ${parsed.name} to hide theirs`);
+    return;
+  }
+  // Defining a name I previously retracted is me changing my mind about it.
+  retracted.delete(tombKey("macro", parsed.name));
+  saveRetracted();
+
+  const def: MacroDef = {
+    ...parsed,
+    author: myPeerId(),
+    authorLabel: myName || myPeerId().slice(0, 8),
+    at: Date.now(),
+    anchor: dyncapState?.anchor,
+  };
+  macroStore.set(def.name, def);
+  saveMacros();
+  renderMacros();
+  signedBroadcast({
+    kind: "macro-define",
+    name: def.name, params: def.params, body: def.body, doc: def.doc,
+    macroKind: def.kind, authorLabel: def.authorLabel, at: def.at,
+  });
+  say(`${existing ? "redefined" : "defined"} ${macroCallForm(def)}${def.doc ? `  — ${def.doc}` : ""}`);
+  if (def.kind === "rholang") say(`  rholang: use it as a $${def.name}(…) site inside /rholang eval or deploy`);
+}
+
+/** Retract a macro — for everyone if it is mine, from my view otherwise. */
+function forgetMacro(name: string): void {
+  const key = String(name).toLowerCase();
+  const def = macroStore.get(key);
+  if (!def) { addMessage("", `no macro $${key}`, "system"); return; }
+  const mine = isMyMacro(def);
+  markRetracted("macro", key);
+  macroStore.delete(key);
+  saveMacros();
+  renderMacros();
+  if (mine) signedBroadcast({ kind: "retract", what: "macro", id: key });
+  addMessage("", `  · $${key} ${mine ? "retracted" : "hidden from your view"}`, "system");
+}
+
+// A `+command` body may invoke another `+command`; expansion is bounded inside
+// macro-lang, but a body that calls a body is runtime recursion and needs its
+// own bound. Kept small deliberately: nesting this deep is a mistake, not a
+// design.
+const MACRO_RUN_DEPTH = 8;
+let macroDepth = 0;
+
+/**
+ * Run `+name args`. Returns the lines it printed, so /script and a body can
+ * carry it the way they carry a slash command.
+ */
+function runMacroLine(line: string): string[] {
+  const out: string[] = [];
+  const say = (t: string) => { addMessage("", t, "system"); out.push(t); };
+  let call;
+  try { call = parseInvocation(line); }
+  catch (e) { say(`· ${e instanceof MacroError ? e.message : String(e)}`); return out; }
+
+  const def = macroStore.get(call.name);
+  if (!def) {
+    say(`no +${call.name} command in this room — /macro list, or /macro define $${call.name}(…) to write it`);
+    return out;
+  }
+  if (def.kind === "rholang") {
+    say(`· $${def.name} is rholang, not a command — use it as $${def.name}(…) inside /rholang eval`);
+    return out;
+  }
+  if (macroDepth >= MACRO_RUN_DEPTH) {
+    say(`· +${def.name}: commands nest more than ${MACRO_RUN_DEPTH} deep — stopping`);
+    return out;
+  }
+
+  let expansion;
+  try { expansion = expandCommand(def, call.args, macroLookup); }
+  catch (e) { say(`· ${e instanceof MacroError ? e.message : String(e)}`); return out; }
+  for (const err of expansion.errors) say(`· ${err.message}`);
+  if (expansion.commands.length === 0) { say(`· +${def.name} expanded to nothing`); return out; }
+
+  macroDepth++;
+  let ran = 0;
+  try {
+    for (const cmd of expansion.commands) {
+      if (cmd.trim().startsWith("//")) continue;
+      try { runInput(cmd); ran++; }
+      catch (e) { say(`· +${def.name} error on '${cmd.split("\n")[0]}': ${String(e)}`); }
+    }
+  } finally { macroDepth--; }
+  say(`· +${def.name}: ${ran} command${ran === 1 ? "" : "s"}`);
+  return out;
+}
+
+/** Route one line of input: `+name` is a macro, anything else a slash command. */
+function runInput(text: string): string[] {
+  const t = text.trim();
+  if (t.startsWith("+")) return runMacroLine(t);
+  return handleCommand(t.startsWith("/") ? t : "/" + t);
+}
+
 function handleCommand(raw: string): string[] {
   const body = raw.slice(1).trim();
   const parts = body.split(/\s+/);
@@ -1839,6 +2076,8 @@ function handleCommand(raw: string): string[] {
       sys("  /render          — animate this room (perspectives, closures, groups)");
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
+      sys("  /macro [sub]     — write a +command: define · list · show · find · echo (a body of / commands, or of rholang)");
+      sys("  +name <args>     — run a command somebody here defined (++text to send a literal + line)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
       sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
       sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros (deprecated — prefer /rholang)");
@@ -2201,6 +2440,91 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "macro":
+    case "macros": {
+      // The verbs that manage definitions are built in, so they keep the `/`.
+      // `+` is reserved for what a person wrote: a leading `/` is something the
+      // app ships, a leading `+` is something somebody in this room defined.
+      const sub = (parts[1] || "").toLowerCase();
+      const rest = arg.slice(parts[1] ? arg.indexOf(parts[1]) + parts[1].length : 0).replace(/^[^\S\n]+/, "");
+
+      if (sub === "define" || sub === "def") {
+        if (!rest.trim()) {
+          sys("usage: /macro define $name($arg, …)  // what it does");
+          sys("  then the body on the following lines (Shift+Enter for a new line):");
+          sys("    /macro define $standup($topic)  // opens a standup poll");
+          sys("    /poll new $topic | yes, no, later");
+          sys("    /gov say standup on $topic is open");
+          sys("  a body of rholang instead makes a $name(…) fragment for /rholang");
+          break;
+        }
+        defineMacro(rest, sys);
+        break;
+      }
+
+      if (sub === "show") {
+        const def = macroStore.get((parts[2] || "").toLowerCase().replace(/^[$+]/, ""));
+        if (!def) { sys("usage: /macro show <name>"); break; }
+        sys(`${formatDefinition(def)}`);
+        sys(`  (${def.kind}, by ${def.authorLabel})`);
+        break;
+      }
+
+      if (sub === "find") {
+        let found: MacroDef[];
+        try { found = findMacros(macroStore.values(), parts.slice(2).join(" ")); }
+        catch (e) { sys(`· ${e instanceof MacroError ? e.message : String(e)}`); break; }
+        if (!found.length) { sys("nothing matches"); break; }
+        for (const d of found) sys(`  ${macroCallForm(d)}${d.doc ? `  — ${d.doc}` : ""}`);
+        break;
+      }
+
+      if (sub === "echo") {
+        // Evidence, not explanation: what the expansion actually produced,
+        // before anything runs and before anything is signed.
+        const def = macroStore.get((parts[2] || "").toLowerCase().replace(/^[$+]/, ""));
+        if (!def) { sys("usage: /macro echo <name> [args…]"); break; }
+        const args = parseInvocation(`+${def.name} ${parts.slice(3).join(" ")}`).args;
+        try {
+          if (def.kind === "command") {
+            const x = expandCommand(def, args, macroLookup);
+            for (const err of x.errors) sys(`✗ line ${err.line}: ${err.message}`);
+            for (const c of x.commands) sys(`  ${c}`);
+          } else {
+            const x = expandCallSites(`$${def.name}(${args.join(", ")})`, macroLookup);
+            for (const err of x.errors) sys(`✗ line ${err.line}: ${err.message}`);
+            sys(x.source);
+          }
+        } catch (e) { sys(`· ${e instanceof MacroError ? e.message : String(e)}`); }
+        break;
+      }
+
+      if (sub === "remove" || sub === "forget" || sub === "rm") {
+        const name = (parts[2] || "").toLowerCase().replace(/^[$+]/, "");
+        if (!name) { sys("usage: /macro remove <name>"); break; }
+        forgetMacro(name);
+        break;
+      }
+
+      if (sub === "help") {
+        for (const l of CMD_HELP["macro"] ?? []) sys("  " + l);
+        break;
+      }
+
+      // Bare /macro, or /macro list.
+      if (macroStore.size === 0) {
+        sys("no commands defined in this room yet");
+        sys("  /macro define $name($arg) …  — write one; it is shared with the room");
+        sys("  /macro help                  — the whole verb list");
+        break;
+      }
+      sys(`commands in this room (${macroStore.size}):`);
+      for (const d of [...macroStore.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+        sys(`  ${macroCallForm(d)}${d.doc ? `  — ${d.doc}` : ""}  (by ${d.authorLabel})`);
+      }
+      break;
+    }
+
     case "remove":
     case "retract":
     case "rm":
@@ -2244,7 +2568,13 @@ function handleCommand(raw: string): string[] {
         forgetGroup(g);
         break;
       }
-      sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | group <name> | list>");
+      if (sub === "macro" || sub === "command") {
+        const name = rest.toLowerCase().replace(/^[$+]/, "");
+        if (!name) { sys("usage: /forget macro <name>  (see the Commands list)"); break; }
+        forgetMacro(name);
+        break;
+      }
+      sys("usage: /forget <poll <id> | lemma <name> | note <token|currency denom> | group <name> | macro <name> | list>");
       sys("  aliases: /remove, /retract, /rm  (e.g. /remove lemma <name>; or click the ✕ next to it)");
       sys("  poll/lemma/group: creator/author retracts for everyone; otherwise hides for you. note: deletes (destroys value).");
       break;
@@ -3618,7 +3948,7 @@ function handleCommand(raw: string): string[] {
       sys(`· rhoqu transpiled to ${cmds.length} command${cmds.length === 1 ? "" : "s"}`);
       let executed = 0;
       for (const c of cmds) {
-        try { handleCommand(c); executed++; }
+        try { runInput(c); executed++; }
         catch (err) { sys(`· rhoqu error on '${c}': ${String(err)}`); }
       }
       sys(`· rhoqu: ${executed} executed${handlersAfter > 0 ? `, ${handlersAfter} on-handler${handlersAfter === 1 ? "" : "s"} active` : ""}`);
@@ -3644,9 +3974,9 @@ function handleCommand(raw: string): string[] {
       let skipped  = 0;
       for (const seg of segments) {
         if (seg.startsWith("//")) { skipped++; continue; }
-        const cmdStr = seg.startsWith("/") ? seg : "/" + seg;
+        const cmdStr = seg.startsWith("/") || seg.startsWith("+") ? seg : "/" + seg;
         try {
-          handleCommand(cmdStr);
+          runInput(cmdStr);
           executed++;
         } catch (e) {
           sys(`· script error on '${seg}': ${String(e)}`);
@@ -4999,6 +5329,16 @@ function connect(): void {
             saveLemmas();
             renderLemmas();
             addMessage("", `  · ${lemmaRefStr(name)} retracted by ${peerLabel(from)}`, "system");
+          } else if (what === "macro") {
+            const def = macroStore.get(id.toLowerCase());
+            // Author only, by anchor — same check as a lemma retract.
+            const senderAnchor = dyncapChains.get(from)?.anchor;
+            if (!def || !def.anchor || !senderAnchor || def.anchor !== senderAnchor) return;
+            markRetracted("macro", id.toLowerCase());
+            macroStore.delete(id.toLowerCase());
+            saveMacros();
+            renderMacros();
+            addMessage("", `  · $${id.toLowerCase()} retracted by ${peerLabel(from)}`, "system");
           } else if (what === "group") {
             const g = groupStore.get(id);
             if (!g || from !== g.creator) return;          // only the creator disbands for everyone
@@ -5009,6 +5349,55 @@ function connect(): void {
             saveGroups();
             renderGroups();
             addMessage("", `🏛 group “${g.name}” disbanded by ${peerLabel(from)}`, "system");
+          }
+          return;
+        }
+        if (d.kind === "macro-define") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const def = macroFromWire(d, from);
+          if (!def) return;
+          if (isRetracted("macro", def.name)) return;             // I removed it; don't heal it back
+          const existing = macroStore.get(def.name);
+          // First writer wins the name, and only that author may replace the
+          // definition. Without the anchor check any peer could redefine
+          // somebody's `+command` under them, which is the one thing a shared
+          // command library cannot survive.
+          if (existing) {
+            if (!existing.anchor || !def.anchor || existing.anchor !== def.anchor) return;
+            if (def.at <= existing.at) return;                    // stale or replayed
+          }
+          macroStore.set(def.name, def);
+          saveMacros();
+          renderMacros();
+          addMessage(from, `${existing ? "redefined" : "defined"} ${macroCallForm(def)}${def.doc ? `  — ${def.doc}` : ""}`,
+                     "peer", def.authorLabel);
+          return;
+        }
+        if (d.kind === "sync-macros") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          if (ignoredForSync.has(from)) return;
+          const raws = Array.isArray(d.macros) ? d.macros : [];
+          let added = 0;
+          for (const raw of raws) {
+            if (!raw || typeof raw !== "object") continue;
+            const def = macroFromWire(raw as Record<string, unknown>, from);
+            if (!def) continue;
+            if (isRetracted("macro", def.name)) continue;
+            const existing = macroStore.get(def.name);
+            // A forwarded definition carries its original author's chain step,
+            // so a later edit still only lands under the same anchor.
+            if (existing) {
+              if (!existing.anchor || !def.anchor || existing.anchor !== def.anchor || def.at <= existing.at) continue;
+            }
+            macroStore.set(def.name, def);
+            added++;
+          }
+          if (added > 0) {
+            saveMacros();
+            renderMacros();
+            addMessage("", `  · ${added} command${added === 1 ? "" : "s"} from ${peerLabel(from)}`, "system");
           }
           return;
         }
@@ -5230,6 +5619,10 @@ function connect(): void {
           const groups = Array.from(groupStore.values());
           signedSend(peerId, { kind: "sync-gov", groups });
         }
+        if (macroStore.size > 0) {
+          const macros = Array.from(macroStore.values());
+          signedSend(peerId, { kind: "sync-macros", macros });
+        }
       } finally { setActiveRoom(prev); }
     },
     onPeerJoined(id) {
@@ -5367,6 +5760,22 @@ function send(): void {
     addMessage("", escaped, "self");
     return;
   }
+  // `++text` escapes a literal `+` line into chat, the way `//` does for `/`.
+  if (text.startsWith("++")) {
+    const escaped = text.slice(1);
+    qpeer.broadcast({ kind: "chat", text: escaped });
+    addMessage("", escaped, "self");
+    return;
+  }
+  // `+name` is a user-defined command. Only an identifier-shaped name is taken
+  // as one: "+1" is agreement, not a call, and goes to chat like any other
+  // message. The commands a macro runs broadcast on their own terms, so the
+  // room sees what happened without the invocation needing its own envelope.
+  if (/^\+[A-Za-z][A-Za-z0-9_-]*/.test(text)) {
+    addMessage("", text, "self");
+    runMacroLine(text);
+    return;
+  }
   if (text.startsWith("/")) {
     const parts = text.slice(1).trim().split(/\s+/);
     const cmd = parts[0].toLowerCase();
@@ -5376,7 +5785,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "global" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "global" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -5691,6 +6100,17 @@ const CMD_HELP: Record<string, string[]> = {
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],
+  macro: [
+    "Write a command. `/` is what the app ships; `+` is what somebody here wrote.",
+    "/macro define $name($arg, …)  // what it does   — then the body on the lines below (Shift+Enter for a new line).",
+    "A body of slash commands makes a +command:  /macro define $standup($topic) ⏎ /poll new $topic | yes, no ⏎ /gov say standup on $topic",
+    "Then anyone in the room runs it: +standup \"Q4 budget\"  (quotes group an argument; topic=… names one).",
+    "A body of rholang makes a fragment instead — call it as $name(…) inside /rholang eval or deploy, where its arguments stay rholang terms.",
+    "A line beginning with / or + starts a new command; anything else continues the one before it, so a multi-line rholang program can be the argument to /rholang eval.",
+    "/macro list — what this room has · show <name> — the definition as typed · find [pattern] — search names, docs and bodies · echo <name> [args] — what it expands to, running nothing.",
+    "Definitions are room state: signed, shared with everyone here, and replayed to whoever joins next. First writer wins a name, and only that author can redefine or retract it.",
+    "/forget macro <name> (or the ✕ in Commands) retracts yours for everyone, and hides anyone else's from your view.",
+  ],
   global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library.", "Deprecated, pending a redesign around programs rather than argument lists — prefer /rholang, which takes rholang directly and owns the node setting (/rholang node <url>).", "Expansions are linted (WASM), previewed, then signed with your browser-held secp256k1 key and POSTed to the node — the key never leaves the browser."],
 };
 
@@ -5698,6 +6118,7 @@ interface SlashCmd { name: string; template: string; desc: string }
 const SLASH_COMMANDS: SlashCmd[] = [
   { name: "help",    template: "/help",       desc: "show all commands" },
   { name: "rholang", template: "/rholang ",    desc: "run rholang on an RChain node: eval · deploy · status" },
+  { name: "macro",   template: "/macro ",      desc: "write a +command: define · list · show · find · echo" },
   { name: "id",      template: "/id",         desc: "your peer ID and ZFA proof" },
   { name: "password", template: "/password",  desc: "password-protect your identity (+ publish to groups)" },
   { name: "login",   template: "/login ",     desc: "restore identity: /login <handle> (from group) or paste a string" },
@@ -6606,6 +7027,8 @@ function renderPolls(): void {
 // Governance — liquid-democracy groups (gov.ts)
 // ---------------------------------------------------------------------------
 
+const macroListEl  = document.getElementById("macro-list");
+const macroCountEl = document.getElementById("macro-count");
 const govListEl  = document.getElementById("gov-list");
 const govCountEl = document.getElementById("gov-count");
 const govCards = new Map<string, HTMLElement>();   // groupId -> live card node
@@ -7034,6 +7457,29 @@ function addIssueCard(g: Group, issue: Issue): void {
   saveChat(activeRoom);
   if (isUiActive()) { renderChatLine(line); messagesEl.scrollTop = messagesEl.scrollHeight; }
   else markUnread(activeRoom);
+}
+
+function renderMacros(): void {
+  if (!isUiActive() || !macroListEl || !macroCountEl) return;
+  macroCountEl.textContent = String(macroStore.size);
+  macroListEl.innerHTML = "";
+  for (const def of [...macroStore.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    const li = document.createElement("li");
+    li.className = "row-item";
+    const label = document.createElement("span");
+    label.className = "row-label";
+    // A rholang macro is not invokable on its own, so it is shown the way it is
+    // used — as a `$name(…)` call site inside a program — rather than as `+name`.
+    label.textContent = macroCallForm(def);
+    label.addEventListener("click", () => {
+      msgInput.value = def.kind === "command" ? `+${def.name} ` : `/macro show ${def.name}`;
+      msgInput.focus();
+    });
+    li.title = `${def.doc || (def.kind === "command" ? "a command" : "a rholang fragment")}\n(by ${def.authorLabel})\n\n${def.body}`;
+    li.appendChild(label);
+    appendRemoveBtn(li, def.author === myPeerId() ? "retract this command" : "hide from your view", () => forgetMacro(def.name));
+    macroListEl.appendChild(li);
+  }
 }
 
 function renderGroups(): void {

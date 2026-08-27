@@ -43,6 +43,7 @@ quantum-os/
 │   │       ├── vault.ts    Password-encrypted identity vault (PBKDF2 → AES-GCM over the dyncap seed; /password, /login)
 │   │       ├── probe.ts    Discrepancy probe — chain-weighted supermajority tally on join
 │   │       ├── polls.ts    Group polls — pure approval + ranked-choice (IRV) tally over content-hash option ids
+│   │       ├── macro-lang.js Interact2 `$` macro language — parse, bind, expand; both lexers; --selftest
 │   │       ├── rhoqu.ts    RhoQu macro parser + transpiler (process / new / | / if / on / for → /command strings)
 │   │       └── index.ts    WASM module re-exports
 │   ├── signaling/          Node.js WebSocket signaling relay (Render.com)
@@ -308,6 +309,74 @@ When the signaling WebSocket drops and reconnects (Render.com sleep, network bli
 - **`app.ts`**: `onPeerLeft` is debounced 6 seconds via `pendingLeaves: Map<string, timer>` and is idempotent (one pending-leave per peer). If the peer rejoins within the window, suppress both "left" and "joined" messages silently
 - **Background-tab recovery + presence polish**: `peer.ts` `wake()` (reconnect now, reset the throttled backoff; floor lowered to 1.5s) is called on `visibilitychange`/`focus`/`pageshow`/`online`, so peers return instantly after a tab switch instead of "eventually"; `app.ts` adds a peer to the roster on **`onChannelOpen`** too (not just signaling-join), so a remote-initiated peer (e.g. an agent that dialed us) shows up; agents are flagged **🤖** in the roster via `peerAgents` (from the `name` envelope's `agent:<role>`); the status line shows a live `connected · N peers` / `reconnecting…`; the "joined" line waits for the peer's **name** (`pendingJoins`, 5s id fallback) so it reads "Jim joined", not a raw id. **Sticky identity caches (survive flaps):** both the display name (`lastKnownNames`) and the agent role (`peerAgents`) are per-`RoomContext` caches that are **never cleared on leave** — only reset when a peer re-announces itself as a non-agent — so a flapping AI daemon keeps its name **and** its 🤖 badge across reconnect churn instead of decaying to a raw hex id (a departed peer's stale entry never renders — the roster only badges ids still in `peers`). Do not re-add a `peerAgents.delete` to the leave-grace timer
 
+### Macros — Interact2 (`/macro`, `+name` — `macro-lang.js` + `app.ts`)
+
+User-written commands. EIES let a user write a command, share it, and watch a
+group adopt it; that was the point of the system rather than a feature of it
+(`EIES_Legacy.md`). The direct predecessor is **MacRhoLang / @RHO-bot**, which
+already had `$` sites, `define:`/`echo:`/`find:` and command-form invocation.
+Full reference in [RChain_Macros.md](RChain_Macros.md); summary for code work:
+
+**`/` is what the app ships, `+` is what a person wrote.** The verbs that manage
+definitions are built in (`/macro define|list|show|find|echo|remove`); what they
+produce is invoked `+name args`. `++text` escapes a literal `+` line to chat, and
+only an identifier-shaped name is read as an invocation — so `+1` is agreement,
+not a call.
+
+**Two halves, decided by the body.** `bodyKind()` reads the first non-blank
+line: starting with `/` or `+` makes a **command** macro (invokable as `+name`);
+anything else makes a **rholang** fragment, invokable only as a `$name(…)` call
+site inside `/rholang eval|deploy|echo`. Nothing declares the kind — and
+`macroFromWire` re-derives it from the body rather than believing the sender, so
+peers cannot disagree about what one definition is. A `+command` reaches the
+chain by having `/rholang eval` in its body, so the two halves compose with no
+third mechanism.
+
+**The two halves have different lexical rules, and this is the subtle part.**
+`substitute` and `expandCallSites` take `lexical: "rholang" | "text"`:
+
+- *rholang body* — `"$topic"` is a string literal and `$topic` is text (the
+  language's own rule); a call-site argument is a **term**, so `$print("hello")`
+  must expand to `stdout!("hello")` with the quotes intact.
+- *command body* — there are no string literals. `/gov say on "$topic" now` is a
+  line somebody typed and `$topic` **substitutes**; an argument is a **word**, so
+  `+standup "Q4 budget"` binds `Q4 budget`. Treating command text as rholang
+  produced a command with a literal `$topic` in it, which is the worst kind of
+  wrong: it runs.
+
+`bindArgs(def, args, plain)` carries the same split (`plain` = command line).
+A nested macro is expanded under **its own** body's rules, not its caller's.
+
+**Binding is textual**, which is what makes #65's `match [$height] { [height] =>
+… }` work rather than something separate from it — the argument lands in the
+match subject and rholang's own `match` binds it, so a body stays ordinary
+rholang. Positional by default; if *every* argument is `name=value` they bind by
+name; mixing is refused.
+
+**`splitBody`**: a line beginning with `/` or `+` at column 0 starts a command,
+anything else continues the one before it — so a multi-line rholang program is
+the argument to `/rholang eval` with no terminator.
+
+**Errors never abort.** Every site is attempted and a failed one is left exactly
+as written. `$` being lexically illegal in rholang is what makes that safe: an
+unexpanded site is a hard error at the node, never something that quietly means
+the wrong thing. (`%`, the sigil this replaces, is rholang's modulo operator.)
+
+**Storage is the room, not the chain.** `macroStore` is per-`RoomContext`,
+persisted `qos-macros-<room>`, broadcast as a dyncap-signed `macro-define`,
+replayed to joiners via `sync-macros`, and tombstoned through the existing
+`retract` machinery (kind `"macro"`). **First writer wins a name and only that
+author may redefine or retract it, matched by dyncap `anchor`** — `MacroDef`
+stores the anchor rather than a chain step, because a reload mints a new peerId
+and would otherwise cost you your own commands. That is the room ("group") tier
+of EIES's personal → group → system hierarchy; the on-chain dictionary (public /
+federated tier, behind a capability) is designed and not built.
+
+Recursion is bounded twice: `MAX_DEPTH` inside expansion, and `MACRO_RUN_DEPTH`
+in `runMacroLine` for a body that invokes another body at runtime. `runInput()`
+is the router — `+` to `runMacroLine`, anything else to `handleCommand` — and is
+what `/script` and `/rhoqu` call so their segments can be `+commands` too.
+
 ### Reaching a chain (`/rholang` — `rholang.ts`; `/global` — `global-macros.js` + `global.ts` + `global-agent.mjs`)
 
 Bridges a room to an RChain chain: a room's state is ephemeral, a deploy is not.
@@ -381,11 +450,13 @@ Headless **agent daemons** join a room as full peers (Node; `werift` + `ws`), re
 | `/persist <sub>` | Agreed cross-peer replication of public state — request, accept, reject pending requests |
 | `/rholang <sub>` | **Run rholang on an RChain node** — `eval` (run it, read values back; unsigned, no block), `deploy` (sign with a browser-held secp256k1 key and submit), `status`, `powerbox`, and the node settings `node <url>` · `shard <id>` · `phlo <limit> [price]` · `key generate\|<hex>\|show\|forget` · `config`. `eval`/`deploy` open a syntax-highlighted, live-linted editor (`rholang-editor.ts`; Ctrl+Enter runs, Esc cancels, loads or accepts a dropped `.rho`), while a program written inline runs as typed; every program is wrapped in `new return, stdout, zfa, grant, verify, fuse in { … }`. Over the node's HTTP API (CORS-open), so no relay and no agent in between |
 | `/global <rholang>` | **Deprecated — prefer `/rholang`.** RChain capability macros — expand `%name(…)` call sites in a rholang program (one line or many), then lint → sign → deploy client-side. Bare form `/global <macro> <args>` when the whole program is one macro; `/global macros` lists the library, `/global node <url>` sets the target node. See [RChain_Macros.md](RChain_Macros.md) |
+| `/macro <sub>` | **Interact2 — write a `+command`.** `define $name($a) // doc` + a body · `list` · `show <n>` · `find [re]` · `echo <n> [args]` (expand, run nothing) · `remove <n>`. A body of slash commands makes a `+command`; a body of rholang makes a `$name(…)` fragment for `/rholang`. Definitions are dyncap-signed room state (`macro-define` / `sync-macros`, tombstoned by `retract`), first-writer-wins by anchor. See [RChain_Macros.md](RChain_Macros.md) |
+| `+name <args>` | Run a command somebody in the room defined. Quotes group an argument, `name=value` binds by name. `++text` sends a literal `+` line; a non-identifier like `+1` is ordinary chat |
 | `/rhoqu <text>` | RhoQu macro language: parse `process` / `new` / `\|` parallel / `if` / `on channel` / `for`, transpile to `/command` strings, dispatch in order. `/rhoqu list` and `/rhoqu clear` manage registered `on` handlers (per-room). |
 | `/dump` | Summary of all logic shared this session |
 | `//message` | Send a message that starts with `/` |
 
-Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/poll`, `/forget`, `/gov`, `/estimate`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/render`, `/animate`, `/script`, `/persist`, `/rhoqu`, `/rholang`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (e.g. `/gov` → `group-*`/`gov-*`, `/estimate` → `estimate-*`) or are local-only, so a generic qlf rebroadcast would be redundant or noisy. `/qlf-action` and `/zfa-check` are *not* excluded — broadcasting their kernel verdict to the room is the point. `/rhoqu` itself doesn't broadcast — only the commands it transpiles to do, per their own rules.
+Broadcasting: commands that broadcast their output via `{kind: "qlf", cmd, arg, lines}` are anything not in this exclusion list: `/help`, `/grant`, `/lemma`, `/note`, `/rdv`, `/poll`, `/forget`, `/gov`, `/estimate`, `/dyncap`, `/probe`, `/room`, `/share`, `/channel`, `/render`, `/animate`, `/script`, `/persist`, `/rhoqu`, `/macro`, `/rholang`, `/request`, `/pass`, `/dump`. Excluded commands send purpose-specific envelopes (e.g. `/gov` → `group-*`/`gov-*`, `/estimate` → `estimate-*`) or are local-only, so a generic qlf rebroadcast would be redundant or noisy. `/qlf-action` and `/zfa-check` are *not* excluded — broadcasting their kernel verdict to the room is the point. `/rhoqu` itself doesn't broadcast — only the commands it transpiles to do, per their own rules; the same holds for a `+command`, which sends no envelope of its own and is seen through whatever its body runs.
 
 ---
 
@@ -457,6 +528,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
 | `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage). Tallies take an optional `weights` map for liquid-democracy weighting (no change at weight 1) |
 | `packages/browser/src/gov.ts` | Pure governance module — `Group`/`Issue`/`Member` types + **`resolveWeights`** (transitive delegation → per-voter weight, with override + cycle abstention, optional `trustWeights`), **`trustLevels`** (admin-rooted hierarchy + ⅔-quorum censure accountability, 2-phase fixed point), `trustWeightsFor`, `discreditedMembers`, `delegationMapFor`, `issueId`, `delegatorsOf`. Drives `/gov`; see `Governance.md` |
+| `packages/browser/src/macro-lang.js` | **The `$` macro language (Interact2).** Plain JS, no imports, node-runnable: `parseDefinition`, `parseInvocation`, `bindArgs`, `substitute`, `expandCallSites`, `expandCommand`, `splitBody`, `findMacros`. Carries BOTH lexers — a rholang body skips string literals and comments, a command body does not (see below). `node packages/browser/src/macro-lang.js --selftest` covers it |
 | `packages/browser/src/global-macros.js` | **The `/global` macro registry — one source for both halves.** Plain JS, no imports, ZFA kernel injected via `createMacroEngine(kernel)`. Registry + arg validators + templates + the rholang call-site scanner (`expandProgram`). Edit macros here and nowhere else; `node scripts/qos-cli/global-macros.mjs --selftest` covers it |
 | `packages/browser/src/rholang.ts` | **The `/rholang` node client** — config (persisted), REV address derivation, DeployDataProto protobuf encoding + secp256k1 signing, `evalTerm` / `deployTerm` / `readResults`, the powerbox table with signatures, and `wrapProgram` |
 | `scripts/localnet/` | Keys, wallet, and `run-node.sh` for a local RChain node to develop `/rholang` against; `README.md` records what works and what is blocked upstream |

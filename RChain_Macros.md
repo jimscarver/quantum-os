@@ -1,10 +1,9 @@
-# Macros — the plan, and what runs today
+# Macros — Interact2
 
-> **This document has two halves.** The first describes the macro system being
-> designed, tracked in
-> [#65](https://github.com/rchain-community/quantum-os/issues/65). The second
-> records the `%`-sigil `/global` macros that exist now, which still work and are
-> deprecated. Nothing in the first half is implemented yet.
+> **This document has two halves.** The first describes the `$` macro language
+> and the `+commands` built on it, which run now. The second records the
+> `%`-sigil `/global` macros, which still work and are deprecated. Tracked in
+> [#65](https://github.com/rchain-community/quantum-os/issues/65).
 
 ## Where this comes from
 
@@ -28,11 +27,11 @@ The 2008 deck *Back to the Network Nation Future* names the destination
 outright, under "Formal Language": **Web 3.0 — Rholang, Interact2?** This is
 Interact2.
 
-## The design
+## The language
 
 ### `$` — the sigil
 
-Macro names and argument names both take `$`:
+Macro names and parameter names both take `$`:
 
 ```
 $macroname(name="joe", age=5)
@@ -49,142 +48,229 @@ new return, $x in { return!("x") }   →   Illegal character $ at 28
 So a `$` site can never be valid rholang, an unexpanded one cannot silently
 become something else, and the node is the backstop if expansion is missed.
 
-The current `%` sigil does **not** have that property — `%` is rholang's modulo
-operator, and `7 % 3` evaluates to `1`. Call sites and arithmetic share a
-character today. That is the defect `$` fixes.
+The `%` sigil this replaces does **not** have that property — `%` is rholang's
+modulo operator, and `7 % 3` evaluates to `1`. Call sites and arithmetic shared
+a character.
 
-### Definitions bind with `match`
+### `/` is what the app ships, `+` is what a person wrote
 
-A definition names its parameters; `match` binds them. The body is ordinary
-rholang, not a template language:
+A definition is made with a built-in verb, so `/macro define` keeps the slash.
+What it produces is invoked with `+`:
 
 ```
-define: $hanoi($height)
-eval: match [$height] {
+/macro define $standup($topic)  // opens a standup poll
+/poll new $topic | yes, no, later
+/gov say standup on "$topic" is open
+/channel send team standup: $topic
+```
+
+```
++standup "Q4 budget"
+```
+
+That is the whole rule, and it is worth stating plainly because it is what the
+sigil is *for*: a leading `/` is something the app ships and the repo reviewed;
+a leading `+` is something somebody in this room wrote. Quotes group an argument
+(`"Q4 budget"` is one topic, not two), and `topic="Q4 budget"` names one instead
+of passing it by position.
+
+`++text` sends a literal line beginning with `+`, the way `//` does for `/`.
+A `+1` in chat is agreement, not a call — only an identifier-shaped name is read
+as an invocation.
+
+### Two halves, decided by the body
+
+A body of slash commands makes a **`+command`**. A body of rholang makes a
+**fragment**, which has no meaning as a command and is called as a `$name(…)`
+site inside another program, the way MacRhoLang's `$print($expression)` was:
+
+```
+/macro define $print($expression)  // stdout one term
+new stdout(`rho:io:stdout`) in { stdout!($expression) }
+```
+
+```
+/rholang eval
+new return in { $print("hello") | return!(42) }
+```
+
+Nothing declares which half a definition is in — the first line of the body
+says. The two are the EIES half and the @RHO-bot half of the same language, and
+a `+command` reaches the chain by having `/rholang eval` in its body, so they
+compose without a third mechanism.
+
+### The two halves have different lexical rules
+
+This is the one place the language is not uniform, and the asymmetry is real
+rather than an implementation detail.
+
+|  | rholang body | command body |
+|---|---|---|
+| `"$topic"` | a string literal — `$topic` is text | quotes somebody typed — `$topic` substitutes |
+| `// $topic` | a comment — text | a line, and `//` only starts a comment at column 0 |
+| `$m("hello")` | argument is a **term**: expands to `stdout!("hello")` | argument is a **word**: `"Q4 budget"` binds as `Q4 budget` |
+
+Both rows follow from the same question — whose lexer is this? — and getting it
+wrong is silent in the worst way. A command body whose `"$topic"` is skipped as
+a string literal produces a command with a literal `$topic` in it, and that
+command runs.
+
+### Binding
+
+Textual substitution, which is what makes `match` binding work rather than
+something separate from it:
+
+```
+/macro define $hanoi($height)  // towers of hanoi - use EXPLORE
+/rholang eval
+match [$height] {
   [height] => {
-    new result(`rho:io:stdout`), move, ack in {   // towers of hanoi - use EXPLORE
-      move!(height, "left", "right", "center", *ack) |
-      contract move(@height, @from, @to, @other, ack) = {
-        new ack1 in {
-          match height {
-            1 => {
-              result!("Move top disk from " ++ from ++ " to " ++ to) |
-              ack!(Nil)
-            }
-            _ => {
-              move!(height-1, from, other, to, *ack1) |
-              for ( _ <- ack1 ) {
-                move!(1, from, to, other, *ack1) |
-                for ( _ <- ack1 ) {
-                  move!(height-1, other, to, from, *ack1) |
-                  for ( _ <- ack1 ) { ack!(Nil) }
-                }
-              }
-            }
-          }
-        }
-      }
+    new result(`rho:io:stdout`), move, ack in {
+      move!(height, "left", "right", "center", *ack)
     }
   }
 }
 ```
 
-Binding through `match` means substitution happens in a construct the language
-already has, rather than one invented for macros.
+`+hanoi 3` substitutes `3` into the match subject and rholang's own `match`
+binds `height`. The body stays ordinary rholang; the substitution happens in a
+construct the language already has. **Positional by default**, as rhobot does it
+for standard components; if *every* argument is written `name=value` they bind
+by name instead. Mixing the two is refused, because then the reading of a call
+depends on where you stopped.
 
-**Positional arguments** are worth having for standard components, as rhobot
-does it: `match [$a, $b]` binds by position, so a component with a settled
-argument order need not be called with names every time.
+**A comment following the name is documentation the macro carries.** The
+`// towers of hanoi - use EXPLORE` is not decoration: it is what `/macro find`
+searches, what the sidebar shows, and what an LLM composing a program has to
+work from beyond the code.
 
-**A comment following a name introduction enhances the prompt.** The
-`// towers of hanoi - use EXPLORE` above is not decoration — a comment attached
-to a name is documentation the macro carries with it, and what `explain` (below)
-has to work from beyond the code itself.
+### A line beginning with `/` or `+` starts a command
 
-### Definitions live on the chain, and are read with `eval`
-
-Some macros are built in. The rest live in an **on-chain dictionary**, read with
-an ordinary exploratory deploy — `/rholang eval`, which is read-only over
-finalized state, costs nothing and signs nothing. Looking a macro up is the same
-operation as any other chain read: no new trust surface, no key involved, and it
-works against any node you can reach.
-
-### Expansion happens in the browser
-
-Not in the agent. The browser reads the definition, expands, lints and signs, so
-a compromised agent still cannot influence what gets signed. Moving the library
-on-chain does not weaken the
-[zero-trust split](EIES_Legacy.md#what-is-deliberately-different) — it leaves it
-exactly where it was.
+Inside a command body, anything else continues the line before it. That is what
+lets a multi-line rholang program be the argument to `/rholang eval` without a
+terminator — as in `$hanoi` above, which is one command, not five.
 
 ### `echo` and `explain`
 
-Two ways to see what you are about to sign, answering different questions:
+Two ways to see what you are about to run, answering different questions:
 
 | verb | shows | is |
 |---|---|---|
-| `echo` | the rholang the expansion actually produced | evidence — mechanical, checkable |
+| `echo` | what the expansion actually produced | evidence — mechanical, checkable |
 | `explain` | what that program means, in prose | a reading of the evidence |
 
-Neither replaces the other, and the asymmetry decides how they get used. For an
-unfamiliar macro out of the dictionary, an explanation is a summary you are also
-trusting: most useful for understanding, weakest exactly where the question is
-*should I sign this*. `echo` is what answers that one.
+`/macro echo <name> [args]` expands and runs nothing. `/rholang echo` shows the
+program including the wrapper, macro sites expanded. Neither replaces the other,
+and the asymmetry decides how they get used: for an unfamiliar macro, an
+explanation is a summary you are also trusting — most useful for understanding,
+weakest exactly where the question is *should I sign this*. `echo` answers that
+one. `explain` is not built.
 
-`/rholang echo` already exists — today it shows the wrapper
-every program is given before signing, and it is where a macro expansion will
-appear.
+### Errors never abort
 
-### Libraries are capabilities
+Every site is attempted, so one report covers them all, and a site that fails is
+left exactly as written rather than silently dropped:
 
-A library is a capability. Holding it is access; sharing it is how access
-spreads. Rooms, peers and dyncap are already capabilities here, and on the chain
-an unforgeable name *is* one — so a macro dictionary behind a cap needs no new
-concept.
+```
+✗ line 3: unknown macro $nosuch — try /macro list
+```
 
-The tiers fall out of who holds which cap, with no votes involved:
+Because `$` is illegal rholang, a site left in is a hard error at the node
+rather than something that quietly means the wrong thing.
 
-| tier | what it is |
-|---|---|
-| personal | a library cap you hold and have not shared |
-| group | a cap shared with a group |
-| public / federated | a published cap, or a well-known registry name |
+## Where definitions live
 
-Promotion is sharing. **Consent is the act of sharing**, rather than a vote that
-authorises it. A name resolves in scope order — personal shadows group shadows
-public — so collisions are scoping rather than conflicts to arbitrate.
+A definition is **room state**: signed with the author's dyncap, broadcast to
+the room, replayed to whoever joins next, and tombstoned when retracted — the
+same shape as a lemma, and the same code path. It needs no node, no key and no
+chain, so a room can write and share commands the moment two peers are in it.
+
+That maps EIES's hierarchy onto what this system already has:
+
+| tier | what it is | built |
+|---|---|---|
+| personal | a definition in your browser | yes |
+| group | a definition shared with the room | yes |
+| public / federated | an on-chain dictionary behind a capability | not yet |
+
+**First writer wins a name, and only that author may redefine it** — matched by
+dyncap **anchor**, not peerId, so a reload does not cost you your own commands.
+That is EIES's rule too: the owner of the file could edit it and nobody else
+could. `/forget macro <name>` retracts yours for everyone and hides anyone
+else's from your view, exactly as a lemma does.
+
+### `+mypriv`, and what a capability does with it
+
+EIES's most powerful command let a command act with its owner's authority —
+suid, in Unix terms — and that is what made a shared command worth sharing at
+all. Without it a command can only do what its *caller* could already do.
+
+A `+command` today has no such thing, and does not need one yet: it composes the
+caller's own capabilities. The property becomes load-bearing at the on-chain
+tier, where a macro can carry the specific caps its author chose to put in it —
+the same enabling property with the ambient authority removed, and no superuser
+to administer it.
+
+## Still to build
+
+### The on-chain dictionary
+
+Definitions in a dictionary read with an ordinary `/rholang eval` — read-only
+over finalized state, free, unsigned, no key involved. A library is a
+capability; holding it is access and sharing it is how access spreads.
+Promotion is sharing, and **consent is the act of sharing** rather than a vote
+that authorises it. A name would resolve in scope order — personal shadows room
+shadows chain — so a collision is scoping rather than a conflict to arbitrate.
 
 [`/gov`](Governance.md) stays available for a federated tier that eventually
 wants "groups agreed to this" rather than "somebody published it", and stays
 unnecessary before then. Groups will make their own rules: capabilities are
 mechanism, and policy belongs to whichever group lives with it.
 
-### Open questions
-
-Recorded in [#65](https://github.com/rchain-community/quantum-os/issues/65),
-unresolved here:
+### Open
 
 - **Bearer semantics.** A shared cap is held by whoever it reached; there is no
-  un-sharing one. Plain bearer is a fine answer for a first cut *as long as it is
-  chosen rather than discovered*.
-- **Versioning.** Does a group consent to a name or to a definition? A name means
-  later edits ride in on an old decision.
-- **Nesting.** May a macro body contain `$` sites? If so it needs a depth bound.
-- **Offline.** Expansion needs a node read for an unknown macro. What happens
+  un-sharing one. Plain bearer is a fine answer *as long as it is chosen rather
+  than discovered*.
+- **Versioning.** Does a group consent to a name or to a definition? A name
+  means later edits ride in on an old decision. In the room tier a redefinition
+  is visible to everyone as it happens; on-chain it would not be.
+- **Offline.** Expansion of an on-chain macro needs a node read. What happens
   with no node, and is there a cache?
-- **Active text.** `.get` / `.see` / `@(expr)` and text-as-program-equivalence
-  were on EIES from the start and have no counterpart here yet. A macro that is
-  text, stored as text, expanded into text is that same identity — see
-  [EIES_Legacy.md](EIES_Legacy.md).
+- **Active text.** `.get` / `.see` / `@(expr)` and text-as-program equivalence
+  were on EIES from the start. A macro that is text, stored as text, expanded
+  into text is that same identity, but nothing yet *reads* a message as a
+  program — see [EIES_Legacy.md](EIES_Legacy.md).
+- **Orchestration.** `$` expansion is the seed, not the destination. The
+  destination is interactive orchestration of concurrent rholang processes.
+  Matching on prompt text is what INTERACT did because it had no channel to
+  bind to; here there is one.
+
+## Where the pieces are
+
+| file | what it holds |
+|---|---|
+| [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) | the whole language: parser, both lexers, binder, expander, `--selftest` |
+| [`packages/browser/src/app.ts`](packages/browser/src/app.ts) | `/macro`, `+name` routing, storage, the signed wire envelopes |
+
+`macro-lang.js` is plain JS with no imports for the reason
+`global-macros.js` is: the agent will want to expand a macro to show a room what
+a `+command` does, and the browser expands the one it actually runs. Those must
+not be able to differ. Run its tests with:
+
+```bash
+node packages/browser/src/macro-lang.js --selftest
+```
 
 ---
 
-# What runs today
+# `/global` — the `%` macros
 
-> Everything below documents the `%`-sigil `/global` macros as they exist now.
-> They work and are deprecated; the design above replaces them. Kept because it
-> is the reference for what is actually deployed, and because the security model
-> in the next section survives the redesign unchanged.
+> Everything below documents the `%`-sigil `/global` macros. They work and are
+> deprecated; the `$` language above replaces them. Kept because it is the
+> reference for what is deployed, and because the four-step security model in
+> the next section survives the redesign unchanged — `+commands` inherit it
+> whole, since a `+command` reaches the chain through `/rholang`.
 
 ## How the current implementation works
 
@@ -431,10 +517,14 @@ transfer means the value you approved is not the value you signed.
 
 - [**EIES_Legacy.md**](EIES_Legacy.md) — where this comes from: Interact, `+mypriv`,
   and why user programming is the point rather than a feature
-- [**#65**](https://github.com/rchain-community/quantum-os/issues/65) — the design
-  this document describes, and the discussion behind every decision in it
+- [**#65**](https://github.com/rchain-community/quantum-os/issues/65) — the
+  discussion behind every decision here, including the ones still open
+- [**MacRhoLang / @RHO-bot**](https://docs.google.com/document/d/1mTUQwWV9zW5INaJekf-hrZoukWh8Gt8ggFwIxREp1vk/edit) —
+  the direct predecessor: `$` sites, `define:`/`echo:`/`find:`, and command-form
+  invocation, on a Discord bot against an RChain node
 - [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md) — running the `/global` agent
-- [`packages/browser/src/global-macros.js`](packages/browser/src/global-macros.js) — the registry, one source for both halves
+- [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) — the `$` language
+- [`packages/browser/src/global-macros.js`](packages/browser/src/global-macros.js) — the `%` registry, one source for both halves
 - [QuCalc extensions](https://github.com/rchain-community/rchain-rust/blob/dev/docs/src/qucalc/extensions.md) — the system processes these macros call
 - [`Governance.md`](Governance.md) — the in-room liquid democracy the `rho:gov:*` macros mirror
 - [`SECURITY.md`](SECURITY.md) — threat model
