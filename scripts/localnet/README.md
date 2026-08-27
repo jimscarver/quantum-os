@@ -103,49 +103,46 @@ powerbox.
 body with *"Expected request with `Content-Type: application/json`"*; the term
 goes up as a JSON string. `rholang.ts` already does this.
 
-## What is blocked, in rnode
+## What is known about rnode
 
-Two open bugs in rchain-rust make most non-trivial rholang unusable here. Both
-were found against `dev` at `f3f4759e9`; neither has a workaround from this side.
+Checked against `dev` at `0a2141be1`, the build `bin/rnode` ships.
 
-**[#10](https://github.com/rchain-community/rchain-rust/issues/10) — `match`
-selects the wrong branch.** Branches are tried in reverse written order, so when
-more than one can match, the last one wins:
-
-```
-match 1 { 1 => { return!("literal") }  x => { return!("catchall") } }   ->  "catchall"
-```
-
-And a `_` wildcard never matches at all, so `_` branches are dead code:
+**`match` selects the branch it should.** First written branch wins, a `_`
+wildcard is reached when nothing before it matches, and a later branch does not
+steal an earlier one:
 
 ```
-match 1 { _ => { return!("wild") } }                                    ->  []
+match 1  { 1 => { return!("first") }  _ => { return!("wildcard") } }   ->  "first"
+match 99 { 1 => { return!("one") }    _ => { return!("wildcard") } }   ->  "wildcard"
+match 2  { 1 => {…} 2 => { return!("two") } 3 => {…} }                 ->  "two"
 ```
 
-Nothing errors — the program takes a branch it should not have, or none. This
-reaches any recursive contract, because the idiomatic shape puts the base case in
-a `match`: with `_` the recursive branch is dead and the program returns nothing;
-replace `_` with a binding variable and the catch-all wins even at the base case,
-so it never terminates.
-
-**[#11](https://github.com/rchain-community/rchain-rust/issues/11) — a
-non-terminating term aborts rnode.** Exploratory deploy has no phlo ceiling,
-so unbounded recursion overflows the stack and kills the process, not the
-request:
+**A runaway term returns an error and leaves rnode running.** Exploratory deploy
+carries a reduction step budget:
 
 ```
-thread 'tokio-rt-worker' has overflowed its stack
-fatal runtime error: stack overflow, aborting
+"[ReduceError(\"reduction step budget exceeded (10000 steps)\")]"
 ```
 
-The two compound: #10 turns a terminating program into a non-terminating one and
-#11 turns that into node death. Restarting on the existing chain recovers
-cleanly.
+The ceiling does not reach ordinary work — a terminating recursion returns its
+answer at depth 2560.
 
-**What still works meanwhile:** everything above — pure rholang, the qucalc
-powerbox under both `eval` and `deploy`, sends and receives, `contract`, linear
-and persistent receives, and recursion that terminates without a `match`. Only
-`match`-based branching is affected.
+Two things to know when writing contracts here:
+
+**[#19](https://github.com/rchain-community/rchain-rust/issues/19) — a
+one-binder persistent receive inside a nested `new` does not terminate.** It
+re-fires until the budget stops it. Give every `contract` at least two
+parameters; where a verb genuinely takes only a return channel, an ignored first
+parameter restores it:
+
+```rholang
+contract c(_, ret) = { ret!(9) }
+```
+
+**The budget error is a bare JSON string**, where a successful run returns a
+`{expr, block}` object. A client written for the success shape will render a
+runaway as an empty result rather than as an error, which is a slow way to find
+one.
 
 ## Ordering of returned values
 
