@@ -44,6 +44,25 @@
 
 ---
 
+## Quoted names
+
+`@"some-string"` is a name anyone can construct, so anyone can write to it —
+changing what whatever reads it does next. Nothing here keeps state, routes a
+result, or holds a capability at one.
+
+What is used instead: names created with `new`, which cannot be constructed from
+outside the program that made them; capability facets handed out as `bundle+`;
+and, where an address has to be known in advance, a registry uri derived from a
+key (`rho:registry:insertSigned:secp256k1`), which only that key can write to.
+
+A deploy's answer goes to the deployer's own registry slot for this reason, and
+that slot holds nothing else — one key, one slot, one job.
+
+Quoted names are not worthless. On a node nobody else reaches, and with care
+about what is kept where, they are the simplest thing that works. The property
+that makes them unusable here is the one that costs nothing there: reachability
+by anyone is only a problem where there is anyone.
+
 ## Security architecture
 
 ### ZFA capability tokens

@@ -271,13 +271,11 @@ The chain tier is a **private hierarchical dictionary keyed to `deployerId`**.
 It holds your names: `ballot` → a uri, `notes` → a directory, `team` → a parent
 you were granted.
 
-**No public names anywhere in it — a uri instead.** A public name,
-`@"jim-ballots"`, is a channel: anyone who guesses or reads it can send on it and
-receive from it, so a dictionary kept at one is a dictionary anybody may edit. A
-registry uri is not a channel and not a name. It is a reference that resolves to
-whatever was inserted under it, and what you get back is a `bundle+` facet — so
+**A uri, not a quoted name.** A registry uri is a reference that resolves to
+whatever was inserted under it, and what comes back is a `bundle+` facet — so
 holding a uri grants exactly what that facet does and nothing else, and there is
-no writing to a uri at all without the capability to insert there.
+no writing to a uri without the capability to insert there. See
+[SECURITY.md](SECURITY.md) for why nothing here is kept at `@"…"`.
 
 The primitives rnode supplies, and what each is for:
 
@@ -348,7 +346,7 @@ rho:id: + zbase32(blake2b256(pubkey))
 
 so **the browser can compute where its own record is before deploying**, and
 `insertSigned` means only that key can create it. That is what makes an identity
-findable without a public name.
+findable without anything having to be looked up.
 
 `register` is also what makes the rest work at all: `insertSigned` requires a
 nonce that advances, and a lookup of a uri that was never inserted does not
@@ -395,8 +393,7 @@ That single choice answers both halves:
   a credential, and a voucher who hands one to a spammer loses standing for it.
 
 Every attempt is also a signed, phlo-charged deploy, which is a rate limit that
-comes from the identity being unforgeable — precisely what a public name cannot
-offer.
+comes from the identity being unforgeable.
 
 **Honest limits.** A credential proves a relationship, not a person; a careless
 voucher is the weak edge, and the censure quorum is what makes that
@@ -429,7 +426,7 @@ and **blockchain** is what happens when the stakeholders are not one group.
 
 | | |
 |---|---|
-| [#73](https://github.com/rchain-community/quantum-os/issues/73) | A deploy's result lands on a public name, so anyone can forge it. `registryUriOf()` is the replacement. **bug** |
+| [#73](https://github.com/rchain-community/quantum-os/issues/73) | A deploy's answer goes to the deployer's registry slot, which only that key can write to. **done** |
 | [#74](https://github.com/rchain-community/quantum-os/issues/74) | Install the locker and wire `/rholang register`. Needs a signed deploy; gates everything below |
 | [#75](https://github.com/rchain-community/quantum-os/issues/75) | Bind a `$name` to a capability in the locker, so it outlives the room |
 
@@ -489,7 +486,7 @@ are already the right shape:
 
 **A coarse plan, in the order the pieces stop being hypothetical:**
 
-1. **Libraries as capabilities** (#74, #75). A team's library is a locker
+1. **Libraries as capabilities** (quantum-os#74, quantum-os#75). A team's library is a locker
    namespace; holding the cap is membership in that library.
 2. **Interlink by granting.** A team grants another its read facet, and a name
    resolves through the parent chain. Adoption is a grant, and the graph of

@@ -224,8 +224,9 @@ function unquote(s) {
  *
  * Positional by default, as rhobot does it for standard components; if EVERY
  * argument is written `name=value` they bind by name instead, which is the
- * form #65 records (`$macroname(name="joe", age=5)`). Mixing the two would
- * make the reading of a call depend on where you stopped, so it is refused.
+ * form quantum-os#65 records (`$macroname(name="joe", age=5)`). Mixing the two
+ * would make the reading of a call depend on where you stopped, so it is
+ * refused.
  *
  * `plain` says which language the argument is crossing into, and it is the
  * whole difference between the two halves. A `+command` argument is a command
@@ -270,10 +271,10 @@ export function bindArgs(def, args, plain = true) {
 }
 
 /**
- * Substitute `$param` sites in a body. Textual, which is what makes #65's
- * `match [$height] { [height] => … }` work: the argument lands in the match
- * subject and rholang's own `match` does the binding, so the body stays
- * ordinary rholang rather than a template language.
+ * Substitute `$param` sites in a body. Textual, which is what makes
+ * quantum-os#65's `match [$height] { [height] => … }` work: the argument lands
+ * in the match subject and rholang's own `match` does the binding, so the body
+ * stays ordinary rholang rather than a template language.
  *
  * `lexical` says whose rules the body is written under, and the two halves do
  * not agree. In **rholang** a `$` inside a string literal or a comment is

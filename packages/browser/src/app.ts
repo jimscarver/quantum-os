@@ -34,7 +34,7 @@ import { expandBareMacro, expandMacroProgram, lintRholang,
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
-         registryUriOf, type NodeConfig } from "./rholang.js";
+         registryUriOf, readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1788,7 +1788,7 @@ function echoRholang(mode: "eval" | "deploy", body: string): void {
   if (!body.trim()) { say("nothing to echo"); return; }
   body = expandRholangMacros(body, say);
   const program = mode === "deploy"
-    ? wrapProgram(body, "deploy", "qos-result-<minted per deploy>")
+    ? wrapProgram(body, "deploy", loadNodeConfig().resultNonce ?? 1)
     : wrapProgram(body, "eval");
   say(`this is what \`/rholang ${mode}\` would send — nothing has run:`);
   say("```\n" + program + "\n```");
@@ -1839,7 +1839,7 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
     try {
       const r = await deployTerm(cfg, source);
       say((r.ok ? "✓ " : "✗ ") + r.message);
-      if (r.ok && r.resultName) {
+      if (r.ok && r.resultNonce !== undefined) {
         // The deploy is accepted here; everything after is waiting for consensus,
         // which is not ours to hurry. Block creation can lag minutes — an hour is
         // not unheard of — so a short poll that gives up and says "nothing yet"
@@ -1850,10 +1850,9 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
         // it whenever. The value sits on the name until something reads it —
         // measured: readable immediately, at +90s and at +210s — so there is no
         // window to miss and nothing is lost by not watching.
-        lastResultName = r.resultName;
         lastDeploySig = r.sig ?? "";
-        say(`  it will report on @"${r.resultName}" once a block carries it`);
-        const values = await readResults(cfg, r.resultName, 6);
+        say("  it will answer at your record once a block carries it — /rholang read");
+        const values = await readResults(cfg, 6);
         if (values.length) { for (const v of values) say("  → " + v); }
         else {
           // An empty name means one of two things that look identical from here:
@@ -1887,7 +1886,6 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
  * no argument. A deploy's value sits on its name until something consumes it, so
  * "later" is any time at all — this just saves retyping a random-suffixed name.
  */
-let lastResultName = "";
 
 /** The last deploy's signature, so `/rholang read` can tell "still waiting" from "errored". */
 let lastDeploySig = "";
@@ -4358,11 +4356,18 @@ function handleCommand(raw: string): string[] {
           // sent and nothing has to be read back to learn it.
           if (rest === "install") {
             if (!cfg.key) { sys("no key — /rholang key generate first"); break; }
-            const uri = registryUriOf(cfg.key);
-            sys(`installing the locker to ${uri}`);
-            sys("  that uri comes from your key alone, so only your key can write there");
-            saveNodeConfig({ ...cfg, locker: uri });
-            runRholangProgram("deploy", installProgram(0));
+            sys("installing the locker…");
+            sys("  its uri is minted by the registry, so it comes back as the deploy's answer");
+            void (async () => {
+              const r = await deployTerm(cfg, installProgram());
+              addMessage("", (r.ok ? "✓ " : "✗ ") + r.message, "system");
+              if (!r.ok) return;
+              const values = await readResults(cfg, 40);
+              const uri = values.find((v) => v.startsWith("rho:id:"));
+              if (!uri) { addMessage("", "  deployed, but no uri came back yet — /rholang read, then /rholang locker <uri>", "system"); return; }
+              saveNodeConfig({ ...loadNodeConfig(), locker: uri });
+              addMessage("", `✓ locker at ${uri}`, "system");
+            })();
             break;
           }
           if (rest) { saveNodeConfig({ ...cfg, locker: rest }); sys(`✓ locker set to ${rest}`); break; }
@@ -4438,24 +4443,36 @@ function handleCommand(raw: string): string[] {
         }
 
         case "read": {
-          // Answers "my deploy has not reported yet". A deploy's result is not
-          // an event you can miss: it stays on the name until read.
-          const target = rest.trim().replace(/^@/, "").replace(/^"|"$/g, "") || lastResultName;
-          if (!target) { sys("usage: /rholang read <name>   — or with no name, the last deploy's"); break; }
-          sys(`reading @"${target}"…`);
+          // Answers "my deploy has not reported yet". The value stays where it
+          // was written until something reads it, so there is no window to miss
+          // and nothing is lost by collecting it later.
+          if (!cfg.key) { sys("no key — /rholang key generate first"); break; }
+          const target = rest.trim().replace(/^@/, "").replace(/^"|"$/g, "");
           void (async () => {
             try {
-              const values = await readName(cfg, target);
+              const values = target ? await readName(cfg, target) : await readResult(cfg);
+              const where = target ? `@"${target}"` : "your record";
               if (values.length) { for (const v of values) addMessage("", "  → " + v, "system"); return; }
               // Empty is ambiguous — waiting, or errored and never coming. Ask the block.
-              const fate = (target === lastResultName && lastDeploySig)
+              const fate = (!target && lastDeploySig)
                 ? await deployFate(cfg, lastDeploySig).catch(() => null) : null;
               if (fate?.errored) addMessage("", `  ✗ that deploy ran in block ${fate.blockNumber} and errored (cost ${fate.cost ?? "?"}) — it sent nothing to return`, "system");
-              else if (fate) addMessage("", `  nothing on @"${target}" — it ran in block ${fate.blockNumber} without sending to return`, "system");
-              else addMessage("", `  nothing on @"${target}" yet — no block carries that deploy so far, which can take minutes`, "system");
+              else if (fate) addMessage("", `  nothing at ${where} — it ran in block ${fate.blockNumber} without sending to return`, "system");
+              else addMessage("", `  nothing at ${where} yet — no block carries that deploy so far, which can take minutes`, "system");
             } catch (e) {
               addMessage("", "✗ " + ((e as Error)?.message ?? e), "system");
             }
+          })();
+          break;
+        }
+
+        case "nonce": {
+          // The counter beside the key is a convenience; the slot is the truth.
+          // They part company when the same key deploys from a second browser.
+          void (async () => {
+            const n = await syncResultNonce(cfg).catch(() => null);
+            addMessage("", n === null ? "  no record yet — /rholang register, or deploy once"
+                                      : `  record is at nonce ${n}; next write uses ${n + 1}`, "system");
           })();
           break;
         }
@@ -6142,6 +6159,7 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — rnode's version, network, shard, height and phlo floor. Warns when your shard does not match rnode's.",
     "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
+    "A deploy writes what it answered to your own registry slot — the uri your key derives, which only your key can write to. /rholang read collects it; /rholang nonce re-syncs the write counter if a second browser used the same key.",
     "/rholang locker — where the locker is; `locker <uri>` points at one, `locker install` publishes one at the uri your key derives (so it needs no reading back).",
     "/rholang register — create your identity record in the locker, anchored to your REV address. It is also the write that lets later lookups answer.",
     "/rholang bind <name> <uri> — name a capability so it outlives the room; resolve <name> reads it back; record shows your whole record; grant <name> mints a write-only capability for that one name.",

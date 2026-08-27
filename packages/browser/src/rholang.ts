@@ -41,6 +41,8 @@ export interface NodeConfig {
   key?: string;
   /** The locker's uri. Whoever installed it derived this from their own key. */
   locker?: string;
+  /** Next nonce for this key's registry slot. insertSigned refuses a stale one. */
+  resultNonce?: number;
 }
 
 const CONFIG_KEY = "qos-rnode-config";
@@ -147,8 +149,7 @@ export function publicKeyOf(secretHex: string): string {
 // `registry_insert_signed`.) Two things follow, and both matter.
 //
 // The uri is computable from the key alone, so a browser knows where its own
-// record is BEFORE it deploys anything — no public name to remember it by, and
-// nothing to look up to find out. And `insertSigned` will only write there for
+// record is BEFORE it deploys anything, with nothing to look up to find out. And `insertSigned` will only write there for
 // the key the uri came from, so the slot is unforgeable without being secret.
 //
 // z-base-32: MSB-first 5-bit groups over the full 256 bits, no padding, the
@@ -315,9 +316,22 @@ export function powerboxSpec(mode: "eval" | "deploy"): string[] {
   return out;
 }
 
-/** A public name to read a deploy's results back from, unique per deploy. */
-export function resultName(): string {
-  return `qos-result-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+/**
+ * Read what the last deploy answered.
+ *
+ * It is at this key's registry slot — the uri `registryUriOf` derives — and
+ * `lookup` answers with the whole record kept there, `(uri, (nonce, value))`.
+ */
+export async function readResult(cfg: NodeConfig): Promise<string[]> {
+  if (!cfg.key) return [];
+  const uri = registryUriOf(cfg.key);
+  const r = await evalTerm(cfg, `new lookup(\`rho:registry:lookup\`), stored in {
+  lookup!(\`${uri}\`, *stored) |
+  for (@record <- stored) {
+    match record { (_, (_, value)) => { return!(value) }  _ => { Nil } }
+  }
+}`).catch(() => null);
+  return r?.values ?? [];
 }
 
 /**
@@ -326,17 +340,26 @@ export function resultName(): string {
  * eval reads its values straight off `return`, so `return` is left alone.
  *
  * A deploy cannot: its `return` is unforgeable and the deploy is long gone by
- * the time anyone asks. So the deploy wrapper adds a persistent forwarder that
- * copies everything sent to `return` onto a public name — readable afterwards by
- * anyone who knows it, including us a moment later — and to stdout for the log.
- * One receive doing both, because two would compete for the same values.
+ * the time anyone asks. So the deploy wrapper writes what `return` answered to
+ * this key's registry slot — the uri `registryUriOf` derives, which only this
+ * key can write to — and to stdout for the log. One receive doing both, because
+ * two would compete for the same values, so the first value is the one stored.
+ *
+ * The nonce has to advance on every write to that slot, which is why it is
+ * passed in rather than invented here: the caller keeps the counter.
  */
-export function wrapProgram(body: string, mode: "eval" | "deploy", forwardTo?: string): string {
+export function wrapProgram(body: string, mode: "eval" | "deploy", nonce?: number): string {
   const decls = ["return", ...POWERBOX.filter((e) => mode === "deploy" || !e.deployOnly).map((e) => `${e.name}(\`${e.urn}\`)`)];
+  if (nonce !== undefined) {
+    decls.push("__insertSigned(`rho:registry:insertSigned:secp256k1`)",
+               "__deployerId(`rho:rchain:deployerId`)", "__ack");
+  }
   const indented = body.split("\n").map((l) => (l.trim() ? "  " + l : l)).join("\n");
-  const forwarder = forwardTo
-    ? `\n  |\n  for (@__value <= return) { @${JSON.stringify(forwardTo)}!(__value) | stdout!(__value) }`
-    : "";
+  const forwarder = nonce === undefined ? "" :
+    `\n  |\n  for (@__value <- return) {` +
+    `\n    __insertSigned!((${Number(nonce)}, __value), *__deployerId, *__ack) |` +
+    `\n    stdout!(__value)` +
+    `\n  }`;
   return `new ${decls.join(", ")} in {\n${indented}${forwarder}\n}`;
 }
 
@@ -462,8 +485,9 @@ export async function evalTerm(cfg: NodeConfig, term: string): Promise<EvalResul
 export interface DeployOutcome {
   ok: boolean;
   message: string;
-  /** The public name this deploy's `return` values were forwarded to. */
-  resultName?: string;
+  /** The nonce this deploy's answer was stored under, for the reader. */
+  /** The nonce this deploy's answer was stored under, for the reader. */
+  resultNonce?: number;
   /** The deploy's signature — how to find it in a block once one carries it. */
   sig?: string;
 }
@@ -485,7 +509,7 @@ export interface DeployFate {
  * still there to read later.
  */
 /**
- * Read whatever is at a public name right now, without waiting.
+ * Read whatever is at a name right now, without waiting.
  *
  * A deploy's result outlives the deploy: it sits on the name until something
  * consumes it. So a read is a question you can ask at any time, not a window
@@ -540,26 +564,36 @@ export async function deployFate(cfg: NodeConfig, sig: string, depth = 12): Prom
   return null;
 }
 
-export async function readResults(cfg: NodeConfig, name: string, attempts = 12): Promise<string[]> {
+export async function readResults(cfg: NodeConfig, attempts = 12): Promise<string[]> {
   for (let i = 0; i < attempts; i++) {
     await new Promise((r) => setTimeout(r, 1500));
-    try {
-      const blocks = (await getJson(cfg, "/api/blocks/1")) as { blockHash?: string }[];
-      const blockHash = blocks?.[0]?.blockHash;
-      if (!blockHash) continue;
-      const r = await postJson(cfg, "/api/data-at-name-by-block-hash", {
-        name: { ExprString: name },
-        blockHash,
-        usePreStateHash: false,
-      });
-      if (typeof r === "string") continue;
-      const expr = ((r ?? {}) as { expr?: unknown[] }).expr ?? [];
-      if (expr.length) return expr.map(renderExpr);
-    } catch {
-      // a block in flight, or the name not written yet — keep waiting
-    }
+    const v = await readResult(cfg).catch(() => []);
+    if (v.length) return v;
   }
   return [];
+}
+
+/**
+ * Read the nonce the slot is actually at and store the next one.
+ *
+ * The local counter is a convenience; the slot is the truth. They part company
+ * when the same key deploys from a second browser, or when a deploy is refused
+ * after the counter moved. An insert with a stale nonce is refused, so a run of
+ * silent non-reporting is what being behind looks like — this ends it.
+ */
+export async function syncResultNonce(cfg: NodeConfig): Promise<number | null> {
+  if (!cfg.key) return null;
+  const uri = registryUriOf(cfg.key);
+  const r = await evalTerm(cfg, `new lookup(\`rho:registry:lookup\`), stored in {
+  lookup!(\`${uri}\`, *stored) |
+  for (@record <- stored) {
+    match record { (_, (n, _)) => { return!(n) }  _ => { Nil } }
+  }
+}`).catch(() => null);
+  const n = Number(r?.values?.[0]);
+  if (!Number.isFinite(n)) return null;
+  saveConfig({ ...cfg, resultNonce: n + 1 });
+  return n;
 }
 
 export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployOutcome> {
@@ -567,9 +601,14 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
     return { ok: false, message: "no deploy key — /rholang key generate, or /rholang key <hex>" };
   }
   const status = await nodeStatus(cfg).catch(() => ({} as NodeStatus));
-  const forwardTo = resultName();
+  // The answer goes to this key's registry slot, which only this key can write
+  // to. The nonce has to advance on every write there, so it is kept beside the
+  // key rather than guessed; a refused insert means it is behind, and
+  // `syncResultNonce` reads the slot to catch it up.
+  const nonce = cfg.resultNonce ?? 1;
+  saveConfig({ ...cfg, resultNonce: nonce + 1 });
   const data: DeployData = {
-    term: wrapProgram(term, "deploy", forwardTo),
+    term: wrapProgram(term, "deploy", nonce),
     timestamp: Date.now(),
     phloPrice: cfg.phloPrice,
     phloLimit: cfg.phloLimit,
@@ -589,5 +628,5 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
   // on the happy path and names the reason otherwise.
   const text = typeof reply === "string" ? reply : JSON.stringify(reply);
   const ok = /success/i.test(text);
-  return { ok, message: text, resultName: ok ? forwardTo : undefined, sig: ok ? signature : undefined };
+  return { ok, message: text, resultNonce: ok ? nonce : undefined, sig: ok ? signature : undefined };
 }
