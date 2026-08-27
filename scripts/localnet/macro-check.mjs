@@ -28,14 +28,10 @@
 //     so a macro taking capability arguments has nothing to resolve unless you
 //     give it real ones. Reported `needs-caps`.
 //
-// Neither is a defect in the macro. What IS a defect is an `error` row, or a
-// `nothing` row for a macro that should have answered.
-//
-// CHANGE MANAGEMENT. There is no versioning between this library and rnode, and
-// there is unlikely to be one soon — so this check is how an outdated macro is
-// found. A failure here names the macro, prints what was sent and what came
-// back, and points at the definition to change. That is the whole mechanism: a
-// macro is current until this says it is not.
+// Neither is a defect in the macro, so both are reported as skipped. A failure
+// gives the macro, the line it died on, and what rnode said, the way any error
+// does. What a failure means — a stale macro, a node change, a wrong case — is
+// triage, and that is a separate problem from running the thing.
 
 import { expandBare, expandProgram } from "../qos-cli/rholang-macros.mjs";
 
@@ -104,19 +100,21 @@ async function explore(term) {
   return { values: (j.expr ?? []).map((e) => JSON.stringify(e).slice(0, 120)) };
 }
 
-const status = { ok: "ok       ", fail: "OUTDATED ", err: "OUTDATED ", skip: "skipped  " };
+const status = { ok: "ok      ", fail: "FAIL    ", skip: "skipped " };
 let pass = 0, fail = 0, skipped = 0;
-/** Macros that no longer do what they advertise, with why, for the summary. */
-const outdated = [];
 
-/** A failure has to be actionable: what was sent, what came back, what to edit. */
-function reportOutdated(name, call, why, sent, got) {
-  outdated.push({ name: name.trim(), why });
+/** The line that called a system process — where an expansion dies, if it does. */
+const callSite = (src) =>
+  (src ?? "").split("\n").find((l) => /!\(/.test(l) && !/^\s*(new|for|contract)\b/.test(l.trim()))?.trim();
+
+/** Which macro, where it died, what rnode said. What that means is not this
+ *  script's business — it reports, it does not triage. */
+function reportFail(name, call, why, sent, got) {
   console.log(`${status.fail}${name}${why}`);
-  console.log(`         called as: ${call}`);
-  if (sent) console.log(sent.split("\n").map((l) => "         │ " + l).join("\n"));
-  if (got)  console.log(`         rnode answered: ${got}`);
-  console.log(`         fix in packages/browser/src/rholang-macros.js\n`);
+  console.log(`  ${call}`);
+  const site = callSite(sent);
+  if (site) console.log(`  ${site}`);
+  if (got)  console.log(`  ${got}`);
 }
 
 console.log(`macro-check — ${NODE}\n`);
@@ -141,7 +139,7 @@ for (const c of CASES) {
         })()
       : expandBare(c.call);
   } catch (e) {
-    reportOutdated(name, label, `expansion refused: ${e.message}`, null, null);
+    reportFail(name, label, e.message, null, null);
     fail++;
     continue;
   }
@@ -162,24 +160,16 @@ for (const c of CASES) {
   const r = await explore(expansion.source);
   if (VERBOSE) console.log("\n--- " + label + "\n" + expansion.source + "\n--- answer: " + JSON.stringify(r) + "\n");
   if (r.error) {
-    reportOutdated(name, label, "rnode refused the expansion", expansion.source, r.error);
+    reportFail(name, label, "", expansion.source, r.error);
     fail++;
   } else if (c.expect(r)) {
     console.log(`${status.ok}${name}${c.why ?? ""}`);
     pass++;
   } else {
-    reportOutdated(name, label, `no answer, but it advertises: ${c.why}`,
-                   expansion.source, r.values.length ? r.values.join(", ") : "(nothing)");
+    reportFail(name, label, `no answer (expected: ${c.why})`, expansion.source, null);
     fail++;
   }
 }
 
-console.log(`\n${pass} ok, ${fail} outdated, ${skipped} skipped (need a signed deploy or registered capabilities)`);
-if (outdated.length) {
-  console.log(`\nOutdated against rnode as it runs today:`);
-  for (const o of outdated) console.log(`  %${o.name.trim()} — ${o.why}`);
-  console.log(`\nEach is a caller that has fallen behind rnode, not a node fault.`);
-  console.log(`Fix the definition, then update this check's case for it — a case`);
-  console.log(`left agreeing with the old shape passes while the macro stays broken.`);
-}
+console.log(`\n${pass} ok, ${fail} failed, ${skipped} skipped (need a signed deploy or registered capabilities)`);
 process.exit(fail === 0 ? 0 : 1);

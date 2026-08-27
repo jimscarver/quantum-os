@@ -554,47 +554,33 @@ specified before a second place can implement them.
 | [rchain-rust#19](https://github.com/rchain-community/rchain-rust/issues/19) | A one-binder persistent receive in a nested `new` does not terminate. Every contract here takes two parameters because of it |
 | [rchain-rust#18](https://github.com/rchain-community/rchain-rust/issues/18) | A cancelled exploratory deploy retains ~10 MB per request |
 
-## Keeping the library current
+## Checking the macros against rnode
 
-There is no versioning between this library and rnode, and there is unlikely to
-be one soon. A macro is a caller: it names a process, sends arguments in a shape,
-and expects an answer in a shape. rnode can change any of those without breaking
-a single expansion test on this side, because an expansion test only checks that
-a macro produced the rholang it was meant to produce.
+A macro is a caller: it names a process, sends arguments in a shape, and expects
+an answer in a shape. rnode can change any of those without breaking a single
+expansion test, because an expansion test only checks that a macro produced the
+rholang it meant to produce.
 
-So the check is the mechanism, and it is the whole of it:
+So run them against a node:
 
 ```bash
-bash scripts/localnet/run-node.sh --fresh      # a node to check against
+bash scripts/localnet/run-node.sh --fresh
 node scripts/localnet/macro-check.mjs          # --node <url>, --verbose
 ```
 
-It runs every expansion on that node and reports per macro. **A macro is current
-until this says otherwise**, and when it says otherwise it names the macro,
-prints what was sent and what came back, and points at the definition to change:
+A failure gives the macro, the line it died on, and what rnode answered:
 
 ```
-OUTDATED trust         rnode refused the expansion
-         called as: %trust({"alice": {"bob": 3}}, ["alice"])
-         │ trustLevels!({"alice": {"bob": 3}}, ["alice"], *ret) |
-         rnode answered: [ReduceError("expected a list of (rater, ratee, level) tuples")]
-         fix in packages/browser/src/rholang-macros.js
+FAIL    trust
+  %trust({"alice": {"bob": 3}}, ["alice"])
+  trustLevels!({"alice": {"bob": 3}}, ["alice"], *ret) |
+  [ReduceError("expected a list of (rater, ratee, level) tuples")]
 ```
 
-Its first run found three defects at once: fifteen macros that reached the right
-process and then discarded the value they computed, `%philosophers` producing
-nothing observable, and two macros documented with an argument shape rnode
-refuses.
-
-**Fix the macro, then update the case.** A case left agreeing with the old shape
-passes while the macro stays broken, which is worse than no check.
-
-Two things it cannot cover, reported as skipped rather than failed because
-neither is a defect: a macro that identifies its caller needs a signed deploy,
+Skipped is not failed: a macro that identifies its caller needs a signed deploy,
 and one taking capability arguments needs them registered first.
 
-It is **not in CI**. It needs a live rnode, and a CI that cannot reach one is
-either red for the wrong reason or silently green.
+Not in CI — it needs a live rnode.
 
 ## Where the pieces are
 
