@@ -507,6 +507,34 @@ Sketch, not built. What is built beneath it is the trust and delegation
 machinery (`/gov`) and the capability model the tiers rest on; what is missing is
 the chain-side library and everything in the tiers above.
 
+### Used anywhere
+
+INTERACT was called an interface language and was a general-purpose one. The
+distinction was never real: a language that can answer a prompt conditionally,
+hold state, and call anything the system exposes is a programming language that
+happens to sit where a person types.
+
+The same is true here, and rnode is what makes it true — it is universal, so
+what a macro reaches is not bounded by the app the macro was typed into. What
+bounds it today is only that `+name` is read by one message box.
+
+**The interface is keyboard capture with history.** Input is captured as it is
+typed, and a macro encountered along the way is **held** — bound, available,
+carried forward — until it is replaced or something errors. That is a different
+model from a command line that parses a completed line and forgets it: history
+is where the macros live, and typing is what populates it.
+
+**The open question is what the user sees while typing a call.** `echo` answers
+*what will this do* after the fact, which is the right answer for signing and
+the wrong one for typing. At the moment of writing `+standup "Q4` the person
+needs to see what is bound, what the call will expand to, and where it will go —
+and none of that exists yet. Getting it wrong makes an expansion something that
+happens to you rather than something you wrote.
+
+Documenting this is what lets macros be used anywhere rather than in a chat box:
+the capture-and-hold model and the display are the parts that have to be
+specified before a second place can implement them.
+
 ### Not yet placed
 
 - **Active text.** `.get` / `.see` / `@(expr)` and text-as-program equivalence
@@ -516,7 +544,8 @@ the chain-side library and everything in the tiers above.
 - **Orchestration.** `$` expansion is the seed, not the destination, which is
   interactive orchestration of concurrent rholang processes. Matching on prompt
   text is what INTERACT did because it had no channel to bind to; here there is
-  one.
+  one — and [Used anywhere](#used-anywhere) is the interface half of the same
+  question.
 
 ### Upstream
 
