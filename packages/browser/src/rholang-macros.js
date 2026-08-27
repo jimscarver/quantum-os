@@ -342,11 +342,25 @@ const MACROS = {
   swap: {
     help: "All-or-nothing two-party exchange over a for-join (atomic swap).",
     write: true,
-    argSpec: [["depositA", "string"], ["depositB", "string"], ["toA", "string"], ["toB", "string"]],
+    // Capabilities, not labels. A label becomes `@"alice-deposit"` — a public
+    // name, which is a channel anyone who reads or guesses it can send on and
+    // receive from. A swap over four of those is not a swap: a third party can
+    // take the deposit before the join does, feed it a forged one, or collect
+    // the proceeds. Each side is a uri instead, resolved through the registry,
+    // so the join happens on names only the parties hold.
+    argSpec: [["depositA", "cap"], ["depositB", "cap"], ["toA", "cap"], ["toB", "cap"]],
     expand(args) {
-      return `for (@a <- @${q(args.depositA)}; @b <- @${q(args.depositB)}) {
-  @${q(args.toA)}!(b) |
-  @${q(args.toB)}!(a)
+      return `new lookup(\`rho:registry:lookup\`), dA, dB, tA, tB in {
+  lookup!(\`${args.depositA}\`, *dA) |
+  lookup!(\`${args.depositB}\`, *dB) |
+  lookup!(\`${args.toA}\`, *tA) |
+  lookup!(\`${args.toB}\`, *tB) |
+  for (@depositA <- dA; @depositB <- dB; @toA <- tA; @toB <- tB) {
+    for (@a <- @depositA; @b <- @depositB) {
+      @toA!(b) |
+      @toB!(a)
+    }
+  }
 }`;
     },
   },
