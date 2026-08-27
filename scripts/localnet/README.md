@@ -86,9 +86,10 @@ errored=False  cost=1486
 ```
 
 A deploy's `return` is unforgeable and the deploy is over by the time anyone
-asks, so the wrapper forwards every value onto a public name. Read it back with
-`/api/data-at-name-by-block-hash` against the newest block — which is what
-`readResults` in `packages/browser/src/rholang.ts` does:
+asks, so the wrapper writes what it answered to the deployer's own registry slot
+— the uri derived from the key, which only that key can write to. Read it back
+by resolving that uri, which is what `readResult` in
+`packages/browser/src/rholang.ts` does:
 
 ```
 zfa!([2,3,0,1])    -> (true, 1)

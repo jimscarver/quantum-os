@@ -4,13 +4,11 @@
 // outlive the room. The locker is where one survives: your names, your identity
 // record, and the credentials other people issued you.
 //
-// NO PUBLIC NAMES. A public name — `@"jim-ballots"` — is a channel anyone who
-// guesses or reads it can send on, so a dictionary kept at one is a dictionary
-// anybody may edit. Everything here is reached by capability: the locker sits at
-// a registry uri, and every verb takes a `deployerId`, which rnode issues only to
-// the deploy that signed for it and which cannot be forged or guessed. Publishing
-// the locker's uri therefore grants nothing — the world may hold it and still
-// reach only its own entry.
+// Everything here is reached by capability. The locker sits at a registry uri,
+// and every verb takes a `deployerId`, which rnode issues only to the deploy
+// that signed for it. Publishing the locker's uri therefore grants nothing:
+// holding it still reaches only your own entry. No quoted names — see
+// SECURITY.md.
 //
 // The id IS the authority. There is no equality check anywhere in the contract,
 // because there is nothing to check: an entry can only be written under the id
@@ -53,8 +51,7 @@
  */
 export const LOCKER_RHO = `new records, names,
     doRegister, doSetSelf, doAddCred, doRead, doBind, doResolve, doGrant,
-    insertSigned(\`rho:registry:insertSigned:secp256k1\`),
-    deployerId(\`rho:rchain:deployerId\`), ret
+    insertArbitrary(\`rho:registry:insertArbitrary\`), ret
 in {
   records!({}) | names!({}) |
 
@@ -129,21 +126,17 @@ const FACETS = `{
 /**
  * The install program — what a signed deploy submits to put the locker on chain.
  *
- * Published with `insertSigned`, not `insertArbitrary`, and the difference is
- * the whole point: insertArbitrary hands back an unpredictable uri, which the
- * installer then has to read back out of the deploy — and a deploy answers on a
- * public name today (#73). insertSigned writes to the uri derived from the
- * installer's own public key, so the address is known BEFORE the deploy is sent
- * and nothing has to be read back at all. `registryUriOf()` computes it.
+ * Published with `insertArbitrary`, which hands back an unpredictable uri —
+ * so the installer learns where it went by reading what the deploy answered.
  *
- * The nonce must advance on each write to that slot; installing is the first,
- * so it starts at 0.
- *
- * @param {number} [nonce]
+ * NOT insertSigned, though the address would then be predictable: that writes
+ * to the one slot a key has, and that slot is where every deploy's answer goes.
+ * A locker kept there would be overwritten by the next deploy from the same key,
+ * and the answer to that deploy would be the locker. One slot, one job.
  */
-export function installProgram(nonce = 0) {
-  return LOCKER_RHO.replace("CAPS", `insertSigned!((${Number(nonce)}, ${FACETS}), *deployerId, *ret) |
-  for (@uri <- ret) { return!(["locker", uri]) }`);
+export function installProgram() {
+  return LOCKER_RHO.replace("CAPS", `insertArbitrary!(${FACETS}, *ret) |
+  for (@uri <- ret) { return!(uri) }`);
 }
 
 /** A rholang string literal — JSON.stringify produces one. */
@@ -166,8 +159,7 @@ const q = (s) => JSON.stringify(String(s));
  */
 export function lockerCall(lockerUri, verb, args = []) {
   const extra = args.length ? ", " + args.join(", ") : "";
-  // `lookup` on a uri written by insertSigned answers with the whole record it
-  // keeps: `(uri, (nonce, data))`. The facets are the data, two tuples in.
+  // `lookup` answers with the whole record the registry keeps for a uri.
   // The facet is bound out of the map with `match` before it is called.
   // Sending straight through the lookup — `@(caps.get("register"))!(…)` —
   // silently reaches nothing: a bundle taken from a map is not callable in
@@ -176,7 +168,7 @@ export function lockerCall(lockerUri, verb, args = []) {
   lookup!(\`${lockerUri}\`, *stored) |
   for (@record <- stored) {
     match record {
-      (_, (_, caps)) => {
+      (_, caps) => {
         match caps.get(${q(verb)}) {
           Nil  => { return!(["no verb", ${q(verb)}]) }
           verb => {
@@ -258,7 +250,7 @@ export function selftest() {
   };
 
   ok("the contract is delimiter-balanced", balanced(LOCKER_RHO));
-  ok("the contract names no public channel", !/@"/.test(LOCKER_RHO), "a @\"…\" would be a public name");
+  ok("the contract quotes no name", !/@"/.test(LOCKER_RHO), "@\"…\" — see SECURITY.md");
   ok("every contract takes at least two parameters",
      [...LOCKER_RHO.matchAll(/contract\s+\w+\(([^)]*)\)/g)]
        .every((m) => m[1].split(",").filter((x) => x.trim()).length >= 2),
@@ -270,7 +262,7 @@ export function selftest() {
   ok("register passes deployerId first", /!\(\*deployerId, "1111alice", \*ret\)/.test(reg), reg);
   ok("register names the register facet", reg.includes('caps.get("register")'));
   ok("the facet is bound before it is called", /match caps\.get\("register"\)/.test(reg) && /@verb!\(\*deployerId/.test(reg), reg.slice(-300));
-  ok("a call unwraps insertSigned's (uri, (nonce, data))", /match record \{\s*\(_, \(_, caps\)\)/.test(reg), reg.slice(0, 200));
+  ok("a call unwraps what lookup answers with", /match record \{\s*\(_, caps\)/.test(reg), reg.slice(0, 200));
 
   const bind = bindProgram(URI, "ballot", "rho:id:xyz");
   ok("bind carries name then uri", /!\(\*deployerId, "ballot", "rho:id:xyz", \*ret\)/.test(bind), bind);
@@ -283,7 +275,7 @@ export function selftest() {
   const nasty = bindProgram(URI, 'x", *evil) | @"stolen"!("', "rho:id:z");
   ok("a hostile name stays inside its literal", balanced(nasty) && !/@"stolen"!/.test(nasty.replace(/"(?:[^"\\]|\\.)*"/g, '""')), nasty);
 
-  ok("no public name in any program",
+  ok("no quoted name in any program",
      [reg, bind, read, grantProgram(URI, "n"), setSelfProgram(URI, "k", "v")].every((p) => !/@"/.test(p)));
 
   console.log(`selftest: ${pass}/${pass + fail} passed`);
