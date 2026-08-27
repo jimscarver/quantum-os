@@ -5,6 +5,12 @@ Conferencing and Communications Center, and much of what this repository is
 trying to do was tried there first — some of it successfully enough that the
 right move now is to copy it rather than reinvent it.
 
+**The science of EIES was collective intelligence research.** The systems were
+instruments: built to find out what happens when groups think together through a
+medium designed for it, and what a medium has to provide before that works.
+QuantumOS is a 21st-century tool for continuing that research — the same
+question, on a substrate that did not exist in 1976.
+
 This document records that lineage: what EIES did, which parts this project is
 descended from, and which lessons are load-bearing in the current design. It is
 written down because the reasoning behind several decisions here is only legible
@@ -33,14 +39,12 @@ things that must outlive the room. The vision it serves is stated in the
 [Manifesto](Manifesto.md); the [README](README.md) is the practical entry point
 and the [User Guide](User_Guide.md) is where to start using it.
 
-**Quantum Logical Framework** — the other half of the current work
+**Quantum Logical Framework** — the theory behind QuantumOS, not a second system
 ([README](https://github.com/rchain-community/quantum-logical-framework#readme),
-[site](https://rchain-community.github.io/quantum-logical-framework/)). QLF is
-the constructive foundation the ZFA kernel above is an implementation of: Zero
-Free Action is its idea, and a room's capabilities are ZFA-valid twist strings
-rather than arbitrary tokens. EIES was groupware on whatever substrate a
-mainframe offered; here the substrate is itself the subject of study, and the two
-repositories are one project seen from two ends.
+[site](https://rchain-community.github.io/quantum-logical-framework/)). Zero Free
+Action is QLF's idea; the ZFA kernel above is its implementation, and a room's
+capabilities are ZFA-valid twist strings rather than arbitrary tokens because of
+it.
 
 ## INTERACT: user programming, and why it matters here
 
