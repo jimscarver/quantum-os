@@ -6,7 +6,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node test/calls.test.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
     "typescript": "^5.4.0",
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "esbuild": "^0.21.5"
   }
 }

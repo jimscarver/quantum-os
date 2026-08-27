@@ -79,3 +79,8 @@ jobs:
 
       - name: Locker selftest
         run: node packages/browser/src/locker.js --selftest
+
+      # Browser behaviour, against stubbed media. Not a rendering test — it
+      # asserts which track ends up in the stream a joiner would be given.
+      - name: Calls test
+        run: node packages/browser/test/calls.test.mjs
