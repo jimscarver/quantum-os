@@ -29,6 +29,8 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          formatDefinition, findMacros, bodyKind, MacroError,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { createCalls, type Calls } from "./calls.js";
+import { createAttachments, renderMedia, type Attachments,
+         type MediaAttachment, type MediaKind } from "./attachments.js";
 import { openRholangEditor } from "./rholang-editor.js";
 import { expandBareMacro, expandMacroProgram, lintRholang,
          listMacros as listRholangMacros } from "./rholang-pipeline.js";
@@ -126,8 +128,6 @@ interface ProbeWindow {
 
 // Per-room chat history so tab switching can replay the messages area.
 type ChatKind = "peer" | "self" | "system";
-type MediaKind = "image" | "audio" | "video" | "file";
-interface MediaAttachment { mediaKind: MediaKind; name: string; mime: string; size: number; url: string }
 interface ChatLine { from: string; text: string; kind: ChatKind; label?: string; media?: MediaAttachment; pollId?: string; groupId?: string; issueId?: string }
 
 // A persist request is an offer from another peer asking us to also store
@@ -5630,8 +5630,8 @@ function connect(): void {
           if (changed) { saveGroups(); renderGroups(); }
           return;
         }
-        if (d.kind === "file-start") { handleFileStart(d); return; }
-        if (d.kind === "file-chunk") { handleFileChunk(from, d); return; }
+        if (d.kind === "file-start") { attachments.fileStart(d); return; }
+        if (d.kind === "file-chunk") { attachments.fileChunk(from, d); return; }
         if (d.kind === "call-start") {
           addMessage("", `📞 ${peerLabel(from)} started a call — click Call to join`, "system");
           return;
@@ -5934,80 +5934,6 @@ function saveChat(room: RoomContext): void {
   } catch { /* storage quota — drop silently */ }
 }
 
-// ---------------------------------------------------------------------------
-// Attachments: images / audio / video / files over the data channel (chunked)
-// ---------------------------------------------------------------------------
-
-const FILE_MAX = 8 * 1024 * 1024;     // 8 MB hard cap per attachment
-const FILE_CHUNK = 16 * 1024;         // base64 chars per data-channel message
-let fileSeq = 0;
-
-function fmtSize(n: number): string {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
-  return `${n} B`;
-}
-
-function mediaKindOf(mime: string, name: string): MediaKind {
-  if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("audio/")) return "audio";
-  if (mime.startsWith("video/")) return "video";
-  const ext = (name.split(".").pop() ?? "").toLowerCase();
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"].includes(ext)) return "image";
-  if (["mp3", "wav", "ogg", "m4a", "opus", "aac"].includes(ext)) return "audio";
-  if (["mp4", "webm", "mov", "mkv"].includes(ext)) return "video";
-  return "file";
-}
-
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  const STEP = 0x8000;
-  for (let i = 0; i < bytes.length; i += STEP) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + STEP));
-  }
-  return btoa(bin);
-}
-
-/** Pause until the data-channel send buffers drain below ~1 MB. */
-function paceSend(): Promise<void> {
-  return new Promise((resolve) => {
-    const check = (): void => {
-      if (!qpeer || qpeer.maxBufferedAmount() < (1 << 20)) resolve();
-      else setTimeout(check, 30);
-    };
-    check();
-  });
-}
-
-function renderMedia(host: HTMLElement, m: MediaAttachment): void {
-  if (!m.url) {   // persisted placeholder (data-URL was stripped on save)
-    const span = document.createElement("span");
-    span.className = "media-file";
-    span.textContent = `📎 ${m.name} (${fmtSize(m.size)})`;
-    host.appendChild(span);
-    return;
-  }
-  if (m.mediaKind === "image") {
-    const img = document.createElement("img");
-    img.className = "media-img"; img.src = m.url; img.alt = m.name; img.loading = "lazy";
-    img.title = `${m.name} (${fmtSize(m.size)}) — click to open`;
-    img.addEventListener("click", () => window.open(m.url, "_blank", "noopener"));
-    host.appendChild(img);
-  } else if (m.mediaKind === "audio") {
-    const a = document.createElement("audio"); a.controls = true; a.src = m.url; a.preload = "metadata";
-    host.appendChild(a);
-  } else if (m.mediaKind === "video") {
-    const v = document.createElement("video"); v.className = "media-vid"; v.controls = true; v.src = m.url; v.preload = "metadata";
-    host.appendChild(v);
-  } else {
-    const a = document.createElement("a");
-    a.className = "media-file"; a.href = m.url; a.download = m.name;
-    a.textContent = `📎 ${m.name} (${fmtSize(m.size)})`;
-    host.appendChild(a);
-  }
-}
-
 function addMedia(from: string, media: MediaAttachment, kind: "peer" | "self", label?: string): void {
   const line: ChatLine = { from, text: "", kind, label, media };
   activeRoom.chatLog.push(line);
@@ -6018,68 +5944,6 @@ function addMedia(from: string, media: MediaAttachment, kind: "peer" | "self", l
     messagesEl.scrollTop = messagesEl.scrollHeight;
   } else {
     markUnread(activeRoom);
-  }
-}
-
-async function sendFile(file: File): Promise<void> {
-  if (!qpeer) { addMessage("", "connect to a room before sending attachments", "system"); return; }
-  if (file.size > FILE_MAX) {
-    addMessage("", `⚠ "${file.name}" is ${fmtSize(file.size)} — over the ${fmtSize(FILE_MAX)} attachment limit`, "system");
-    return;
-  }
-  const buf = await file.arrayBuffer();
-  const b64 = arrayBufferToBase64(buf);
-  const mime = file.type || "application/octet-stream";
-  const mediaKind = mediaKindOf(file.type, file.name);
-  const id = `${qpeer.peerId.slice(-6)}-${Date.now()}-${fileSeq++}`;
-  const total = Math.ceil(b64.length / FILE_CHUNK);
-  qpeer.broadcast({ kind: "file-start", id, name: file.name, mime, size: file.size, total, mediaKind });
-  for (let i = 0; i < total; i++) {
-    qpeer.broadcast({ kind: "file-chunk", id, seq: i, data: b64.slice(i * FILE_CHUNK, (i + 1) * FILE_CHUNK) });
-    if ((i & 31) === 31) await paceSend();
-  }
-  addMedia("", { mediaKind, name: file.name, mime, size: file.size, url: `data:${mime};base64,${b64}` }, "self");
-}
-
-function sendFiles(files: FileList | File[]): void {
-  for (const f of Array.from(files)) void sendFile(f);
-}
-
-// Inbound reassembly: transfer id → partial state.
-interface IncomingFile {
-  name: string; mime: string; size: number; mediaKind: MediaKind;
-  total: number; chunks: string[]; got: number;
-}
-const incomingFiles = new Map<string, IncomingFile>();
-
-function handleFileStart(d: Record<string, unknown>): void {
-  const id = String(d.id ?? "");
-  const size = Number(d.size ?? 0);
-  const total = Number(d.total ?? 0);
-  if (!id || size > FILE_MAX || total <= 0 || total > Math.ceil(FILE_MAX / FILE_CHUNK) + 2) return;
-  incomingFiles.set(id, {
-    name: String(d.name ?? "file"),
-    mime: String(d.mime ?? "application/octet-stream"),
-    size,
-    mediaKind: (d.mediaKind as MediaKind) ?? "file",
-    total,
-    chunks: new Array(total).fill(""),
-    got: 0,
-  });
-}
-
-function handleFileChunk(from: string, d: Record<string, unknown>): void {
-  const id = String(d.id ?? "");
-  const f = incomingFiles.get(id);
-  if (!f) return;
-  const seq = Number(d.seq ?? -1);
-  if (seq < 0 || seq >= f.total || f.chunks[seq] !== "") return;
-  f.chunks[seq] = String(d.data ?? "");
-  f.got++;
-  if (f.got >= f.total) {
-    incomingFiles.delete(id);
-    const url = `data:${f.mime};base64,${f.chunks.join("")}`;
-    addMedia(from, { mediaKind: f.mediaKind, name: f.name, mime: f.mime, size: f.size, url }, "peer", peerLabel(from));
   }
 }
 
@@ -6379,7 +6243,7 @@ function initUx(): void {
   if (attachBtn && fileInput) {
     attachBtn.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", () => {
-      if (fileInput.files && fileInput.files.length) sendFiles(fileInput.files);
+      if (fileInput.files && fileInput.files.length) attachments.send(fileInput.files);
       fileInput.value = "";
     });
   }
@@ -6389,7 +6253,7 @@ function initUx(): void {
   dropTarget.addEventListener("drop", (e) => {
     e.preventDefault();
     dropTarget.classList.remove("dragover");
-    if (e.dataTransfer?.files?.length) sendFiles(e.dataTransfer.files);
+    if (e.dataTransfer?.files?.length) attachments.send(e.dataTransfer.files);
   });
   msgInput.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
@@ -6398,7 +6262,7 @@ function initUx(): void {
     for (const it of Array.from(items)) {
       if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
     }
-    if (files.length) { e.preventDefault(); sendFiles(files); return; }
+    if (files.length) { e.preventDefault(); attachments.send(files); return; }
     // Multi-line text. An <input> cannot hold a newline: the browser flattens
     // the paste, so a pasted program silently arrived as one line — which for
     // rholang means a `//` comment swallowing everything after it. Hold every
@@ -6438,6 +6302,13 @@ function initUx(): void {
       share: document.getElementById("call-share") as HTMLButtonElement | null,
     },
   );
+  attachments = createAttachments({
+    peer: () => qpeer,
+    say: (t) => addMessage("", t, "system"),
+    label: (id) => peerLabel(id),
+    // The transcript is app.ts's to keep, so appending to it stays here.
+    addMedia,
+  });
   document.getElementById("call-hangup")?.addEventListener("click", () => calls.end());
   document.getElementById("call-mute")?.addEventListener("click", () => calls.toggleMute());
   document.getElementById("call-cam")?.addEventListener("click", () => calls.toggleCam());
@@ -7589,6 +7460,9 @@ function renderGroups(): void {
 
 /** Live calls. Built in init, once the toolbar elements exist. */
 let calls: Calls;
+
+/** Attachments over the data channel. Built in init alongside calls. */
+let attachments: Attachments;
 
 async function init(): Promise<void> {
   const roomId = getRoomId();
