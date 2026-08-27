@@ -60,9 +60,20 @@ conditionally, matching on the text of the last input to decide what to do next.
 Many commands never touched the system at all and were simply programs.
 
 Most commands were written by users, or by group effort — tailoring a group's
-communication structures, defining its roles, or simply adding utility. What
-happened next is the interesting part, and it is the thing this project wants to
-reproduce:
+communication structures, defining its roles, or simply adding utility.
+
+Murray Turoff on what that bought:
+
+> INTERACT made EIES the perfect R&D machine for designing prototype
+> communication processes… I think the fact that we were able to allow people
+> individually to rewrite all the prompts is a good point of illustration.
+> Besides different languages I remember one interface was an English butler and
+> another swore at the user that wrote it. We had dynamic text before any other
+> major applications of it.
+
+An R&D machine for communication processes is the point: tailorability was not a
+convenience feature, it was the instrument. What happened next is the interesting
+part, and it is the thing this project wants to reproduce:
 
 > People wrote hundreds of commands, shared them with others, and groups adopted
 > them. The most useful were made global system commands. It was user
