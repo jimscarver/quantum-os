@@ -28,6 +28,7 @@ import { installProgram, registerProgram, bindProgram, resolveProgram,
 import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          formatDefinition, findMacros, bodyKind, MacroError,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
+import { createCalls, type Calls } from "./calls.js";
 import { openRholangEditor } from "./rholang-editor.js";
 import { expandBareMacro, expandMacroProgram, lintRholang,
          listMacros as listRholangMacros } from "./rholang-pipeline.js";
@@ -5636,8 +5637,7 @@ function connect(): void {
           return;
         }
         if (d.kind === "call-end") {
-          removeTile(from);
-          maybeHideCallBar();
+          calls.peerGone(from);
           addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
           return;
         }
@@ -5738,8 +5738,7 @@ function connect(): void {
           // unlabelled peer; a genuinely-departed peer's stale role never renders
           // (renderPeers only badges ids still in `peers`). It is only reset if
           // the peer re-announces itself as a non-agent (see the `name` handler).
-          removeTile(id);
-          maybeHideCallBar();
+          calls.peerGone(id);
         } finally { setActiveRoom(prev); }
         // 15s grace (was 6s): a flaky free-tier signaling server can take >6s to
         // reconnect a dropped agent, so a shorter window logs a spurious left/join
@@ -5752,7 +5751,7 @@ function connect(): void {
     },
     onRemoteTrack(peerId, stream) {
       const prev = activeRoom; setActiveRoom(ctx);
-      try { if (isUiActive()) addRemoteStream(peerId, stream); }
+      try { if (isUiActive()) calls.remoteStream(peerId, stream); }
       finally { setActiveRoom(prev); }
     },
   });
@@ -6351,7 +6350,7 @@ function initUx(): void {
           else { cmdSel = -1; showCmdMenu("", true); msgInput.focus(); }
           return;
         }
-        if (a.label === "Call") { toggleCall(); return; }
+        if (a.label === "Call") { calls.toggle(); return; }
         msgInput.value = a.fill;
         msgInput.focus();
         if (a.hint) addMessage("", a.hint, "system");
@@ -6422,13 +6421,25 @@ function initUx(): void {
   });
 
   // Live-call controls.
-  callBarEl = document.getElementById("call-bar");
-  callTilesEl = document.getElementById("call-tiles");
-  callMuteBtn = document.getElementById("call-mute") as HTMLButtonElement | null;
-  callCamBtn = document.getElementById("call-cam") as HTMLButtonElement | null;
-  document.getElementById("call-hangup")?.addEventListener("click", endCall);
-  callMuteBtn?.addEventListener("click", toggleMute);
-  callCamBtn?.addEventListener("click", toggleCam);
+  calls = createCalls(
+    {
+      // Asked for rather than held: which peer is current changes as the user
+      // switches room tabs.
+      peer: () => qpeer,
+      say: (t) => addMessage("", t, "system"),
+      label: (id) => peerLabel(id),
+      isAgent: (id) => peerAgents.has(id),
+    },
+    {
+      bar:   document.getElementById("call-bar"),
+      tiles: document.getElementById("call-tiles"),
+      mute:  document.getElementById("call-mute")  as HTMLButtonElement | null,
+      cam:   document.getElementById("call-cam")   as HTMLButtonElement | null,
+    },
+  );
+  document.getElementById("call-hangup")?.addEventListener("click", () => calls.end());
+  document.getElementById("call-mute")?.addEventListener("click", () => calls.toggleMute());
+  document.getElementById("call-cam")?.addEventListener("click", () => calls.toggleCam());
 }
 
 // ---------------------------------------------------------------------------
@@ -7571,141 +7582,11 @@ function renderGroups(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Live calls: mic / camera over WebRTC media tracks
-// ---------------------------------------------------------------------------
-
-let localStream: MediaStream | null = null;
-let inCall = false;
-const callTiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
-let callBarEl: HTMLElement | null = null;
-let callTilesEl: HTMLElement | null = null;
-let callMuteBtn: HTMLButtonElement | null = null;
-let callCamBtn: HTMLButtonElement | null = null;
-
-function showCallBar(): void { if (callBarEl) callBarEl.hidden = false; }
-function maybeHideCallBar(): void {
-  if (callBarEl && !inCall && callTiles.size === 0) callBarEl.hidden = true;
-}
-
-function makeTile(key: string, label: string): HTMLVideoElement {
-  const wrap = document.createElement("div");
-  wrap.className = "call-tile";
-  wrap.dataset.key = key;
-  const v = document.createElement("video");
-  v.autoplay = true; v.playsInline = true;
-  const cap = document.createElement("span");
-  cap.className = "call-name"; cap.textContent = label;
-  wrap.appendChild(v); wrap.appendChild(cap);
-  callTilesEl?.appendChild(wrap);
-  callTiles.set(key, v);
-  return v;
-}
-
-function removeTile(key: string): void {
-  const v = callTiles.get(key);
-  if (!v) return;
-  v.srcObject = null;
-  v.closest(".call-tile")?.remove();
-  callTiles.delete(key);
-}
-
-function addRemoteStream(peerId: string, stream: MediaStream): void {
-  // Ignore media from AI agents (data-only peers). They don't really stream — werift
-  // loops our own audio back, which (a) plays as a strong echo when you're "alone" in
-  // a call and (b) spuriously raises the call bar so the Leave button is always up.
-  // Humans only.
-  if (peerAgents.has(peerId)) return;
-  let v = callTiles.get(peerId);
-  if (!v) v = makeTile(peerId, peerLabel(peerId));
-  if (v.srcObject !== stream) v.srcObject = stream;
-  showCallBar();
-}
-
-// Always request the browser's acoustic echo canceller (+ noise suppression / auto
-// gain). `audio: true` *usually* enables AEC, but being explicit guards against a
-// driver/profile that left it off — one cause of hearing yourself.
-const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-
-async function startCall(): Promise<void> {
-  if (!qpeer) { addMessage("", "connect to a room before starting a call", "system"); return; }
-  if (inCall) return;
-  if (!navigator.mediaDevices?.getUserMedia) {
-    addMessage("", `⚠ calls need a secure context — open the site over https:// or localhost${window.isSecureContext ? "" : " (this page is not a secure context)"}`, "system");
-    return;
-  }
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });
-  } catch (videoErr) {
-    // Many devices have no camera (desktops), or video is blocked while audio is
-    // allowed — retry audio-only before giving up.
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
-      addMessage("", "🎙 camera unavailable — starting an audio-only call", "system");
-    } catch (audioErr) {
-      const e = audioErr as DOMException;
-      const why =
-        e?.name === "NotAllowedError"  ? "permission denied — click the camera/🔒 icon in the address bar and Allow mic & camera for this site, then retry"
-      : e?.name === "NotFoundError"    ? "no microphone or camera was found on this device"
-      : e?.name === "NotReadableError" ? "your mic/camera is already in use by another app or tab"
-      : e?.name === "SecurityError"    ? "blocked by the browser's permissions policy (needs https:// or localhost)"
-      : (e?.message || String(audioErr));
-      addMessage("", `⚠ could not start call: ${why}`, "system");
-      return;
-    }
-  }
-  inCall = true;
-  const local = makeTile("__local__", "you");
-  local.muted = true;
-  local.srcObject = localStream;
-  showCallBar();
-  qpeer.addLocalMedia(localStream);
-  qpeer.broadcast({ kind: "call-start" });
-  addMessage("", "📞 you started a call", "system");
-  updateCallControls();
-}
-
-function endCall(): void {
-  if (qpeer) { qpeer.removeLocalMedia(); qpeer.broadcast({ kind: "call-end" }); }
-  localStream?.getTracks().forEach((t) => t.stop());
-  localStream = null;
-  inCall = false;
-  removeTile("__local__");
-  updateCallControls();
-  maybeHideCallBar();
-}
-
-function toggleCall(): void { if (inCall) endCall(); else void startCall(); }
-
-function toggleMute(): void {
-  const t = localStream?.getAudioTracks()[0];
-  if (t) t.enabled = !t.enabled;
-  updateCallControls();
-}
-
-function toggleCam(): void {
-  const t = localStream?.getVideoTracks()[0];
-  if (t) t.enabled = !t.enabled;
-  updateCallControls();
-}
-
-function updateCallControls(): void {
-  const audioOn = localStream?.getAudioTracks()[0]?.enabled ?? false;
-  const videoOn = localStream?.getVideoTracks()[0]?.enabled ?? false;
-  if (callMuteBtn) {
-    callMuteBtn.textContent = audioOn ? "🎤" : "🔇";
-    callMuteBtn.title = audioOn ? "Mute mic" : "Unmute mic";
-  }
-  if (callCamBtn) {
-    const hasVideo = (localStream?.getVideoTracks().length ?? 0) > 0;
-    callCamBtn.disabled = !hasVideo;
-    callCamBtn.textContent = !hasVideo ? "🚫" : videoOn ? "🎥" : "🚫";
-    callCamBtn.title = !hasVideo ? "No camera — audio-only call" : videoOn ? "Turn camera off" : "Turn camera on";
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+
+/** Live calls. Built in init, once the toolbar elements exist. */
+let calls: Calls;
 
 async function init(): Promise<void> {
   const roomId = getRoomId();
