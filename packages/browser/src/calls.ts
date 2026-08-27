@@ -170,11 +170,21 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   /**
    * Share the screen in place of the camera.
    *
-   * `replaceTrack` on the existing sender rather than adding a second track:
-   * the connection is already negotiated for one video stream, so swapping the
-   * track needs no renegotiation and the other side sees the picture change
-   * without anything being torn down. The camera track is kept, not stopped, so
-   * stopping the share puts it straight back.
+   * `localStream` is the truth of what we are sending: existing connections
+   * carry its tracks, and a peer that connects later is given them
+   * (`QOSPeer` re-adds from its own reference to the same object). So sharing
+   * swaps the track *in that stream* and not only on the senders — otherwise
+   * whoever joined next would get the camera while everyone already here saw
+   * the screen.
+   *
+   * On senders that already carry video, `replaceTrack` does it with no
+   * renegotiation and nothing torn down. Where there is no video sender — an
+   * audio-only call, or nobody connected yet — the track is new to the
+   * connection, so `addLocalMedia` negotiates it.
+   *
+   * Being alone is not a reason to refuse. The camera runs, the preview shows
+   * it, and there is simply nobody receiving yet; sharing has to work then too,
+   * or it fails exactly when someone sets up before a call.
    *
    * The cost of this shape is that it is a swap: you cannot send your face and
    * your screen at once. That wants a second track and per-track tile identity,
@@ -185,11 +195,6 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     if (screenStream) return;
     if (!navigator.mediaDevices?.getDisplayMedia) {
       host.say("⚠ this browser cannot share a screen (getDisplayMedia is unavailable)");
-      return;
-    }
-    const senders = videoSenders();
-    if (!senders.length) {
-      host.say("⚠ no video is being sent, so there is nothing to share in its place — start a call with a camera");
       return;
     }
     try {
@@ -203,23 +208,41 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     }
     const track = screenStream.getVideoTracks()[0];
     if (!track) { stopScreenTracks(); return; }
-    cameraTrack = senders[0].track ?? null;
-    await Promise.all(senders.map((s) => s.replaceTrack(track).catch(() => {})));
+
+    // Swap it into what we are sending, keeping the camera track to put back.
+    cameraTrack = localStream?.getVideoTracks()[0] ?? null;
+    if (localStream) {
+      if (cameraTrack) localStream.removeTrack(cameraTrack);
+      localStream.addTrack(track);
+    }
+    const senders = videoSenders();
+    if (senders.length) {
+      await Promise.all(senders.map((s) => s.replaceTrack(track).catch(() => {})));
+    } else if (localStream) {
+      // No video sender to swap — the track is new to every connection.
+      host.peer()?.addLocalMedia(localStream);
+    }
+
     // The browser's own "stop sharing" control ends the track without telling us.
     track.addEventListener("ended", () => { void stopScreen(); });
     const local = tiles.get("__local__");
-    if (local) local.srcObject = screenStream;
+    if (local && localStream) local.srcObject = localStream;
     host.say("🖥 you are sharing your screen");
     updateControls();
   }
 
   async function stopScreen(): Promise<void> {
     if (!screenStream) return;
+    const shared = screenStream.getVideoTracks()[0] ?? null;
     stopScreenTracks();
-    if (cameraTrack) {
-      const cam = cameraTrack;
-      await Promise.all(videoSenders().map((s) => s.replaceTrack(cam).catch(() => {})));
+    if (localStream) {
+      if (shared) localStream.removeTrack(shared);
+      if (cameraTrack) localStream.addTrack(cameraTrack);
     }
+    // `replaceTrack(null)` where there is no camera: stop sending video rather
+    // than leaving the far side on a frozen last frame of the screen.
+    const cam = cameraTrack;
+    await Promise.all(videoSenders().map((s) => s.replaceTrack(cam).catch(() => {})));
     cameraTrack = null;
     const local = tiles.get("__local__");
     if (local && localStream) local.srcObject = localStream;
