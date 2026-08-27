@@ -50,16 +50,22 @@ const el = () => ({
   children: [], appendChild() {}, addEventListener() {}, closest: () => ({ remove() {} }),
 });
 
-globalThis.document = { createElement: () => el() };
-globalThis.window = { isSecureContext: true };
+// defineProperty, not assignment: node 22 defines `navigator` itself as a
+// getter-only property, so `globalThis.navigator = …` throws there while
+// working fine on node 20. CI runs 22.
+const provide = (name, value) =>
+  Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+
+provide("document", { createElement: () => el() });
+provide("window", { isSecureContext: true });
 
 const camera = new Track("video", "camera");
 const mic    = new Track("audio", "mic");
 const screen = new Track("video", "screen");
-globalThis.navigator = { mediaDevices: {
+provide("navigator", { mediaDevices: {
   getUserMedia:    async () => new Stream([mic, camera]),
   getDisplayMedia: async () => new Stream([screen]),
-} };
+} });
 
 // --- the room: one person, nobody connected ---------------------------------
 
