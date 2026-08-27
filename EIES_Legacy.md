@@ -84,7 +84,7 @@ capabilities its author chose to place in it. Same enabling property; a much
 narrower blast radius; and no superuser needed to administer the boundary,
 because holding the cap *is* the permission.
 
-That is why [the macro design](https://github.com/jimscarver/quantum-os/issues/65)
+That is why [the macro design](https://github.com/rchain-community/quantum-os/issues/65)
 starts with capabilities and defers governance. It is not a simplification of the
 EIES model — it is the EIES model with the suid bit sharpened into an object.
 
@@ -158,5 +158,5 @@ Harvy and Al Leurck. The reports are the record; he is the primary source.
 ---
 
 *If you are picking up this project: the argument for capabilities in
-[#65](https://github.com/jimscarver/quantum-os/issues/65) is the one to read
+[#65](https://github.com/rchain-community/quantum-os/issues/65) is the one to read
 first. It is a forty-year-old result.*

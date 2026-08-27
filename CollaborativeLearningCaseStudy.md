@@ -1,6 +1,6 @@
 # Case Study — Collaborative Learning (CoLab QLF Testing)
 
-**Issue:** [#25](https://github.com/jimscarver/quantum-os/issues/25) · **Macro:** `colab-study` ([`RhoQuCalc_Macros.md`](RhoQuCalc_Macros.md)) · **Built on:** the `zfa-core-wasm` kernel (`packages/browser/src/zfa.ts`), [`RhoQuDemo.md`](RhoQuDemo.md)
+**Issue:** [#25](https://github.com/rchain-community/quantum-os/issues/25) · **Macro:** `colab-study` ([`RhoQuCalc_Macros.md`](RhoQuCalc_Macros.md)) · **Built on:** the `zfa-core-wasm` kernel (`packages/browser/src/zfa.ts`), [`RhoQuDemo.md`](RhoQuDemo.md)
 
 A peer-to-peer study room where learners jointly test the Quantum Logical Framework — running QuCalc
 history strings, checking Zero Free Action (ZFA) closure, and reaching a group verdict on a shared ledger.
@@ -55,4 +55,4 @@ closure. As a ρ-process it is ZFA-balanced by construction — see [`RhoQuCalc_
   WebRTC sync, the **`/qlf-action` / `/zfa-check`** thin verbs (room-broadcast wrappers over the kernel),
   and the **`/estimate` median** round (mesh-synced, `new`/`<number>`/`status`/`close`).
 - 🔵 **Open:** the **macro IR + mesh-shared macro names** so a class adopts `colab-study` once.
-  Tracked in [#24](https://github.com/jimscarver/quantum-os/issues/24).
+  Tracked in [#24](https://github.com/rchain-community/quantum-os/issues/24).

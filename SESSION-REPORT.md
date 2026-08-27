@@ -2,6 +2,15 @@
 
 > Covers work performed **2026-08-23 → 2026-08-24**. This file records what was done
 > and **where it landed**, so the session can be resumed without loss.
+>
+> **Since superseded on the repository question.** This report describes
+> `jimscarver/quantum-os` as the main development repo, which was true when it was
+> written. On 2026-08-27 that repository was transferred into the `rchain-community`
+> organisation and is now `rchain-community/quantum-os` — the source, not a fork,
+> with its issues, pull requests and stars carried across. The org's earlier
+> *fork* of the same name was renamed to `quantum-os-old-fork` to free the name.
+> References below to `jimscarver/quantum-os` still resolve, via GitHub's redirect,
+> and are left as written because this is a dated record.
 
 ## Summary
 
