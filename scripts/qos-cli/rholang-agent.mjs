@@ -1,6 +1,6 @@
-// global-agent.mjs — the `/global` RChain macro agent (a headless room peer).
+// rholang-agent.mjs — the `/rholang` macro agent (a headless room peer).
 //
-// Joins a QuantumOS room like any other peer, listens for `/global <macro> <args…>`
+// Joins a QuantumOS room like any other peer, listens for `/rholang macro <name> <args…>`
 // chat messages, expands the approved macro, and shares the result back to the
 // room chat:
 //
@@ -9,33 +9,33 @@
 //     for the requestor to review and sign CLIENT-SIDE (the agent never holds keys).
 //
 // Run:
-//   node global-agent.mjs --room <cap:room:… | room-URL> [--name global] [--signal <url>]
+//   node rholang-agent.mjs --room <cap:room:… | room-URL> [--name rholang] [--signal <url>]
 
 import { generateCapability } from "./zfa.mjs";
-import { expandGlobal, listMacros, HELP } from "./global-macros.mjs";
+import { expandBare, listMacros, HELP } from "./rholang-macros.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
-const TAG = "[global]";
+const TAG = "[rholang]";
 
-const USAGE = `qos /global macro agent — RChain capability macros in the room chat
+const USAGE = `qos /rholang macro agent — RChain capability macros in the room chat
 
-  node global-agent.mjs --room <cap:room:… | room-URL> [options]
+  node rholang-agent.mjs --room <cap:room:… | room-URL> [options]
 
 Options:
   --room <cap|url>   Room capability token or a quantum-os URL (#room=…). (required)
-  --name <s>         Display name (default: global).
+  --name <s>         Display name (default: rholang).
   --signal <url>     Signaling server (default: ${DEFAULT_SIGNAL}).
   --verbose          Log inbound chat.
   --help, -h         Show this help.
 
 While connected, any room peer can type:
-  /global help
-  /global macros
-  /global <macro> <args…>
+  /rholang macros
+  /rholang macro <name> <args…>
+  /rholang eval|deploy   (with %name(…) sites in the program)
 The expansion (or read result) is broadcast back into the room chat.`;
 
 export function parseArgs(argv) {
-  const a = { name: "global", signal: DEFAULT_SIGNAL };
+  const a = { name: "rholang", signal: DEFAULT_SIGNAL };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     if (x === "--room") a.room = argv[++i];
@@ -81,7 +81,7 @@ export async function run(args) {
     onChannelOpen: (id) => {
       if (id === peer.peerId) return;
       // announce our name so the browser labels us in the chat.
-      peer.send(id, { kind: "name", name: args.name, agent: "global" });
+      peer.send(id, { kind: "name", name: args.name, agent: "rholang" });
     },
     onMessage: (from, d) => onMessage(from, d),
   });
@@ -90,17 +90,17 @@ export async function run(args) {
     peer.broadcast({ kind: "chat", text });
   }
 
-  // Handle a `/global …` chat message; return true if it was for us.
+  // Handle a `/rholang …` chat message; return true if it was for us.
   function handleGlobal(text) {
     const s = String(text ?? "").trim();
-    if (!/^\/?\s*global(\s|$)/i.test(s)) return false;
+    if (!/^\/?\s*rholang(\s|$)/i.test(s)) return false;
     try {
-      const r = expandGlobal(s);
+      const r = expandBare(s);
       if (r.kind === "help") { reply(HELP); return true; }
       if (r.kind === "list") { reply(listMacros()); return true; }
       if (r.kind === "result") { reply(`✓ ${r.text}`); return true; }
       if (r.kind === "rholang") {
-        reply(`/global ${r.macro} → expanded (review, then sign & deploy client-side):\n\`\`\`\n${r.source}\n\`\`\``);
+        reply(`/rholang macro ${r.macro} → expanded (review, then sign & deploy client-side):\n\`\`\`\n${r.source}\n\`\`\``);
         return true;
       }
       if (r.kind === "program") {
@@ -108,10 +108,10 @@ export async function run(args) {
         // expansion: the user sees what expanded and what did not, together, so a
         // typo in one call site does not hide the other five.
         const n = r.expansions.length;
-        if (!n && !r.errors.length) { reply("no %macro(…) call sites found — `/global macros` lists them"); return true; }
+        if (!n && !r.errors.length) { reply("no %macro(…) call sites found — `/rholang macros` lists them"); return true; }
         const head = n
-          ? `/global → expanded ${n} macro${n === 1 ? "" : "s"} (${r.expansions.map((e) => `%${e.name}`).join(", ")}) — review, then sign & deploy client-side:`
-          : `/global → nothing expanded:`;
+          ? `/rholang → expanded ${n} macro${n === 1 ? "" : "s"} (${r.expansions.map((e) => `%${e.name}`).join(", ")}) — review, then sign & deploy client-side:`
+          : `/rholang → nothing expanded:`;
         const errs = r.errors.length
           ? `\n✗ ${r.errors.length} error${r.errors.length === 1 ? "" : "s"}:\n` +
             r.errors.map((e) => `  line ${e.line}: ${e.message}`).join("\n")
@@ -145,7 +145,7 @@ export async function run(args) {
   process.on("SIGTERM", shutdown);
 }
 
-// Run when invoked directly (`node global-agent.mjs …`).
+// Run when invoked directly (`node rholang-agent.mjs …`).
 if (typeof process !== "undefined" && process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
   run(parseArgs(process.argv.slice(2)));
 }

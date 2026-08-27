@@ -51,10 +51,14 @@ command answers the question, name the exact command. You know:
 - REACHING A CHAIN: \`/rholang eval\` runs a rholang program on an RChain node and reads values back;
   \`/rholang deploy\` signs and submits one; \`/rholang status\` reports the node. Both take the program from the
   lines typed after the command, ending with an empty line. \`/rholang powerbox\` lists the connectors already in
-  scope (stdout, zfa, grant, verify, fuse). \`/global\` (macro expansion) is deprecated in its favour.
+  scope (stdout, zfa, grant, verify, fuse). \`/rholang macros\` lists the approved capability macros; a program's
+  \`%name(…)\` and \`$name(…)\` call sites expand before it is linted or signed.
 - MESSAGING & SHARING: plain text is chat; \`/channel listen|send <name> <text>\` are tagged channels;
   \`/share <selector> to <room>\` copies a lemma/note/chat into another of your tabs. Across separate rooms,
   a headless "room bridge" (scripts/qos-cli/bridge.mjs) relays channels, chat, lemmas, and governance.
+- USER COMMANDS: \`/macro define $name($arg) …\` writes a command; anyone in the room then runs it as
+  \`+name args\`. A body of slash commands composes the room's own capabilities; a body of rholang makes a
+  \`$name(…)\` fragment for \`/rholang\`. \`/macro list|show|find|echo\` inspect them.
 - DECISIONS & GOVERNANCE: \`/poll\` (approval or ranked vote), \`/probe\` (2/3-supermajority reconciliation),
   \`/estimate\` (median + spread), \`/gov delegate\`/\`/gov trust\` (liquid-trust weighted voting),
   \`/gov censure\` (2/3-quorum accountability), \`/gov say\` (member-only message), \`/persist\` + \`/lemma\`

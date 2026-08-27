@@ -19,7 +19,7 @@ is not executable rather than silently falling back to a different node.
 Then, in the browser:
 
 ```
-/rholang node http://127.0.0.1:40403
+/rholang rnode http://127.0.0.1:40403
 /rholang status
 /rholang eval                ← opens the editor; Ctrl+Enter runs it
 ```
@@ -35,7 +35,7 @@ the browser uses) · **40405** admin HTTP.
 | `wallet.txt` | `<REV address>,<balance>` for every key in `pk.txt` — the genesis wallets file |
 | `bonds.txt` | the validator's public key and stake |
 | `keys.mjs` | derives REV addresses; regenerates `wallet.txt` |
-| `run-node.sh` | the node invocation, with why each flag is there |
+| `run-node.sh` | the rnode invocation, with why each flag is there |
 | `../../bin/rnode` | the node binary itself; `RNODE=` overrides it |
 
 The keys are in the repository on purpose: a local devnet needs a funded key, and
@@ -49,7 +49,7 @@ node keys.mjs --generate                   # a fresh key
 node keys.mjs --wallet 1000000000000 > wallet.txt
 ```
 
-A REV address is derived the way the node derives it, so `wallet.txt` funds the
+A REV address is derived the way rnode derives it, so `wallet.txt` funds the
 address a deploy is actually charged to:
 
 ```
@@ -74,7 +74,7 @@ new return, zfa(`rho:qucalc:zfa`) in { zfa!([0,1], *return) }
   -> (true, -1)
 ```
 
-One flag earns its place here: the node refuses exploratory deploy unless it is a
+One flag earns its place here: rnode refuses exploratory deploy unless it is a
 read-only observer or in `--dev-mode`, which is why `run-node.sh` sets it.
 
 **`/rholang deploy` executes and is charged.** The node verifies a secp256k1
@@ -103,7 +103,7 @@ powerbox.
 body with *"Expected request with `Content-Type: application/json`"*; the term
 goes up as a JSON string. `rholang.ts` already does this.
 
-## What is blocked, in the node
+## What is blocked, in rnode
 
 Two open bugs in rchain-rust make most non-trivial rholang unusable here. Both
 were found against `dev` at `f3f4759e9`; neither has a workaround from this side.
@@ -129,7 +129,7 @@ replace `_` with a binding variable and the catch-all wins even at the base case
 so it never terminates.
 
 **[#11](https://github.com/rchain-community/rchain-rust/issues/11) — a
-non-terminating term aborts the node.** Exploratory deploy has no phlo ceiling,
+non-terminating term aborts rnode.** Exploratory deploy has no phlo ceiling,
 so unbounded recursion overflows the stack and kills the process, not the
 request:
 

@@ -1,6 +1,6 @@
-// global.ts — client-side RChain deploy pipeline for the `/global` macro agent.
+// rholang-pipeline.ts — client-side RChain deploy pipeline for the macro path.
 //
-// Zero-trust split: the headless agent (scripts/qos-cli/global-agent.mjs) only
+// Zero-trust split: the headless agent (scripts/qos-cli/rholang-agent.mjs) only
 // EXPANDS a macro into rholang; this module does everything that must stay in the
 // browser:
 //
@@ -19,7 +19,7 @@
 // implementation (`@noble/curves` or a WASM secp256k1) before production use.
 // The key-storage + lint + deploy flow is unchanged.
 
-const DB_NAME = "qos-global";
+const DB_NAME = "qos-global";   // storage key, unchanged so existing keys still open
 const DB_VERSION = 1;
 const STORE = "keys";
 
@@ -236,7 +236,7 @@ export interface PipelineResult {
  * Run the client-side pipeline for an already-expanded rholang source string.
  * The browser UI should call this on user approval, after showing a preview.
  */
-export async function runGlobalPipeline(
+export async function runDeployPipeline(
   source: string,
   opts: { nodeUrl: string; passphrase: string; id?: string }
 ): Promise<PipelineResult> {
@@ -274,8 +274,8 @@ export async function runGlobalPipeline(
 }
 
 // ---------------------------------------------------------------------------
-// Local macro expansion — mirrors scripts/qos-cli/global-macros.mjs so the
-// browser can expand `/global` commands even when no /global agent is present.
+// Local macro expansion — mirrors scripts/qos-cli/rholang-macros.mjs so the
+// browser can expand macro call sites even when no room agent is present.
 // The agent is the authority in a room with one; this is the offline fallback.
 // ---------------------------------------------------------------------------
 
@@ -283,12 +283,12 @@ export async function runGlobalPipeline(
 // Macro expansion — the shared engine.
 //
 // The registry, validators, templates and rholang scanner live in
-// ./global-macros.js, which scripts/qos-cli/global-macros.mjs imports too.
+// ./rholang-macros.js, which scripts/qos-cli/rholang-macros.mjs imports too.
 // This file only binds the browser's ZFA kernel to it, so the rholang a user
 // sees the agent post in chat is the same rholang this module lints and signs.
 // ---------------------------------------------------------------------------
 
-import { createMacroEngine } from "./global-macros.js";
+import { createMacroEngine } from "./rholang-macros.js";
 import { achievesZfa, isPauliClosed, parseTwists, validateCapability } from "./zfa.js";
 
 const engine = createMacroEngine({ achievesZfa, isPauliClosed, parseTwists, validateCapability });
@@ -297,13 +297,13 @@ export const MACROS = engine.MACROS;
 export const listMacros = engine.listMacros;
 export const HELP = engine.HELP;
 
-export type GlobalExpansion =
+export type MacroExpansion =
   | { kind: "help" }
   | { kind: "list" }
   | { kind: "result"; macro: string; text: string }
   | { kind: "rholang"; macro: string; source: string };
 
-export interface GlobalProgram {
+export interface MacroProgram {
   kind: "program";
   source: string;
   expansions: { name: string; line: number; write: boolean }[];
@@ -311,11 +311,11 @@ export interface GlobalProgram {
 }
 
 /** Expand a bare single macro — the whole program is one macro. */
-export function expandGlobalMacro(line: string): GlobalExpansion {
-  return engine.expandGlobal(line) as GlobalExpansion;
+export function expandBareMacro(line: string): MacroExpansion {
+  return engine.expandBare(line) as MacroExpansion;
 }
 
 /** Expand every `%macro(…)` call site in a rholang program. */
-export function expandGlobalProgram(src: string): GlobalProgram {
-  return engine.expandProgram(src) as GlobalProgram;
+export function expandMacroProgram(src: string): MacroProgram {
+  return engine.expandProgram(src) as MacroProgram;
 }

@@ -1,15 +1,15 @@
-// global-macros.mjs — the agent's binding of the shared `/global` macro engine.
+// rholang-macros.mjs — the agent's binding of the shared macro engine.
 //
 // The registry, argument validators, templates and rholang scanner all live in
-// packages/browser/src/global-macros.js, which the browser imports too. This
+// packages/browser/src/rholang-macros.js, which the browser imports too. This
 // file only supplies the node-side ZFA kernel and re-exports the result, so a
 // macro can never differ between what the agent posts in chat and what the
 // browser lints and signs.
 
 import { achievesZfa, isPauliClosed, parseTwists, validateCapability } from "./zfa.mjs";
-import { createMacroEngine } from "../../packages/browser/src/global-macros.js";
+import { createMacroEngine } from "../../packages/browser/src/rholang-macros.js";
 
-export const { MACROS, expandGlobal, expandProgram, expandMacro, listMacros, HELP, selftest } =
+export const { MACROS, expandBare, expandProgram, expandMacro, listMacros, HELP, selftest } =
   createMacroEngine({ achievesZfa, isPauliClosed, parseTwists, validateCapability });
 
 // Run selftest when invoked directly with --selftest.

@@ -428,28 +428,27 @@ persist under `--state`.
 - Trust model unchanged: possessing the room cap **is** authorization; the
   signaling server is an untrusted relay; data channels are DTLS-encrypted.
 
-## RChain capability macros — the `/global` agent (`global-agent.mjs`)
+## RChain capability macros — the `/rholang` agent (`rholang-agent.mjs`)
 
-The `/global` agent joins the room and turns chat messages into RChain capability
+The `/rholang` macro agent joins the room and turns chat messages into RChain capability
 operations. It maps macro requests to the rchain-rust system contracts and shares
 the results back into the room chat:
 
 ```bash
-node global-agent.mjs --room <cap:room:… | room-URL> [--name global]
+node rholang-agent.mjs --room <cap:room:… | room-URL> [--name rholang]
 ```
 
 While connected, any peer types in the room chat:
 
-- `/global help` — usage.
-- `/global macros` — list the approved macro library.
-- `/global <rholang…>` — expand the `%name(…)` call sites in a rholang program.
-- `/global <macro> <args…>` — the bare form, when the whole program is one macro.
+- `/rholang macros` — list the approved macro library.
+- `/rholang macro <name> <args…>` — the bare form, when the whole program is one macro.
+- `/rholang eval|deploy <rholang…>` — expand the `%name(…)` call sites in a program.
 
 **The body is rholang.** Macro call sites are written `%name(arg, …)` and expand
 in place inside an ordinary program, one line or many:
 
 ```
-/global
+/rholang eval
 new ret in {
   %ballot("Q4 budget", ["ship auth", "pay down debt"]) |
   %directory("Q4 notes")
@@ -480,30 +479,37 @@ review and sign *client-side* (the agent never holds keys — zero-trust):
   `%multisig(nonce, proposal, quorum)`
 
 Macros are **typed templates**, and the registry lives in
-[`packages/browser/src/global-macros.js`](../../packages/browser/src/global-macros.js) —
+[`packages/browser/src/rholang-macros.js`](../../packages/browser/src/rholang-macros.js) —
 **one source shared with the browser**, so the rholang posted in chat is the
-rholang the browser signs. `global-macros.mjs` is a thin binding that supplies
-the node-side ZFA kernel. Arguments are structurally validated and interpolated:
+rholang the browser signs. `rholang-macros.mjs` is a thin binding that supplies
+the Node-side ZFA kernel. Arguments are structurally validated and interpolated:
 a string always lands inside a rholang string literal (so it cannot escape its
 position), an amount is always a BigInt of decimal digits (so the value approved
 is the value signed).
 
 Arguments are **not** content-policed, and the linter checks only that the
 expansion is well-formed. There is no forbidden rholang — capability security
-decides what a deploy can reach. Run `node global-macros.mjs --selftest` to
+decides what a deploy can reach. Run `node rholang-macros.mjs --selftest` to
 verify (26 cases).
 
 Twenty macros, mirroring the `qucalc/examples/*.rho` in rchain-rust — see
 [`RChain_Macros.md`](../../RChain_Macros.md) for the full library and for running
 a local node.
 
-`run-agents.sh` no longer launches it — `/global` is deprecated, and every agent is
-a peer spent against the room-size ceiling above. Start it by hand if you want it:
-`node global-agent.mjs --room <cap> --name global`.
+`run-agents.sh` does not launch it: the browser expands locally, so the agent is
+only worth a peer against the room-size ceiling above when you want the expansion
+posted into chat for the room to read. Start it by hand if you do:
+`node rholang-agent.mjs --room <cap> --name rholang`.
+
+A room's **own** commands are a different library — `/macro define $name(…)`,
+invoked `+name args`, expanded from
+[`packages/browser/src/macro-lang.js`](../../packages/browser/src/macro-lang.js).
+Both sigils expand in the same pass over a program, built-ins first. Nothing in
+the agent uses the `$` half yet.
 
 ### Browser side (the zero-trust signing loop)
 
-The agent only *expands*; the browser validates and signs. `packages/browser/src/global.ts`
+The agent only *expands*; the browser validates and signs. `packages/browser/src/rholang-pipeline.ts`
 provides the client half of the pipeline:
 
 - `lintRholang(source)` — runs the WASM linter (`crates/zfa-core/src/lint.rs`,
@@ -512,7 +518,7 @@ provides the client half of the pipeline:
   (PBKDF2 → AES-GCM) ECDSA keypair persisted in IndexedDB; the private key never
   leaves the browser.
 - `signPayload` / `deployToNode` — sign and POST the deploy to the target node.
-- `runGlobalPipeline(source, { nodeUrl, passphrase })` — preview → lint → sign →
+- `runDeployPipeline(source, { nodeUrl, passphrase })` — preview → lint → sign →
   deploy, returning a staged result the UI can display.
 
 > Signing is ECDSA P-256 (Web Crypto has no secp256k1); swap `generateKeyPair` /
