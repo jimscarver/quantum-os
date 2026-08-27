@@ -386,25 +386,65 @@ handed out so a recipient can use a facet without comparing or forging it:
   facets and the publisher a write one. A room's `/channel` is the in-memory
   form; this is the form that survives the room.
 
-## Open
+## Open work
 
-- **Bearer semantics.** A granted facet is held by whoever it reached; there is
-  no un-granting one. Plain bearer is a fine answer *as long as it is chosen
-  rather than discovered*. A group wanting revocation writes the indirection
-  into its own contract.
-- **Versioning.** Does a group consent to a name or to a definition? A name
-  means later edits ride in on an old decision. In the room a redefinition is
-  visible to everyone as it happens; through a locker it is not.
-- **Offline.** Resolving a name through the locker needs an rnode read. What
-  happens with no rnode, and is there a cache?
+Three topics, and which one a piece of work belongs to is a question about who
+it reaches: **user** is your own capabilities and identity, **group** is how a
+capability reaches someone else, **governance** is who decides.
+
+### User
+
+| | |
+|---|---|
+| [#73](https://github.com/rchain-community/quantum-os/issues/73) | A deploy's result lands on a public name, so anyone can forge it. `registryUriOf()` is the replacement. **bug** |
+| [#74](https://github.com/rchain-community/quantum-os/issues/74) | Install the locker and wire `/rholang register`. Needs a signed deploy; gates everything below |
+| [#75](https://github.com/rchain-community/quantum-os/issues/75) | Bind a `$name` to a capability in the locker, so it outlives the room |
+
+Also open, and not yet an issue: **offline**. Resolving a name through the
+locker needs an rnode read. What happens with no rnode reachable, and is a
+resolved name cached? A cache that goes stale silently is worse than a miss.
+
+### Group
+
+| | |
+|---|---|
+| [#76](https://github.com/rchain-community/quantum-os/issues/76) | Identity credentials: issue, hold, verify. A credential is a relationship, not a property |
+| [#77](https://github.com/rchain-community/quantum-os/issues/77) | Inbox: a caretaker facet per correspondent, and ignore |
+| [#78](https://github.com/rchain-community/quantum-os/issues/78) | Channels that outlive the room: publish and subscribe |
+
+**Bearer semantics** sits under this heading and stays open by choice. A granted
+facet is held by whoever it reached and there is no un-granting one; a caretaker
+is the answer where it bites hardest, and a group wanting more writes the
+indirection into its own contract.
+
+### Governance
+
+| | |
+|---|---|
+| [#79](https://github.com/rchain-community/quantum-os/issues/79) | A federated tier: when a group agreed, rather than when somebody published |
+
+**Versioning** is the question that decides its shape: does a group consent to a
+*name* or to a *definition*? A name means later edits ride in on a decision
+taken about something else. In a room a redefinition is visible to everyone as
+it happens; through a locker it is not.
+
+### Not yet placed
+
 - **Active text.** `.get` / `.see` / `@(expr)` and text-as-program equivalence
   were on EIES from the start. A macro that is text, stored as text, expanded
-  into text is that same identity, but nothing yet *reads* a message as a
-  program — see [EIES_Legacy.md](EIES_Legacy.md).
-- **Orchestration.** `$` expansion is the seed, not the destination. The
-  destination is interactive orchestration of concurrent rholang processes.
-  Matching on prompt text is what INTERACT did because it had no channel to bind
-  to; here there is one.
+  into text is that same identity — but nothing here yet *reads* a message as a
+  program. See [EIES_Legacy.md](EIES_Legacy.md).
+- **Orchestration.** `$` expansion is the seed, not the destination, which is
+  interactive orchestration of concurrent rholang processes. Matching on prompt
+  text is what INTERACT did because it had no channel to bind to; here there is
+  one.
+
+### Upstream
+
+| | |
+|---|---|
+| [rchain-rust#19](https://github.com/rchain-community/rchain-rust/issues/19) | A one-binder persistent receive in a nested `new` does not terminate. Every contract here takes two parameters because of it |
+| [rchain-rust#18](https://github.com/rchain-community/rchain-rust/issues/18) | A cancelled exploratory deploy retains ~10 MB per request |
 
 ## Where the pieces are
 
