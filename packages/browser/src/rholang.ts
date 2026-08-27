@@ -39,6 +39,8 @@ export interface NodeConfig {
   phloPrice: number;
   /** secp256k1 deploy key, base16. Held here, never sent — only signatures are. */
   key?: string;
+  /** The locker's uri. Whoever installed it derived this from their own key. */
+  locker?: string;
 }
 
 const CONFIG_KEY = "qos-rnode-config";
@@ -89,6 +91,7 @@ export function describeConfig(cfg: NodeConfig): string[] {
   } else {
     out.push("key    (none — /rholang key generate, or /rholang key <hex>)");
   }
+  out.push(cfg.locker ? `locker ${cfg.locker}` : "locker (none — /rholang locker <uri>, or install one)");
   return out;
 }
 
