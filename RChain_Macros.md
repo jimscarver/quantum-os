@@ -189,9 +189,41 @@ That maps EIES's hierarchy onto what this system already has:
 
 | tier | what it is | built |
 |---|---|---|
+| local | macro files in a directory on your machine | no |
 | personal | a definition in your browser | yes |
+| fork | a library in your fork of quantum-os, shared by pull request | the `%` library is this |
 | group | a definition shared with the room | yes |
-| public / federated | a name in a locker, reached by capability | no |
+| chain | a name in a locker, reached by capability | no |
+
+### A fork is a library, and a pull request is how it is shared
+
+The `%` capability library is already this tier and has been all along: it is a
+file in the repository, and it got there by review. So a fork of quantum-os
+carries its own library — the macros that fork's people found worth keeping —
+and offering them upstream is a pull request.
+
+That matters because it is the one tier whose consent mechanism is already
+built, already understood, and already social. A pull request is a human
+deciding at a boundary, which is exactly what `+addgroupcommand` and
+`+addsyscommand` were: EIES's system commands were gated by people with write
+access to the system directory, and "the most useful were made global system
+commands" describes a review queue, not an election.
+
+Nothing about it needs inventing. What it needs is for a fork's library to be a
+**directory of macro files** rather than a JS registry, so that adding one is
+adding a file and reviewing one is reading a diff.
+
+**Personal macros sit beside it, not inside it.** A macro you wrote for yourself
+belongs in your own directory and is nobody's to review. Pushing one to a room
+shares it with the people there; pushing one to your locker puts it on chain
+under your identity. Neither passes through the fork's library, and a macro that
+proves itself in a room is a candidate for a pull request rather than something
+that arrives by one.
+
+So the four ways a definition travels are distinct and none of them is a
+fallback for another: a **file** you keep, a **pull request** to a fork, a
+**broadcast** to a room, a **deploy** to a locker.
+
 
 **First writer wins a name, and only that author may redefine it** — matched by
 dyncap **anchor**, not peerId, so a reload does not cost you your own commands.
@@ -388,9 +420,10 @@ handed out so a recipient can use a facet without comparing or forging it:
 
 ## Open work
 
-Three topics, and which one a piece of work belongs to is a question about who
-it reaches: **user** is your own capabilities and identity, **group** is how a
-capability reaches someone else, **governance** is who decides.
+Four topics, and which one a piece of work belongs to is a question about who it
+reaches: **user** is your own capabilities and identity, **group** is how a
+capability reaches someone else, **governance** is who decides inside a group,
+and **blockchain** is what happens when the stakeholders are not one group.
 
 ### User
 
@@ -428,6 +461,80 @@ indirection into its own contract.
 taken about something else. In a room a redefinition is visible to everyone as
 it happens; through a locker it is not.
 
+### Blockchain
+
+Above a federated tier of groups is the chain itself, and its stakeholders are
+not one group. Validators produce blocks, REV holders pay for what runs, the
+co-op's members hold the organisation, and whoever wrote the contracts everyone
+depends on carries those. A name at this tier is not "somebody published it",
+and it is not "one group agreed" either.
+
+RChain's own answer is the model [`Governance.md`](Governance.md) ports: **RGOV
+liquid-trust network governance** — an anti-fragile sociocratic polyarchy,
+maximal distribution of power with effective global coordination, representing
+**all** stakeholders through interlinked autonomous teams. Not one assembly
+deciding for everyone; teams that hold their own capabilities and interlink by
+holding each other's.
+
+The macro library maps onto that without needing a new idea, because the pieces
+are already the right shape:
+
+| RGOV | what it is here |
+|---|---|
+| an autonomous team | a library behind a capability its team holds |
+| teams interlinked | the locker's parent link — a read facet one team granted another |
+| trust-weighted decision | `rho:gov:trustLevels` / `resolveWeights` / `tally`, the same predicates `/gov` runs in a room |
+| asset pools | a treasury funding a library that costs something to maintain — `/note` on chain |
+| purposeful transparency | the definition is readable; who vouched for it is readable; what a team does with it is theirs |
+
+**A coarse plan, in the order the pieces stop being hypothetical:**
+
+1. **Libraries as capabilities** (#74, #75). A team's library is a locker
+   namespace; holding the cap is membership in that library.
+2. **Interlink by granting.** A team grants another its read facet, and a name
+   resolves through the parent chain. Adoption is a grant, and the graph of
+   grants *is* the polyarchy — no registry of teams needed.
+3. **Weigh across teams.** When two teams bind the same name differently,
+   resolution order settles it locally; where a shared answer is wanted, the
+   `rho:gov:*` predicates weigh it by trust rather than by who wrote first.
+4. **Fund what is shared.** A library everyone depends on is maintained by
+   someone; a treasury and kudos currency are the pool that pays for it.
+5. **Stop there.** The platform supplies the capability and the predicates. Which
+   rule a team adopts, what adoption requires, and what it costs are that team's,
+   and no other team should be able to see or constrain the choice.
+
+Sketch, not built. What is built beneath it is the trust and delegation
+machinery (`/gov`) and the capability model the tiers rest on; what is missing is
+the chain-side library and everything in the tiers above.
+
+### Used anywhere
+
+INTERACT was called an interface language and was a general-purpose one. The
+distinction was never real: a language that can answer a prompt conditionally,
+hold state, and call anything the system exposes is a programming language that
+happens to sit where a person types.
+
+The same is true here, and rnode is what makes it true — it is universal, so
+what a macro reaches is not bounded by the app the macro was typed into. What
+bounds it today is only that `+name` is read by one message box.
+
+**The interface is keyboard capture with history.** Input is captured as it is
+typed, and a macro encountered along the way is **held** — bound, available,
+carried forward — until it is replaced or something errors. That is a different
+model from a command line that parses a completed line and forgets it: history
+is where the macros live, and typing is what populates it.
+
+**The open question is what the user sees while typing a call.** `echo` answers
+*what will this do* after the fact, which is the right answer for signing and
+the wrong one for typing. At the moment of writing `+standup "Q4` the person
+needs to see what is bound, what the call will expand to, and where it will go —
+and none of that exists yet. Getting it wrong makes an expansion something that
+happens to you rather than something you wrote.
+
+Documenting this is what lets macros be used anywhere rather than in a chat box:
+the capture-and-hold model and the display are the parts that have to be
+specified before a second place can implement them.
+
 ### Not yet placed
 
 - **Active text.** `.get` / `.see` / `@(expr)` and text-as-program equivalence
@@ -437,7 +544,8 @@ it happens; through a locker it is not.
 - **Orchestration.** `$` expansion is the seed, not the destination, which is
   interactive orchestration of concurrent rholang processes. Matching on prompt
   text is what INTERACT did because it had no channel to bind to; here there is
-  one.
+  one — and [Used anywhere](#used-anywhere) is the interface half of the same
+  question.
 
 ### Upstream
 
@@ -445,6 +553,34 @@ it happens; through a locker it is not.
 |---|---|
 | [rchain-rust#19](https://github.com/rchain-community/rchain-rust/issues/19) | A one-binder persistent receive in a nested `new` does not terminate. Every contract here takes two parameters because of it |
 | [rchain-rust#18](https://github.com/rchain-community/rchain-rust/issues/18) | A cancelled exploratory deploy retains ~10 MB per request |
+
+## Checking the macros against rnode
+
+A macro is a caller: it names a process, sends arguments in a shape, and expects
+an answer in a shape. rnode can change any of those without breaking a single
+expansion test, because an expansion test only checks that a macro produced the
+rholang it meant to produce.
+
+So run them against a node:
+
+```bash
+bash scripts/localnet/run-node.sh --fresh
+node scripts/localnet/macro-check.mjs          # --node <url>, --verbose
+```
+
+A failure gives the macro, the line it died on, and what rnode answered:
+
+```
+FAIL    trust
+  %trust({"alice": {"bob": 3}}, ["alice"])
+  trustLevels!({"alice": {"bob": 3}}, ["alice"], *ret) |
+  [ReduceError("expected a list of (rater, ratee, level) tuples")]
+```
+
+Skipped is not failed: a macro that identifies its caller needs a signed deploy,
+and one taking capability arguments needs them registered first.
+
+Not in CI — it needs a live rnode.
 
 ## Where the pieces are
 
@@ -567,10 +703,10 @@ across deploys.
 
 | macro | expands to |
 |---|---|
-| `%trust(ratings, admins)` | `rho:gov:trustLevels` — admin-rooted web of trust |
+| `%trust(ratings, admins)` | `rho:gov:trustLevels` — admin-rooted web of trust. Ratings are a **list of `(rater, ratee, level)` tuples**, not a nested map |
 | `%weights(voters, delegations, levels)` | `rho:gov:resolveWeights` — transitive delegation |
 | `%tally(ballots, weights, mode)` | `rho:gov:tally` — weighted IRV or approval |
-| `%censure(censures, levels, vouchers)` | `rho:gov:censure` — ⅔-quorum accountability |
+| `%censure(censures, levels, vouchers)` | `rho:gov:censure` — ⅔-quorum accountability. Censures are `(censor, target)` tuples and vouchers `(rater, ratee, level)` tuples; returns `(discredited, newLevels)` |
 | `%ballot(issue, options)` | a ranked tally, for the common case |
 | `%delegate(to)` | a self-signed delegation |
 
@@ -580,7 +716,7 @@ These four take rholang maps, so they are program-form only. Composed, they are
 ```
 /rholang eval
 new levelsCh, weightsCh in {
-  %trust({"alice": {"bob": 3}}, ["alice"]) |
+  %trust([("alice", "bob", 3)], ["alice"]) |
   %weights(["alice", "bob"], {"carol": "bob"}, {}) |
   %tally({"alice": ["keep"], "bob": ["replace"]}, {"alice": 3, "bob": 1}, "ranked")
 }

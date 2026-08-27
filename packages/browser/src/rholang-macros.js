@@ -157,7 +157,7 @@ const MACROS = {
       const list = args.twists.join(", ");
       return `new grant(\`rho:qucalc:grant\`), ret in {
   grant!([${list}], *ret) |
-  for (@cap <- ret) { Nil }
+  for (@cap <- ret) { return!(cap) }
 }`;
     },
   },
@@ -175,7 +175,7 @@ const MACROS = {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`),
     deployerId(\`rho:rchain:deployerId\`), ret in {
   insertArbitrary!({"kind": "ballot", "issue": ${q(args.issue)}, "ranked": [${options}], "voter": *deployerId}, *ret) |
-  for (@uri <- ret) { Nil }
+  for (@uri <- ret) { return!(uri) }
 }`;
     },
   },
@@ -187,7 +187,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
   insertArbitrary!({"directory": ${q(args.name)}}, *ret) |
-  for (@uri <- ret) { Nil }
+  for (@uri <- ret) { return!(uri) }
 }`;
     },
   },
@@ -199,7 +199,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
   insertArbitrary!({"mailbox": ${q(args.name)}}, *ret) |
-  for (@uri <- ret) { Nil }
+  for (@uri <- ret) { return!(uri) }
 }`;
     },
   },
@@ -211,7 +211,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), deployerId(\`rho:rchain:deployerId\`), ret in {
   insertArbitrary!({"group": ${q(args.name)}, "admin": *deployerId}, *ret) |
-  for (@uri <- ret) { Nil }
+  for (@uri <- ret) { return!(uri) }
 }`;
     },
   },
@@ -223,7 +223,7 @@ const MACROS = {
     expand(args) {
       return `new resolveWeights(\`rho:gov:resolveWeights\`), deployerId(\`rho:rchain:deployerId\`), ret in {
   resolveWeights!([*deployerId], {*deployerId: ${q(args.to)}}, {}, *ret) |
-  for (@weights <- ret) { Nil }
+  for (@weights <- ret) { return!(weights) }
 }`;
     },
   },
@@ -239,7 +239,7 @@ const MACROS = {
     expand(args) {
       return `new fuse(\`rho:qucalc:fuse\`), ret in {
   fuse!([${args.subject.join(", ")}], [${args.predicate.join(", ")}], *ret) |
-  for (@out <- ret) { Nil }
+  for (@out <- ret) { return!(out) }
 }`;
     },
   },
@@ -254,7 +254,7 @@ const MACROS = {
     expand(args) {
       return `new trustLevels(\`rho:gov:trustLevels\`), ret in {
   trustLevels!(${args.ratings}, ${args.admins}, *ret) |
-  for (@levels <- ret) { Nil }
+  for (@levels <- ret) { return!(levels) }
 }`;
     },
   },
@@ -266,7 +266,7 @@ const MACROS = {
     expand(args) {
       return `new resolveWeights(\`rho:gov:resolveWeights\`), ret in {
   resolveWeights!(${args.voters}, ${args.delegations}, ${args.levels}, *ret) |
-  for (@weights <- ret) { Nil }
+  for (@weights <- ret) { return!(weights) }
 }`;
     },
   },
@@ -278,7 +278,7 @@ const MACROS = {
     expand(args) {
       return `new tally(\`rho:gov:tally\`), ret in {
   tally!(${args.ballots}, ${args.weights}, ${q(args.mode)}, *ret) |
-  for (@winner <- ret) { Nil }
+  for (@winner <- ret) { return!(winner) }
 }`;
     },
   },
@@ -290,7 +290,7 @@ const MACROS = {
     expand(args) {
       return `new censure(\`rho:gov:censure\`), ret in {
   censure!(${args.censures}, ${args.levels}, ${args.vouchers}, *ret) |
-  for (@out <- ret) { Nil }
+  for (@out <- ret) { return!(out) }
 }`;
     },
   },
@@ -306,7 +306,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
   insertArbitrary!({"kind": "issuer", "currency": ${q(args.currency)}}, *ret) |
-  for (@authority <- ret) { Nil }
+  for (@authority <- ret) { return!(authority) }
 }`;
     },
   },
@@ -318,7 +318,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
   insertArbitrary!({"kind": "note", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
-  for (@note <- ret) { Nil }
+  for (@note <- ret) { return!(note) }
 }`;
     },
   },
@@ -330,7 +330,7 @@ const MACROS = {
     expand(args) {
       return `new insertArbitrary(\`rho:registry:insertArbitrary\`), ret in {
   insertArbitrary!({"kind": "receipt", "authority": ${q(args.authority)}, "amount": ${args.amount}}, *ret) |
-  for (@receipt <- ret) { Nil }
+  for (@receipt <- ret) { return!(receipt) }
 }`;
     },
   },
@@ -388,7 +388,8 @@ const MACROS = {
     }
   } |
 ${forks.map((f) => `  ${f}!(Nil)`).join(" |\n")} |
-${seats.join(" |\n")}
+${seats.join(" |\n")} |
+  for (@who <= done) { return!(who) }
 }`;
     },
   },
@@ -423,7 +424,7 @@ ${seats.join(" |\n")}
   revAddress!("fromDeployerId", *deployerId, *fromCh) |
   for (@from <- fromCh) {
     revVault!("transfer", [from, ${q(args.to)}, ${args.amount}, *ret]) |
-    for (@r <- ret) { Nil }
+    for (@r <- ret) { return!(r) }
   }
 }`;
     },

@@ -23,6 +23,8 @@ import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
+import { installProgram, registerProgram, bindProgram, resolveProgram,
+         readProgram, grantProgram } from "./locker.js";
 import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          formatDefinition, findMacros, bodyKind, MacroError,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
@@ -31,7 +33,8 @@ import { expandBareMacro, expandMacroProgram, lintRholang,
          listMacros as listRholangMacros } from "./rholang-pipeline.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
-         readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
+         readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
+         registryUriOf, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1673,6 +1676,14 @@ const RHOLANG_HELP = [
   "  /rholang macros        — the approved capability macro library (%name sites).",
   "  /rholang macro <n> …   — expand one macro on its own, when it is the whole program.",
   "",
+  "  The locker — your names and your identity record, kept on chain:",
+  "  /rholang locker        — where it is · locker <uri> · locker install",
+  "  /rholang register      — create your identity record (a REV address anchors it)",
+  "  /rholang bind <n> <uri>  — give a capability a name of your own",
+  "  /rholang resolve <n>   — what you call that · record — your whole record",
+  "  /rholang grant <n>     — a write-only capability for that one name",
+  "  Each is its own deploy: your identity exists only inside one.",
+  "",
   "  A program's macro call sites expand before it is linted or signed: %name(…)",
   "  from the library above, $name(…) from what this room defined with /macro.",
   "  /rholang echo shows the result, which is what answers should-I-sign-this.",
@@ -2102,6 +2113,7 @@ function handleCommand(raw: string): string[] {
       sys("  /render          — animate this room (perspectives, closures, groups)");
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
+      sys("  /rholang locker  — your names and identity on chain: locker · register · bind · resolve · record · grant");
       sys("  /macro [sub]     — write a +command: define · list · show · find · echo (a body of / commands, or of rholang)");
       sys("  +name <args>     — run a command somebody here defined (++text to send a literal + line)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
@@ -4340,6 +4352,58 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
+        case "locker": {
+          // Where the locker is. Installing publishes it to the uri derived
+          // from your own key, so the address is known before the deploy is
+          // sent and nothing has to be read back to learn it.
+          if (rest === "install") {
+            if (!cfg.key) { sys("no key — /rholang key generate first"); break; }
+            const uri = registryUriOf(cfg.key);
+            sys(`installing the locker to ${uri}`);
+            sys("  that uri comes from your key alone, so only your key can write there");
+            saveNodeConfig({ ...cfg, locker: uri });
+            runRholangProgram("deploy", installProgram(0));
+            break;
+          }
+          if (rest) { saveNodeConfig({ ...cfg, locker: rest }); sys(`✓ locker set to ${rest}`); break; }
+          sys(cfg.locker ? `locker ${cfg.locker}` : "no locker set");
+          sys("  /rholang locker <uri>    — point at one somebody installed");
+          sys("  /rholang locker install  — publish one at the uri your key derives");
+          break;
+        }
+
+        case "register":
+        case "bind":
+        case "resolve":
+        case "record":
+        case "grant": {
+          // Every locker verb is its own deploy. `deployerId` exists only
+          // inside one, and a facet reached through the registry answers the
+          // first call in a program and nothing after it (rchain-rust#21) — so
+          // one verb per program is the shape either way.
+          if (!cfg.locker) { sys("no locker — /rholang locker <uri>, or /rholang locker install"); break; }
+          if (!cfg.key)    { sys("no key — /rholang key generate first"); break; }
+          const a = rest.split(/\s+/).filter(Boolean);
+          let program: string | null = null;
+          if (sub === "register") {
+            program = registerProgram(cfg.locker, revAddressOf(cfg.key));
+            sys(`registering ${revAddressOf(cfg.key)}`);
+          } else if (sub === "bind") {
+            if (a.length < 2) sys("usage: /rholang bind <name> <uri>");
+            else program = bindProgram(cfg.locker, a[0], a.slice(1).join(" "));
+          } else if (sub === "resolve") {
+            if (!a[0]) sys("usage: /rholang resolve <name>");
+            else program = resolveProgram(cfg.locker, a[0]);
+          } else if (sub === "record") {
+            program = readProgram(cfg.locker);
+          } else if (sub === "grant") {
+            if (!a[0]) sys("usage: /rholang grant <name>  — a write-only cap for that one name");
+            else program = grantProgram(cfg.locker, a[0]);
+          }
+          if (program) runRholangProgram("deploy", program);
+          break;
+        }
+
         case "macros": {
           for (const l of listRholangMacros().split("\n")) sys(l);
           sys("  use one in a program: /rholang eval  with %name(…) call sites in it");
@@ -6078,6 +6142,10 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — rnode's version, network, shard, height and phlo floor. Warns when your shard does not match rnode's.",
     "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
+    "/rholang locker — where the locker is; `locker <uri>` points at one, `locker install` publishes one at the uri your key derives (so it needs no reading back).",
+    "/rholang register — create your identity record in the locker, anchored to your REV address. It is also the write that lets later lookups answer.",
+    "/rholang bind <name> <uri> — name a capability so it outlives the room; resolve <name> reads it back; record shows your whole record; grant <name> mints a write-only capability for that one name.",
+    "Each locker verb is its own deploy — rho:rchain:deployerId exists only inside a deploy, and that identity is what the locker keys on, so nobody can reach another identity's entry.",
     "/rholang macros — the approved capability macro library (grant · ballot · directory · mailbox · group · delegate · transfer · swap · philosophers · multisig); /rholang macro <name> <args…> runs one on its own.",
     "A program's macro call sites expand before it is linted or signed: %name(…) from that library, $name(…) from what this room defined with /macro. /rholang echo shows the result.",
     "Configure with /rholang rnode <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",

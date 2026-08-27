@@ -144,6 +144,17 @@ contract c(_, ret) = { ret!(9) }
 runaway as an empty result rather than as an error, which is a slow way to find
 one.
 
+## Checking the macros still work
+
+```bash
+node macro-check.mjs            # --node <url>, --verbose
+```
+
+Runs every macro expansion on this node. A failure gives the macro, the line it
+died on, and what rnode answered.
+
+Not in CI: it needs a running node.
+
 ## Ordering of returned values
 
 Several sends to `return` all come back, but **not in the order they were

@@ -53,7 +53,8 @@
  */
 export const LOCKER_RHO = `new records, names,
     doRegister, doSetSelf, doAddCred, doRead, doBind, doResolve, doGrant,
-    insertArbitrary(\`rho:registry:insertArbitrary\`), uriCh
+    insertSigned(\`rho:registry:insertSigned:secp256k1\`),
+    deployerId(\`rho:rchain:deployerId\`), ret
 in {
   records!({}) | names!({}) |
 
@@ -114,14 +115,36 @@ in {
     }
   } |
 
-  insertArbitrary!({
+  CAPS
+}`;
+
+/** The facet map the locker publishes: every verb, each as an unforgeable name. */
+const FACETS = `{
     "register": bundle+{*doRegister}, "setSelf": bundle+{*doSetSelf},
     "addCred":  bundle+{*doAddCred},  "read":    bundle+{*doRead},
     "bind":     bundle+{*doBind},     "resolve": bundle+{*doResolve},
     "grant":    bundle+{*doGrant}
-  }, *uriCh) |
-  for (@uri <- uriCh) { return!(["locker", uri]) }
-}`;
+  }`;
+
+/**
+ * The install program — what a signed deploy submits to put the locker on chain.
+ *
+ * Published with `insertSigned`, not `insertArbitrary`, and the difference is
+ * the whole point: insertArbitrary hands back an unpredictable uri, which the
+ * installer then has to read back out of the deploy — and a deploy answers on a
+ * public name today (#73). insertSigned writes to the uri derived from the
+ * installer's own public key, so the address is known BEFORE the deploy is sent
+ * and nothing has to be read back at all. `registryUriOf()` computes it.
+ *
+ * The nonce must advance on each write to that slot; installing is the first,
+ * so it starts at 0.
+ *
+ * @param {number} [nonce]
+ */
+export function installProgram(nonce = 0) {
+  return LOCKER_RHO.replace("CAPS", `insertSigned!((${Number(nonce)}, ${FACETS}), *deployerId, *ret) |
+  for (@uri <- ret) { return!(["locker", uri]) }`);
+}
 
 /** A rholang string literal — JSON.stringify produces one. */
 const q = (s) => JSON.stringify(String(s));
@@ -131,6 +154,9 @@ const q = (s) => JSON.stringify(String(s));
  *
  * Every call is its own deploy, and that is not a limitation to route around —
  * `deployerId` exists only inside a deploy, so a locker operation IS a deploy.
+ * Which is as well: a facet reached through `rho:registry:lookup` answers the
+ * first call in a program and nothing after it (rchain-rust#21), so batching
+ * verbs into one program would not work even if the identity allowed it.
  * The program resolves the locker, takes the one facet it needs, and calls it
  * with the identity rnode issued for this deploy and no other.
  *
@@ -140,11 +166,27 @@ const q = (s) => JSON.stringify(String(s));
  */
 export function lockerCall(lockerUri, verb, args = []) {
   const extra = args.length ? ", " + args.join(", ") : "";
-  return `new lookup(\`rho:registry:lookup\`), deployerId(\`rho:rchain:deployerId\`), caps, ret in {
-  lookup!(\`${lockerUri}\`, *caps) |
-  for (@c <- caps) {
-    @(c.get(${q(verb)}))!(*deployerId${extra}, *ret) |
-    for (@answer <- ret) { return!(answer) }
+  // `lookup` on a uri written by insertSigned answers with the whole record it
+  // keeps: `(uri, (nonce, data))`. The facets are the data, two tuples in.
+  // The facet is bound out of the map with `match` before it is called.
+  // Sending straight through the lookup — `@(caps.get("register"))!(…)` —
+  // silently reaches nothing: a bundle taken from a map is not callable in
+  // place, though the same bundle bound to a name is.
+  return `new lookup(\`rho:registry:lookup\`), deployerId(\`rho:rchain:deployerId\`), stored, ret in {
+  lookup!(\`${lockerUri}\`, *stored) |
+  for (@record <- stored) {
+    match record {
+      (_, (_, caps)) => {
+        match caps.get(${q(verb)}) {
+          Nil  => { return!(["no verb", ${q(verb)}]) }
+          verb => {
+            @verb!(*deployerId${extra}, *ret) |
+            for (@answer <- ret) { return!(answer) }
+          }
+        }
+      }
+      _ => { return!(["no locker at", ${q(lockerUri)}]) }
+    }
   }
 }`;
 }
@@ -226,7 +268,9 @@ export function selftest() {
   const reg = registerProgram(URI, "1111alice");
   ok("register is well-formed", balanced(reg));
   ok("register passes deployerId first", /!\(\*deployerId, "1111alice", \*ret\)/.test(reg), reg);
-  ok("register names the register facet", reg.includes('c.get("register")'));
+  ok("register names the register facet", reg.includes('caps.get("register")'));
+  ok("the facet is bound before it is called", /match caps\.get\("register"\)/.test(reg) && /@verb!\(\*deployerId/.test(reg), reg.slice(-300));
+  ok("a call unwraps insertSigned's (uri, (nonce, data))", /match record \{\s*\(_, \(_, caps\)\)/.test(reg), reg.slice(0, 200));
 
   const bind = bindProgram(URI, "ballot", "rho:id:xyz");
   ok("bind carries name then uri", /!\(\*deployerId, "ballot", "rho:id:xyz", \*ret\)/.test(bind), bind);
