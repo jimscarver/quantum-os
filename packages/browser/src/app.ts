@@ -6435,11 +6435,13 @@ function initUx(): void {
       tiles: document.getElementById("call-tiles"),
       mute:  document.getElementById("call-mute")  as HTMLButtonElement | null,
       cam:   document.getElementById("call-cam")   as HTMLButtonElement | null,
+      share: document.getElementById("call-share") as HTMLButtonElement | null,
     },
   );
   document.getElementById("call-hangup")?.addEventListener("click", () => calls.end());
   document.getElementById("call-mute")?.addEventListener("click", () => calls.toggleMute());
   document.getElementById("call-cam")?.addEventListener("click", () => calls.toggleCam());
+  document.getElementById("call-share")?.addEventListener("click", () => calls.toggleScreen());
 }
 
 // ---------------------------------------------------------------------------

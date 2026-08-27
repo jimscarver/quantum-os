@@ -342,6 +342,7 @@
     .call-tile .call-name { position:absolute; left:4px; bottom:3px; font-size:0.6rem; color:#cfe9e2; background:rgba(0,0,0,0.55); padding:0 0.3rem; border-radius:3px; }
     .call-controls { display:flex; gap:0.5rem; }
     .call-ctl { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#cfe9e2; font-size:0.85rem; padding:0.3rem 0.7rem; cursor:pointer; }
+    .call-ctl:disabled { opacity:0.4; cursor:default; }
     .call-ctl:hover { background:#1e2e2e; }
     .call-ctl.hangup { color:#ff9d4a; border-color:#5a2a2a; }
     .call-ctl.hangup:hover { background:#3a1e1e; }
@@ -505,6 +506,7 @@
         <div class="call-controls">
           <button id="call-mute" class="call-ctl" title="Mute mic">🎤</button>
           <button id="call-cam" class="call-ctl" title="Turn camera off">🎥</button>
+          <button id="call-share" class="call-ctl" title="Share your screen">🖥</button>
           <button id="call-hangup" class="call-ctl hangup" title="Leave call">📵 Leave</button>
         </div>
       </div>

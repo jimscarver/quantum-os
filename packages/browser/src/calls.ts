@@ -29,6 +29,7 @@ export interface CallElements {
   tiles: HTMLElement | null;
   mute: HTMLButtonElement | null;
   cam: HTMLButtonElement | null;
+  share: HTMLButtonElement | null;
 }
 
 export interface Calls {
@@ -37,6 +38,8 @@ export interface Calls {
   end(): void;
   toggleMute(): void;
   toggleCam(): void;
+  /** Share the screen, or stop sharing and go back to the camera. */
+  toggleScreen(): void;
   /** A peer's media arrived. */
   remoteStream(peerId: string, stream: MediaStream): void;
   /** A peer left, or ended their call: drop their tile. */
@@ -53,6 +56,9 @@ const AUDIO: MediaTrackConstraints = {
 
 export function createCalls(host: CallHost, els: CallElements): Calls {
   let localStream: MediaStream | null = null;
+  /** The camera track, held while the screen is being shared in its place. */
+  let cameraTrack: MediaStreamTrack | null = null;
+  let screenStream: MediaStream | null = null;
   let inCall = false;
   const tiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
 
@@ -83,6 +89,11 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     tiles.delete(key);
   }
 
+  /** The senders carrying our video — one per peer, all of which a share replaces. */
+  function videoSenders(): RTCRtpSender[] {
+    return host.peer()?.videoSenders() ?? [];
+  }
+
   function updateControls(): void {
     const audioOn = localStream?.getAudioTracks()[0]?.enabled ?? false;
     const videoOn = localStream?.getVideoTracks()[0]?.enabled ?? false;
@@ -92,10 +103,17 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     }
     if (els.cam) {
       const hasVideo = (localStream?.getVideoTracks().length ?? 0) > 0;
-      els.cam.disabled = !hasVideo;
+      els.cam.disabled = !hasVideo || !!screenStream;
       els.cam.textContent = !hasVideo ? "🚫" : videoOn ? "🎥" : "🚫";
       els.cam.title = !hasVideo ? "No camera — audio-only call"
+        : screenStream ? "Sharing your screen — stop sharing to use the camera"
         : videoOn ? "Turn camera off" : "Turn camera on";
+    }
+    if (els.share) {
+      els.share.disabled = !inCall;
+      els.share.textContent = screenStream ? "🛑" : "🖥";
+      els.share.title = !inCall ? "Start a call first"
+        : screenStream ? "Stop sharing your screen" : "Share your screen";
     }
   }
 
@@ -134,12 +152,79 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   function end(): void {
     const peer = host.peer();
     if (peer) { peer.removeLocalMedia(); peer.broadcast({ kind: "call-end" }); }
+    stopScreenTracks();
+    cameraTrack = null;
     localStream?.getTracks().forEach((t) => t.stop());
     localStream = null;
     inCall = false;
     removeTile("__local__");
     updateControls();
     hideBarIfIdle();
+  }
+
+  function stopScreenTracks(): void {
+    screenStream?.getTracks().forEach((t) => t.stop());
+    screenStream = null;
+  }
+
+  /**
+   * Share the screen in place of the camera.
+   *
+   * `replaceTrack` on the existing sender rather than adding a second track:
+   * the connection is already negotiated for one video stream, so swapping the
+   * track needs no renegotiation and the other side sees the picture change
+   * without anything being torn down. The camera track is kept, not stopped, so
+   * stopping the share puts it straight back.
+   *
+   * The cost of this shape is that it is a swap: you cannot send your face and
+   * your screen at once. That wants a second track and per-track tile identity,
+   * which is a bigger change than the button is worth today.
+   */
+  async function startScreen(): Promise<void> {
+    if (!inCall) { host.say("start a call before sharing your screen"); return; }
+    if (screenStream) return;
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      host.say("⚠ this browser cannot share a screen (getDisplayMedia is unavailable)");
+      return;
+    }
+    const senders = videoSenders();
+    if (!senders.length) {
+      host.say("⚠ no video is being sent, so there is nothing to share in its place — start a call with a camera");
+      return;
+    }
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    } catch (e) {
+      // Cancelling the picker is an ordinary thing to do, not an error to report.
+      if ((e as DOMException)?.name !== "NotAllowedError") {
+        host.say(`⚠ could not share the screen: ${whyMediaFailed(e)}`);
+      }
+      return;
+    }
+    const track = screenStream.getVideoTracks()[0];
+    if (!track) { stopScreenTracks(); return; }
+    cameraTrack = senders[0].track ?? null;
+    await Promise.all(senders.map((s) => s.replaceTrack(track).catch(() => {})));
+    // The browser's own "stop sharing" control ends the track without telling us.
+    track.addEventListener("ended", () => { void stopScreen(); });
+    const local = tiles.get("__local__");
+    if (local) local.srcObject = screenStream;
+    host.say("🖥 you are sharing your screen");
+    updateControls();
+  }
+
+  async function stopScreen(): Promise<void> {
+    if (!screenStream) return;
+    stopScreenTracks();
+    if (cameraTrack) {
+      const cam = cameraTrack;
+      await Promise.all(videoSenders().map((s) => s.replaceTrack(cam).catch(() => {})));
+    }
+    cameraTrack = null;
+    const local = tiles.get("__local__");
+    if (local && localStream) local.srcObject = localStream;
+    if (inCall) host.say("🖥 you stopped sharing your screen");
+    updateControls();
   }
 
   return {
@@ -155,6 +240,7 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       if (t) t.enabled = !t.enabled;
       updateControls();
     },
+    toggleScreen() { if (screenStream) void stopScreen(); else void startScreen(); },
     remoteStream(peerId, stream) {
       // Ignore media from AI agents (data-only peers). They don't really stream —
       // werift loops our own audio back, which plays as a strong echo when you
@@ -170,7 +256,7 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   };
 }
 
-/** Say why getUserMedia refused, in terms of what to do next. */
+/** Say why getUserMedia/getDisplayMedia refused, in terms of what to do next. */
 function whyMediaFailed(err: unknown): string {
   const e = err as DOMException;
   switch (e?.name) {

@@ -169,6 +169,20 @@ export class QOSPeer {
     }
   }
 
+  /// The senders carrying our video, one per connection that has one.
+  ///
+  /// A screen share replaces the track on all of them: one connection per peer,
+  /// so swapping only the first would share with one person and leave everyone
+  /// else looking at the camera.
+  videoSenders(): RTCRtpSender[] {
+    const out: RTCRtpSender[] = [];
+    for (const [peerId, pc] of this.connections) {
+      if (this.dataOnly.has(peerId)) continue;
+      for (const s of pc.getSenders()) if (s.track?.kind === "video") out.push(s);
+    }
+    return out;
+  }
+
   /// Stop sharing local media: remove our senders from every connection and
   /// renegotiate. The remote sees the tracks end.
   removeLocalMedia(): void {
