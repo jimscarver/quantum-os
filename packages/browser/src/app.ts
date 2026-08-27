@@ -28,7 +28,7 @@ import { expandGlobalMacro, expandGlobalProgram, lintRholang,
          listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
-         readResults, readName, deployFate, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
+         readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1611,6 +1611,8 @@ const RHOLANG_HELP = [
   "  /rholang eval          — run a program and read the result back. Nothing is signed,",
   "                           nothing is stored, no block is produced.",
   "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
+  "  /rholang echo [deploy] — show the program that would be sent, and send nothing.",
+  "                           Every program is wrapped before it leaves the browser; this is that.",
   "  /rholang read [name]   — read what is on a name now; no name means the last deploy's.",
   "                           A deploy waits on consensus, which can take minutes. The value sits",
   "                           on its name until read, so nothing is lost by collecting it later.",
@@ -1647,7 +1649,7 @@ const RHOLANG_HELP = [
  * A program is not one line of chat: it needs room, indentation, and a way to
  * see its own shape. The editor owns the text; this owns lint-and-run.
  */
-function editRholang(mode: "eval" | "deploy", seed: string): void {
+function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): void {
   const cfg = loadNodeConfig();
   void (async () => {
     const source = await openRholangEditor({
@@ -1661,8 +1663,26 @@ function editRholang(mode: "eval" | "deploy", seed: string): void {
       draftKey: "qos-rholang-draft",
     });
     if (source === null) { addMessage("", "cancelled — nothing run", "system"); return; }
+    if (echoOnly) { echoRholang(mode, source); return; }
     runRholangProgram(mode, source);
   })();
+}
+
+/**
+ * Print the program as it would be sent, without sending it.
+ *
+ * The deploy form is shown with a placeholder result name: a real deploy mints a
+ * fresh one per submission, so the name here shows the shape of the forwarder
+ * rather than the name any particular deploy will use.
+ */
+function echoRholang(mode: "eval" | "deploy", body: string): void {
+  const say = (t: string) => addMessage("", t, "system");
+  if (!body.trim()) { say("nothing to echo"); return; }
+  const program = mode === "deploy"
+    ? wrapProgram(body, "deploy", "qos-result-<minted per deploy>")
+    : wrapProgram(body, "eval");
+  say(`this is what \`/rholang ${mode}\` would send — nothing has run:`);
+  say("```\n" + program + "\n```");
 }
 
 /** Lint, then evaluate or sign-and-deploy. */
@@ -1817,7 +1837,7 @@ function handleCommand(raw: string): string[] {
       sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
       sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
-      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · read · status · config (multi-line, end with a blank line)");
+      sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
       sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros (deprecated — prefer /rholang)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
@@ -4003,6 +4023,19 @@ function handleCommand(raw: string): string[] {
               sys("  is the node running, and is --api-host set so it listens for the browser?");
             }
           })();
+          break;
+        }
+
+        case "echo": {
+          // Show what would actually be sent, and run nothing. A program is
+          // rewritten before it leaves the browser — wrapped so `return` and the
+          // powerbox are in scope, and for a deploy also forwarded onto a public
+          // name — and until now none of that was visible. What you sign should
+          // not be something you have never seen.
+          const mode: "eval" | "deploy" = /^deploy\b/.test(rest.trim()) ? "deploy" : "eval";
+          const body = rest.trim().replace(/^(eval|deploy)\b\s*/, "");
+          if (body) echoRholang(mode, body);
+          else editRholang(mode === "deploy" ? "deploy" : "eval", "", true);
           break;
         }
 
