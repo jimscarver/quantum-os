@@ -1753,8 +1753,11 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
           const fate = r.sig ? await deployFate(cfg, r.sig).catch(() => null) : null;
           if (fate?.errored) {
             say(`  ✗ it ran in block ${fate.blockNumber} and errored (cost ${fate.cost ?? "?"}) — nothing was sent to return`);
+            // The node records the reducer's first error against the deploy
+            // (rchain-rust#15). Older nodes leave it empty, so say so rather
+            // than printing a blank line where the reason should be.
             if (fate.systemDeployError) say(`     ${fate.systemDeployError}`);
-            say(`     the node reports no reason: a block records only that a deploy errored, and stdout! from a deploy goes to the node's console`);
+            else say(`     no reason recorded — this node predates rchain-rust#15`);
           } else if (fate) {
             say(`  it ran in block ${fate.blockNumber} but has not reported — /rholang read collects it whenever`);
           } else {

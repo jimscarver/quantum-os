@@ -465,10 +465,10 @@ export async function readName(cfg: NodeConfig, name: string): Promise<string[]>
  * the difference — it carries `errored` per deploy — and this is the only way to
  * tell the two apart from outside the node.
  *
- * Note what is NOT here: why it failed. The block carries a boolean, the node
- * logs no message, and `stdout!` from a deploy goes to the node's console rather
- * than anywhere a caller can reach. "It errored, and cost this much" is the whole
- * of what a deployer can learn.
+ * `systemDeployError` carries the reducer's first error since rchain-rust#15 —
+ * before that it was always empty, and "it errored, and cost this much" was the
+ * whole of what a deployer could learn. Treat it as optional: a node older than
+ * that fix reports nothing there.
  */
 export async function deployFate(cfg: NodeConfig, sig: string, depth = 12): Promise<DeployFate | null> {
   const blocks = (await getJson(cfg, `/api/blocks/${depth}`)) as { blockHash?: string }[];
