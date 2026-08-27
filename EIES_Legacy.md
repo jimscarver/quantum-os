@@ -25,12 +25,22 @@ ran out. That thread continues here — see the
 [Collaborative Learning case study](CollaborativeLearningCaseStudy.md) and
 [Room Best Practices](Room_Best_Practices.md).
 
-**QuantumOS** — this repository. Peer-to-peer [rooms](MyRoom.md), a ZFA kernel,
-[governance by liquid democracy](Governance.md), and a
-[bridge to a chain](Room_Bridges.md) for the things that must outlive the room.
-The vision it serves is stated in the [Manifesto](Manifesto.md); the
-[README](README.md) is the practical entry point and the
-[User Guide](User_Guide.md) is where to start using it.
+**QuantumOS** — this repository
+([README](https://github.com/rchain-community/quantum-os#readme)). Peer-to-peer
+[rooms](MyRoom.md), a ZFA kernel, [governance by liquid
+democracy](Governance.md), and a [bridge to a chain](Room_Bridges.md) for the
+things that must outlive the room. The vision it serves is stated in the
+[Manifesto](Manifesto.md); the [README](README.md) is the practical entry point
+and the [User Guide](User_Guide.md) is where to start using it.
+
+**Quantum Logical Framework** — the other half of the current work
+([README](https://github.com/rchain-community/quantum-logical-framework#readme),
+[site](https://rchain-community.github.io/quantum-logical-framework/)). QLF is
+the constructive foundation the ZFA kernel above is an implementation of: Zero
+Free Action is its idea, and a room's capabilities are ZFA-valid twist strings
+rather than arbitrary tokens. EIES was groupware on whatever substrate a
+mainframe offered; here the substrate is itself the subject of study, and the two
+repositories are one project seen from two ends.
 
 ## INTERACT: user programming, and why it matters here
 
@@ -186,6 +196,7 @@ If you are picking up this project, in order:
 | [Consensus.md](Consensus.md) · [SECURITY.md](SECURITY.md) | what a room agrees · what is enforced |
 | [RChain_Macros.md](RChain_Macros.md) · [Room_Bridges.md](Room_Bridges.md) | reaching a chain from a room |
 | [#65](https://github.com/rchain-community/quantum-os/issues/65) | the macro design this document argues for |
+| [quantum-logical-framework](https://github.com/rchain-community/quantum-logical-framework#readme) | the ZFA foundation underneath all of it |
 
 ---
 
