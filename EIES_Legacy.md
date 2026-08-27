@@ -5,6 +5,12 @@ Conferencing and Communications Center, and much of what this repository is
 trying to do was tried there first — some of it successfully enough that the
 right move now is to copy it rather than reinvent it.
 
+**The science of EIES was collective intelligence research.** The systems were
+instruments: built to find out what happens when groups think together through a
+medium designed for it, and what a medium has to provide before that works.
+QuantumOS is a 21st-century tool for continuing that research — the same
+question, on a substrate that did not exist in 1976.
+
 This document records that lineage: what EIES did, which parts this project is
 descended from, and which lessons are load-bearing in the current design. It is
 written down because the reasoning behind several decisions here is only legible
@@ -25,12 +31,20 @@ ran out. That thread continues here — see the
 [Collaborative Learning case study](CollaborativeLearningCaseStudy.md) and
 [Room Best Practices](Room_Best_Practices.md).
 
-**QuantumOS** — this repository. Peer-to-peer [rooms](MyRoom.md), a ZFA kernel,
-[governance by liquid democracy](Governance.md), and a
-[bridge to a chain](Room_Bridges.md) for the things that must outlive the room.
-The vision it serves is stated in the [Manifesto](Manifesto.md); the
-[README](README.md) is the practical entry point and the
-[User Guide](User_Guide.md) is where to start using it.
+**QuantumOS** — this repository
+([README](https://github.com/rchain-community/quantum-os#readme)). Peer-to-peer
+[rooms](MyRoom.md), a ZFA kernel, [governance by liquid
+democracy](Governance.md), and a [bridge to a chain](Room_Bridges.md) for the
+things that must outlive the room. The vision it serves is stated in the
+[Manifesto](Manifesto.md); the [README](README.md) is the practical entry point
+and the [User Guide](User_Guide.md) is where to start using it.
+
+**Quantum Logical Framework** — the theory behind QuantumOS, not a second system
+([README](https://github.com/rchain-community/quantum-logical-framework#readme),
+[site](https://rchain-community.github.io/quantum-logical-framework/)). Zero Free
+Action is QLF's idea; the ZFA kernel above is its implementation, and a room's
+capabilities are ZFA-valid twist strings rather than arbitrary tokens because of
+it.
 
 ## INTERACT: user programming, and why it matters here
 
@@ -46,9 +60,20 @@ conditionally, matching on the text of the last input to decide what to do next.
 Many commands never touched the system at all and were simply programs.
 
 Most commands were written by users, or by group effort — tailoring a group's
-communication structures, defining its roles, or simply adding utility. What
-happened next is the interesting part, and it is the thing this project wants to
-reproduce:
+communication structures, defining its roles, or simply adding utility.
+
+Murray Turoff on what that bought:
+
+> INTERACT made EIES the perfect R&D machine for designing prototype
+> communication processes… I think the fact that we were able to allow people
+> individually to rewrite all the prompts is a good point of illustration.
+> Besides different languages I remember one interface was an English butler and
+> another swore at the user that wrote it. We had dynamic text before any other
+> major applications of it.
+
+An R&D machine for communication processes is the point: tailorability was not a
+convenience feature, it was the instrument. What happened next is the interesting
+part, and it is the thing this project wants to reproduce:
 
 > People wrote hundreds of commands, shared them with others, and groups adopted
 > them. The most useful were made global system commands. It was user
@@ -186,6 +211,7 @@ If you are picking up this project, in order:
 | [Consensus.md](Consensus.md) · [SECURITY.md](SECURITY.md) | what a room agrees · what is enforced |
 | [RChain_Macros.md](RChain_Macros.md) · [Room_Bridges.md](Room_Bridges.md) | reaching a chain from a room |
 | [#65](https://github.com/rchain-community/quantum-os/issues/65) | the macro design this document argues for |
+| [quantum-logical-framework](https://github.com/rchain-community/quantum-logical-framework#readme) | the ZFA foundation underneath all of it |
 
 ---
 
