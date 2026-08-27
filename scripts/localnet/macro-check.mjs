@@ -30,6 +30,12 @@
 //
 // Neither is a defect in the macro. What IS a defect is an `error` row, or a
 // `nothing` row for a macro that should have answered.
+//
+// CHANGE MANAGEMENT. There is no versioning between this library and rnode, and
+// there is unlikely to be one soon — so this check is how an outdated macro is
+// found. A failure here names the macro, prints what was sent and what came
+// back, and points at the definition to change. That is the whole mechanism: a
+// macro is current until this says it is not.
 
 import { expandBare, expandProgram } from "../qos-cli/rholang-macros.mjs";
 
@@ -98,8 +104,20 @@ async function explore(term) {
   return { values: (j.expr ?? []).map((e) => JSON.stringify(e).slice(0, 120)) };
 }
 
-const status = { ok: "ok      ", fail: "FAIL    ", err: "ERROR   ", skip: "skipped " };
+const status = { ok: "ok       ", fail: "OUTDATED ", err: "OUTDATED ", skip: "skipped  " };
 let pass = 0, fail = 0, skipped = 0;
+/** Macros that no longer do what they advertise, with why, for the summary. */
+const outdated = [];
+
+/** A failure has to be actionable: what was sent, what came back, what to edit. */
+function reportOutdated(name, call, why, sent, got) {
+  outdated.push({ name: name.trim(), why });
+  console.log(`${status.fail}${name}${why}`);
+  console.log(`         called as: ${call}`);
+  if (sent) console.log(sent.split("\n").map((l) => "         │ " + l).join("\n"));
+  if (got)  console.log(`         rnode answered: ${got}`);
+  console.log(`         fix in packages/browser/src/rholang-macros.js\n`);
+}
 
 console.log(`macro-check — ${NODE}\n`);
 try {
@@ -123,7 +141,7 @@ for (const c of CASES) {
         })()
       : expandBare(c.call);
   } catch (e) {
-    console.log(`${status.err}${name}expansion refused: ${e.message}`);
+    reportOutdated(name, label, `expansion refused: ${e.message}`, null, null);
     fail++;
     continue;
   }
@@ -144,16 +162,24 @@ for (const c of CASES) {
   const r = await explore(expansion.source);
   if (VERBOSE) console.log("\n--- " + label + "\n" + expansion.source + "\n--- answer: " + JSON.stringify(r) + "\n");
   if (r.error) {
-    console.log(`${status.err}${name}${r.error}`);
+    reportOutdated(name, label, "rnode refused the expansion", expansion.source, r.error);
     fail++;
   } else if (c.expect(r)) {
     console.log(`${status.ok}${name}${c.why ?? ""}`);
     pass++;
   } else {
-    console.log(`${status.fail}${name}nothing came back — expected: ${c.why}`);
+    reportOutdated(name, label, `no answer, but it advertises: ${c.why}`,
+                   expansion.source, r.values.length ? r.values.join(", ") : "(nothing)");
     fail++;
   }
 }
 
-console.log(`\n${pass} ok, ${fail} failed, ${skipped} skipped (need a signed deploy or registered capabilities)`);
+console.log(`\n${pass} ok, ${fail} outdated, ${skipped} skipped (need a signed deploy or registered capabilities)`);
+if (outdated.length) {
+  console.log(`\nOutdated against rnode as it runs today:`);
+  for (const o of outdated) console.log(`  %${o.name.trim()} — ${o.why}`);
+  console.log(`\nEach is a caller that has fallen behind rnode, not a node fault.`);
+  console.log(`Fix the definition, then update this check's case for it — a case`);
+  console.log(`left agreeing with the old shape passes while the macro stays broken.`);
+}
 process.exit(fail === 0 ? 0 : 1);

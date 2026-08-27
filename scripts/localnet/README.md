@@ -144,6 +144,22 @@ contract c(_, ret) = { ret!(9) }
 runaway as an empty result rather than as an error, which is a slow way to find
 one.
 
+## Checking the macros still work
+
+```bash
+node macro-check.mjs            # --node <url>, --verbose
+```
+
+Runs every macro expansion on this node and reports per macro. There is no
+versioning between the macro library and rnode, so this is how an outdated macro
+is found: a failure names it, prints what was sent and what came back, and points
+at the definition to change.
+
+Fix the macro, then update its case here — a case still agreeing with the old
+shape passes while the macro stays broken.
+
+Not in CI: it needs a running node.
+
 ## Ordering of returned values
 
 Several sends to `return` all come back, but **not in the order they were
