@@ -1,0 +1,153 @@
+# The EIES legacy
+
+QuantumOS is the third EIES. The first two were built at NJIT's Computerized
+Conferencing and Communications Center, and much of what this repository is
+trying to do was tried there first — some of it successfully enough that the
+right move now is to copy it rather than reinvent it.
+
+This document records that lineage: what EIES did, which parts this project is
+descended from, and which lessons are load-bearing in the current design. It is
+written down because the reasoning behind several decisions here is only legible
+if you know they were decided once already.
+
+## The systems
+
+**EIES (1976–)** — computer-mediated conferencing, built under Murray Turoff at
+NJIT with NSF funding, from work begun in 1974. Electronic mail, conferences,
+membership directories, data collection forms, global searches, personal
+indexing. It ran for years and carried real communities: scientific research
+groups, the homebound handicapped, and eventually classrooms.
+
+**EIES2 (1980s–90s)** — directed by Jim Whitescarver, implementing distributed
+Smalltalk as a research, development and operational environment for distributed
+CSCW. It supported the Virtual Classroom for years, until funding to maintain it
+ran out.
+
+**QuantumOS** — this repository. Peer-to-peer rooms, a ZFA kernel, governance by
+liquid democracy, and a bridge to a chain for the things that must outlive the
+room.
+
+## INTERACT: user programming, and why it matters here
+
+The part of EIES most directly ancestral to this project is INTERACT, its
+command language, written by Jim Whitescarver. He and Turoff published on an
+early version as an interface language around 1979.
+
+INTERACT was BASIC-like — real control flow, powerful array functions,
+dictionaries — and was both an interface language and a general-purpose one.
+Commands were inputs to the system that could read prompts and answer them
+conditionally, matching on the text of the last input to decide what to do next.
+Many commands never touched the system at all and were simply programs.
+
+What happened next is the interesting part, and it is the thing this project
+wants to reproduce:
+
+> People wrote hundreds of commands, shared them with others, and groups adopted
+> them. The most useful were made global system commands. It was user
+> programming at its finest, and collaborative system development at its finest.
+
+The mechanism was ordinary. Commands lived in text files. `+define` made one.
+`+addgroupcommand` put one in a group's hands, by a moderator role.
+`+addsyscommand` required write permission to the system command directory — held
+by superusers, who were often the students who had broken the security and then
+fixed it.
+
+So the personal → group → global hierarchy was **ownership and directory
+permissions**, with a human decision at each boundary. Not a governance system.
+The social process — sharing, adopting, promoting what proved useful — happened
+around the mechanism rather than inside it.
+
+### `+mypriv`, the enabling primitive
+
+The most powerful command was `+mypriv`. The owner of a command file could use it
+to do anything they were allowed to do as themselves — **suid, in Unix terms —
+and that is what enabled groupware**.
+
+This is worth stating plainly because it is easy to miss: without it, a shared
+command can only do what its *caller* could already do, which is to say nothing
+worth sharing. The command has to be able to act with the authority of the person
+who wrote it. That single property is what turns a personal script into something
+another person can usefully run, and it is why hundreds of commands were worth
+writing and sharing.
+
+**A capability is `+mypriv` with the ambient authority removed.** Rather than "run
+as the owner, with everything the owner can do", a macro carries the specific
+capabilities its author chose to place in it. Same enabling property; a much
+narrower blast radius; and no superuser needed to administer the boundary,
+because holding the cap *is* the permission.
+
+That is why [the macro design](https://github.com/jimscarver/quantum-os/issues/65)
+starts with capabilities and defers governance. It is not a simplification of the
+EIES model — it is the EIES model with the suid bit sharpened into an object.
+
+## What carries over
+
+**User programming is the point, not a feature.** EIES's command library was
+written by its users, not its authors. A system where only the maintainers can
+extend the vocabulary gets the vocabulary its maintainers imagined.
+
+**Adoption should be social, mechanism should be boring.** Permissions and
+ownership were enough. What made a command spread was that it was useful and
+someone shared it. Elaborate promotion machinery was not required and is still
+not required — `/gov` exists here for groups that eventually want more, and
+should stay optional.
+
+**The enabling primitive is authority, not syntax.** `+mypriv` mattered more than
+anything about INTERACT's grammar. When designing here, the question "what
+authority does this carry, and whose?" is the one that decides whether something
+is shareable.
+
+**Curation emerges.** "The most useful were made global system commands" was a
+judgment someone made, repeatedly, over time. Worth designing for a curator role
+existing rather than pretending ranking will be automatic.
+
+## What is deliberately different
+
+**Not an interface language.** INTERACT commands answered prompts by matching on
+their text. That couples a command to the exact wording of an interface and
+breaks when the wording changes. The aim here is the same effect reached *more
+formally*: rholang processes coordinate over named channels, so a macro binds to
+a channel rather than scraping output. Matching on prompt text is what you do
+when there is no channel to bind to; here there is one.
+
+**No superusers.** EIES's system command directory was gated by people with root.
+Here the equivalent boundary is holding a capability, which is delegable,
+auditable, and does not require anyone to be trusted with everything.
+
+**Peer-to-peer, and durable by choice.** EIES was a host everyone dialled into.
+A QuantumOS room is peer-to-peer and ephemeral by default; what needs to outlive
+the room is deployed to a chain deliberately. The persistence that EIES got for
+free from being a mainframe has to be asked for here — which is a cost, and also
+means no one operator can end the conversation.
+
+**Where it is going.** The macro language is meant to grow into interactive
+rholang process orchestration. Template expansion is the seed, not the
+destination.
+
+## Primary sources
+
+NJIT's CCCC report series, in the university's digital repository:
+
+| year | report |
+|---|---|
+| 1977 | [Programming Language Requirements for Human Communication Structures](https://digitalcommons.njit.edu/ccccreports/4) |
+| 1977 | [How to Use Electronic Information Exchange System](https://digitalcommons.njit.edu/ccccreports/6) |
+| 1977 | [Development and field testing of an electronic information exchange system](https://digitalcommons.njit.edu/ccccreports/8) |
+| 1981 | [Users' manual for the Electronic Information Exchange System](https://digitalcommons.njit.edu/ccccreports/17) |
+| 1981 | [The evolution of a tailored communications structure](https://digitalcommons.njit.edu/ccccreports/14) |
+| 1986 | [The virtual classroom: building the foundations](https://digitalcommons.njit.edu/ccccreports/24) |
+| 1992 | [EIES 2: a distributed architecture for supporting group work](https://digitalcommons.njit.edu/ccccreports/28) — Whitescarver et al. |
+
+Also: [the CCCC report index](https://digitalcommons.njit.edu/ccccreports/),
+[NJIT's EIES history page](https://archives.njit.edu/vhlib/cccc-materials/cccc-old-content/eies/eieshist.html),
+and further publications on
+[Jim Whitescarver's LinkedIn](https://www.linkedin.com/in/jimscarver/).
+
+Where this document states what INTERACT did and why, the source is Jim
+Whitescarver, who wrote it. The reports are the record; he is the primary source.
+
+---
+
+*If you are picking up this project: the argument for capabilities in
+[#65](https://github.com/jimscarver/quantum-os/issues/65) is the one to read
+first. It is a forty-year-old result.*
