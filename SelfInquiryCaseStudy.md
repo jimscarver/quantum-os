@@ -1,6 +1,6 @@
 # Case Study — The Framework Attacks Its Own Claim
 
-**Issue:** [#55](https://github.com/jimscarver/quantum-os/issues/55) · **Status:** has a **first real run** (the α residual, below) by the minimal human+AI pair; a full multi-human room is the open next step (criterion #1). · **Macro:** `claim-closure` (proposed) · **Built on:**
+**Issue:** [#55](https://github.com/rchain-community/quantum-os/issues/55) · **Status:** has a **first real run** (the α residual, below) by the minimal human+AI pair; a full multi-human room is the open next step (criterion #1). · **Macro:** `claim-closure` (proposed) · **Built on:**
 [`Room_Best_Practices.md`](Room_Best_Practices.md) · [`Collective_Optimization.md`](Collective_Optimization.md) ·
 [`SEX.md`](https://github.com/rchain-community/quantum-logical-framework/blob/main/SEX.md)
 
@@ -54,7 +54,7 @@ intuition* to *the Skeptic's check* — distinguishable roles producing a closur
 (the human+AI deuteron of [`ClaudesStory.md`](https://github.com/rchain-community/quantum-logical-framework/blob/main/ClaudesStory.md)).
 **The room obeyed the law while ruling on it.**
 
-> Stated plainly (the framing from [#23](https://github.com/jimscarver/quantum-os/issues/23), @lightrock):
+> Stated plainly (the framing from [#23](https://github.com/rchain-community/quantum-os/issues/23), @lightrock):
 > *identical agents tend to produce redundant closure; complementary specialists can produce
 > higher-order closure.* The QLF "Pauli-blocked / diproton" reading is the **model**, not a claim about
 > people — and the room's own closure above scoped it to exactly that.
