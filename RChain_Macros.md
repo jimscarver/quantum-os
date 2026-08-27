@@ -40,18 +40,17 @@ $arg
 ```
 
 `$` is **lexically illegal in rholang**, which is what makes a scanner safe
-without a grammar. The node's own lexer rejects it:
+without a grammar. rnode's own lexer rejects it:
 
 ```
 new return, $x in { return!("x") }   →   Illegal character $ at 28
 ```
 
 So a `$` site can never be valid rholang, an unexpanded one cannot silently
-become something else, and the node is the backstop if expansion is missed.
+become something else, and rnode is the backstop if expansion is missed.
 
-The `%` sigil this replaces does **not** have that property — `%` is rholang's
-modulo operator, and `7 % 3` evaluates to `1`. Call sites and arithmetic shared
-a character.
+A sigil without that property puts call sites in the same character space as
+something rholang already means. `%` is its modulo operator: `7 % 3` is `1`.
 
 ### `/` is what the app ships, `+` is what a person wrote
 
@@ -176,7 +175,7 @@ left exactly as written rather than silently dropped:
 ✗ line 3: unknown macro $nosuch — try /macro list
 ```
 
-Because `$` is illegal rholang, a site left in is a hard error at the node
+Because `$` is illegal rholang, a site left in is a hard error at rnode
 rather than something that quietly means the wrong thing.
 
 ## Where definitions live
@@ -192,7 +191,7 @@ That maps EIES's hierarchy onto what this system already has:
 |---|---|---|
 | personal | a definition in your browser | yes |
 | group | a definition shared with the room | yes |
-| public / federated | an on-chain dictionary behind a capability | not yet |
+| public / federated | a name in a locker, reached by capability | no |
 
 **First writer wins a name, and only that author may redefine it** — matched by
 dyncap **anchor**, not peerId, so a reload does not cost you your own commands.
@@ -206,46 +205,206 @@ EIES's most powerful command let a command act with its owner's authority —
 suid, in Unix terms — and that is what made a shared command worth sharing at
 all. Without it a command can only do what its *caller* could already do.
 
-A `+command` today has no such thing, and does not need one yet: it composes the
-caller's own capabilities. The property becomes load-bearing at the on-chain
-tier, where a macro can carry the specific caps its author chose to put in it —
-the same enabling property with the ambient authority removed, and no superuser
-to administer it.
+A `+command` composes the caller's own capabilities, which is enough while a
+room is the boundary. It becomes load-bearing at the locker, where a macro
+carries the specific capabilities its author chose to put in it — the same
+enabling property with the ambient authority removed, and no superuser to
+administer it. `grant` on a locker key is that: a write-only facet for one
+name, handed to someone who then holds exactly that and nothing else.
 
-## Still to build
+## Naming a capability
 
-### The on-chain dictionary
+A `$name` bound to a capability is a macro with no parameters, and the body is
+the capability:
 
-Definitions in a dictionary read with an ordinary `/rholang eval` — read-only
-over finalized state, free, unsigned, no key involved. A library is a
-capability; holding it is access and sharing it is how access spreads.
-Promotion is sharing, and **consent is the act of sharing** rather than a vote
-that authorises it. A name would resolve in scope order — personal shadows room
-shadows chain — so a collision is scoping rather than a conflict to arbitrate.
+```
+/macro define $ballot   // the colab ballot contract
+`rho:id:3qfh1fy7jwfcai7ceyorux4a18hzcn83n9xb6dramjf5gs7cw8fynf`
+```
 
-[`/gov`](Governance.md) stays available for a federated tier that eventually
-wants "groups agreed to this" rather than "somebody published it", and stays
-unnecessary before then. Groups will make their own rules: capabilities are
-mechanism, and policy belongs to whichever group lives with it.
+It then stands in for that capability at any call site:
 
-### Open
+```
+/rholang eval
+new lookup(`rho:registry:lookup`), ret in { lookup!($ballot, *ret) }
+```
 
-- **Bearer semantics.** A shared cap is held by whoever it reached; there is no
-  un-sharing one. Plain bearer is a fine answer *as long as it is chosen rather
-  than discovered*.
+That much lives in the room — signed, shared, replayed to whoever joins. What it
+does not do is follow you off the room, and a capability you hold is worth more
+than a room's memory of it.
+
+## The locker
+
+The chain tier is a **private hierarchical dictionary keyed to `deployerId`**.
+It holds your names: `ballot` → a uri, `notes` → a directory, `team` → a parent
+you were granted.
+
+**No public names anywhere in it — a uri instead.** A public name,
+`@"jim-ballots"`, is a channel: anyone who guesses or reads it can send on it and
+receive from it, so a dictionary kept at one is a dictionary anybody may edit. A
+registry uri is not a channel and not a name. It is a reference that resolves to
+whatever was inserted under it, and what you get back is a `bundle+` facet — so
+holding a uri grants exactly what that facet does and nothing else, and there is
+no writing to a uri at all without the capability to insert there.
+
+The primitives rnode supplies, and what each is for:
+
+| primitive | what it gives |
+|---|---|
+| `rho:rchain:deployerId` | the signer's identity, unforgeable, and only inside a deploy |
+| `rho:registry:insertSigned:secp256k1((nonce, data), deployerId, ret)` | a slot at a uri derived from `blake2b256(pubkey)`, writable only by that key, with a nonce that must advance |
+| `rho:registry:lookup(uri, ret)` | resolve a uri to what is stored there |
+| `rho:registry:insertArbitrary(data, ret)` | a slot at an unpredictable uri |
+
+`insertSigned` is the one that matters: the uri comes from the public key, so
+**the browser can compute where its own slot is before deploying**, and nobody
+else can write there. That is what makes a dictionary findable without a
+well-known name.
+
+The locker is one contract at a published uri, and publishing that uri grants
+nothing: every operation takes a `deployerId`, which is unforgeable and issued
+only to the deploy that signed for it. So the world may hold the locker's uri
+and still reach only its own entry.
+
+```
+register!(*deployerId, revAddress, *ret)      — create my identity record
+set!(*deployerId, "ballot", uri, *ret)        — bind a name
+get!(*deployerId, "ballot", *ret)             — resolve one
+grant!(*deployerId, "ballot", *ret)           — mint a write-only cap for one key
+```
+
+No operation reads across identities. Finding someone is not something the
+locker does — [uris are shared in rooms](#uris-are-shared-in-rooms).
+
+**Hierarchy is the parent link, and it is a capability.** An entry may name a
+parent — a directory's read facet somebody granted you. `get` falls through:
+yours, then the parent's, then its parent's. That is the scope order the macro
+library wants — personal shadows group shadows public — and it arrives without a
+permission system, because a name resolves through exactly the capabilities you
+were given. Promotion is being granted a write facet; **consent is the act of
+granting it**.
+
+## Registering an identity
+
+A user needs a **REV address** before any of this reaches them. It is derived
+from the same secp256k1 key that signs their deploys, so the address, the
+deploy signature and the locker slot are three faces of one identity rather
+than three things to keep in step.
+
+`register` creates that user's **identity record** and hands them a
+**restricted** write capability on it.
+
+Restricted is the whole point. If the subject held full write on their own
+record they could write their own credentials, and a credential you can issue to
+yourself is worth nothing. So the record is partitioned by who may write what:
+
+| part | who writes it |
+|---|---|
+| what the subject says about themself — display name, an inbox uri, preferences | the subject, through the facet `register` returns |
+| what someone else attests about the subject | that voucher, through a facet scoped to their own attestation |
+
+Nobody can write another party's attestation, and the subject cannot write any
+of them. Reading a record tells you who vouched, at what level, and you weigh
+that by what you think of the voucher — the credential is a relationship, not a
+property of the person.
+
+The record lives at the uri derived from the subject's public key:
+
+```
+rho:id: + zbase32(blake2b256(pubkey))
+```
+
+so **the browser can compute where its own record is before deploying**, and
+`insertSigned` means only that key can create it. That is what makes an identity
+findable without a public name.
+
+`register` is also what makes the rest work at all: `insertSigned` requires a
+nonce that advances, and a lookup of a uri that was never inserted does not
+answer. Registration is the insert that puts a floor under both.
+
+## Uris are shared in rooms
+
+There is no on-chain directory of users, and there does not need to be. **A uri
+is shared in a room** — the room is the introduction.
+
+That is not a workaround; the room is better at it than a chain would be. It
+already has the three properties an introduction needs:
+
+| need | the room already has |
+|---|---|
+| admission | holding the room capability *is* being in the room |
+| identity | every envelope is dyncap-signed and anchor-pinned; a fork is flagged |
+| standing | `/gov trust` levels, admin-rooted, with ⅔-quorum censure that slashes vouchers |
+
+So sharing a capability is `/macro define $ballot` with the uri as its body,
+broadcast to the room like any other definition. Whoever is in the room has it;
+whoever is not, does not.
+
+**Not persisting it is a real option.** A uri shared in a room can live only as
+long as the room does. The locker is for the ones you want to survive the room —
+not a place everything has to go.
+
+## Spam, and ignoring
+
+An inbox reachable by anyone is floodable by anyone, so what a correspondent
+receives is never the inbox's own write facet — it is a **caretaker** wrapping
+it, minted for that one correspondent and holding a flag.
+
+That single choice answers both halves:
+
+- **Ignoring** flips the flag. That correspondent's messages stop; every other
+  correspondent is undisturbed and nothing is re-issued. It also answers bearer
+  semantics where they bite hardest: a capability once handed over is held by
+  whoever it reached, but a caretaker is what was handed over, so revocation is
+  a property of what you minted rather than a power over what someone else holds.
+- **Spam does not pay**, because a facet identifies its holder. There is no
+  shared channel to poison, so a compromised facet is worth one correspondent's
+  attention, once. Getting a facet in the first place costs a room capability or
+  a credential, and a voucher who hands one to a spammer loses standing for it.
+
+Every attempt is also a signed, phlo-charged deploy, which is a rate limit that
+comes from the identity being unforgeable — precisely what a public name cannot
+offer.
+
+**Honest limits.** A credential proves a relationship, not a person; a careless
+voucher is the weak edge, and the censure quorum is what makes that
+self-correcting rather than what prevents it. An inbox holds what it was sent
+until read, so ignoring stops the next message, not the one already delivered.
+
+## The pieces
+
+Ordinary capability-facet contracts — `new` for the names, `bundle+` on what is
+handed out so a recipient can use a facet without comparing or forging it:
+
+- **Locker** — the private hierarchical dictionary, keyed by `deployerId`.
+- **Identity record** — at the key-derived uri, restricted write for the
+  subject, a scoped facet per voucher.
+- **Inbox** — a caretaker write facet per correspondent, a read facet you keep.
+  A capability travels inside a message, so granting is sending; type and
+  subtype are what make it usable rather than a pile.
+- **Channels** — publish and subscribe over a stream, subscribers holding read
+  facets and the publisher a write one. A room's `/channel` is the in-memory
+  form; this is the form that survives the room.
+
+## Open
+
+- **Bearer semantics.** A granted facet is held by whoever it reached; there is
+  no un-granting one. Plain bearer is a fine answer *as long as it is chosen
+  rather than discovered*. A group wanting revocation writes the indirection
+  into its own contract.
 - **Versioning.** Does a group consent to a name or to a definition? A name
-  means later edits ride in on an old decision. In the room tier a redefinition
-  is visible to everyone as it happens; on-chain it would not be.
-- **Offline.** Expansion of an on-chain macro needs a node read. What happens
-  with no node, and is there a cache?
+  means later edits ride in on an old decision. In the room a redefinition is
+  visible to everyone as it happens; through a locker it is not.
+- **Offline.** Resolving a name through the locker needs an rnode read. What
+  happens with no rnode, and is there a cache?
 - **Active text.** `.get` / `.see` / `@(expr)` and text-as-program equivalence
   were on EIES from the start. A macro that is text, stored as text, expanded
   into text is that same identity, but nothing yet *reads* a message as a
   program — see [EIES_Legacy.md](EIES_Legacy.md).
 - **Orchestration.** `$` expansion is the seed, not the destination. The
   destination is interactive orchestration of concurrent rholang processes.
-  Matching on prompt text is what INTERACT did because it had no channel to
-  bind to; here there is one.
+  Matching on prompt text is what INTERACT did because it had no channel to bind
+  to; here there is one.
 
 ## Where the pieces are
 
@@ -273,8 +432,8 @@ node packages/browser/src/macro-lang.js --selftest
 > between the browser and the room agent. Both sigils expand in the same pass,
 > built-ins first, so a room macro may be written in terms of one.
 >
-> The four-step security model below is the whole reason the split between
-> expanding and signing exists, and it covers both halves.
+> The four-step security model below is why expanding and signing are separate,
+> and it covers both halves.
 
 ## How the current implementation works
 
@@ -286,7 +445,7 @@ Four steps, and the split between them is the whole security model.
    well-formed, so you are never asked to sign something that cannot parse.
 3. **Sign.** Your browser signs, with a key generated locally and stored in
    IndexedDB wrapped by a passphrase-derived AES key.
-4. **Deploy.** The signed packet goes straight from your browser to the node.
+4. **Deploy.** The signed packet goes straight from your browser to rnode.
 
 The agent only ever performs step 1, and it does that in the open — it posts the
 expansion into the room chat, where anyone can read it before anyone signs it. It
@@ -296,9 +455,9 @@ reach your key, because it never had either.
 
 Both halves expand through one shared registry
 ([`packages/browser/src/rholang-macros.js`](packages/browser/src/rholang-macros.js)),
-so the rholang you review in chat is the rholang your browser signs. They used to
-be separate copies, which meant a macro edited in one and not the other could
-make those two things differ.
+so the rholang you review in chat is the rholang your browser signs. Two copies
+could differ, and a macro edited in one and not the other would mean the program
+you read is not the program you sign.
 
 ## Writing macros in rholang
 
@@ -435,53 +594,35 @@ for (@a <- @"alice-deposit"; @b <- @"bob-deposit") {
 both adjacent forks in one join — deadlock is impossible by construction rather
 than by protocol.
 
-## Testing against a local node
+## Running rnode
 
-You do not need a network. A single standalone node runs everything.
-
-```bash
-# in the rchain-rust checkout
-cargo build --release -p rchain-node --bin rnode
-
-# a funded single-validator genesis (throwaway keys — local only)
-mkdir -p ~/.rnode-local/genesis
-echo "<validator-pub> 100" > ~/.rnode-local/genesis/bonds.txt
-echo "11112VYAt8rUGNRRZX3eJdgagaAhtWTK8Js7F7X5iqddMVqyDTtYau,1000000000000" \
-  > ~/.rnode-local/genesis/wallets.txt
-
-rnode run -s --autopropose --no-upnp --host 127.0.0.1 --api-host 127.0.0.1 \
-  --data-dir ~/.rnode-local \
-  --bonds-file ~/.rnode-local/genesis/bonds.txt \
-  --wallets-file ~/.rnode-local/genesis/wallets.txt \
-  --validator-private-key <validator-priv>
-```
-
-The keys in [`tools/devnet.sh`](https://github.com/rchain-community/rchain-rust/blob/dev/tools/devnet.sh)
-are throwaway keys for exactly this. `--host 127.0.0.1` matters: without it the
-node guesses an external IP and the Kademlia server fails to bind.
-
-Ports: **40401** external gRPC (deploy), **40402** internal gRPC (eval, propose,
-repl), **40403** HTTP, **40405** admin HTTP.
-
-Check it is alive:
+You do not need a network, a checkout, or a build. **rnode ships with
+quantum-os**, and one instance runs everything:
 
 ```bash
-curl -s http://127.0.0.1:40403/status
+bash scripts/localnet/run-node.sh --fresh     # first time
+bash scripts/localnet/run-node.sh             # after that
 ```
 
-Run rholang without deploying — the fastest loop, no signing, no block:
+Then point the browser at it:
 
-```bash
-rnode --grpc-host 127.0.0.1 --grpc-port 40402 eval mycontract.rho
+```
+/rholang rnode http://127.0.0.1:40403
+/rholang status
 ```
 
-Point the browser at it with `/rholang node http://127.0.0.1:40403`, then
-`/rholang status` to check it answers.
+`--fresh` builds the genesis block from the funded throwaway keys in
+`scripts/localnet/`; leave it off afterwards or block production stops. Ports:
+**40403** is the HTTP API the browser uses; 40401 and 40402 are gRPC, which a
+browser cannot reach.
 
-**If a macro expands but the node says `No value set for` rho:qucalc:zfa``,** the
-node is running a build from before the QuCalc system processes were installed.
-Rebuild and restart it — a running node keeps its binary image even after the
-file on disk is replaced.
+**If a program runs but rnode says `` No value set for `rho:qucalc:zfa` ``,**
+it is serving an image from before the QuCalc processes were installed. Restart
+it — a running rnode keeps its binary image even after the file on disk changes.
+
+[`scripts/localnet/README.md`](scripts/localnet/README.md) covers the rest:
+what each file is, how to point `run-node.sh` at a candidate rnode build with
+`RNODE=`, and why the keys are in the repository.
 
 ## What is and is not enforced
 
@@ -489,7 +630,7 @@ file on disk is replaced.
 you name a directory, and the linter checks only that the expansion is
 well-formed. There is no forbidden rholang. What a deploy can reach is decided by
 the unforgeable names it holds — RChain's security is capability-based, and a
-denylist of identifiers decides nothing the node does not already decide, while
+denylist of identifiers decides nothing rnode does not already decide, while
 refusing legitimate programs.
 
 **Enforced: that an argument cannot escape its position.** Every string reaches
@@ -525,7 +666,7 @@ transfer means the value you approved is not the value you signed.
   discussion behind every decision here, including the ones still open
 - [**MacRhoLang / @RHO-bot**](https://docs.google.com/document/d/1mTUQwWV9zW5INaJekf-hrZoukWh8Gt8ggFwIxREp1vk/edit) —
   the direct predecessor: `$` sites, `define:`/`echo:`/`find:`, and command-form
-  invocation, on a Discord bot against an RChain node
+  invocation, on a Discord bot against an rnode
 - [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md) — running the macro agent
 - [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) — the `$` language
 - [`packages/browser/src/rholang-macros.js`](packages/browser/src/rholang-macros.js) — the `%` registry, one source for both halves

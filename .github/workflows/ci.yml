@@ -76,3 +76,6 @@ jobs:
 
       - name: Capability macro selftest
         run: node scripts/qos-cli/rholang-macros.mjs --selftest
+
+      - name: Locker selftest
+        run: node packages/browser/src/locker.js --selftest

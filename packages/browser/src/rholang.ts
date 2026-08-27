@@ -1,15 +1,15 @@
-// rholang.ts — talk to an RChain node from the browser.
+// rholang.ts — talk to rnode, an RChain node, from the browser.
 //
-// Three verbs, and the difference between them is what the node does with your
+// Three verbs, and the difference between them is what rnode does with your
 // program:
 //
-//   status — ask the node what it is (version, shard, height, phlo floor).
+//   status — ask rnode what it is (version, shard, height, phlo floor).
 //   eval   — run rholang and read the result back. Nothing is signed, nothing
 //            is stored, no block is produced. This is `explore-deploy`.
 //   deploy — sign a program and submit it. It costs phlo, it lands in a block,
 //            and what it writes outlives every peer in the room.
 //
-// All three go over the node's HTTP API (`--api-host`, port 40403 by default),
+// All three go over rnode's HTTP API (`--api-host`, port 40403 by default),
 // which sets permissive CORS, so the browser reaches it directly — no relay, no
 // agent in the middle. The gRPC API (40402) is not reachable from a browser and
 // is not used here.
@@ -19,7 +19,7 @@
 // there. What it cannot give you is a deploy's own identity — `rho:rchain:deployId`
 // and `rho:rchain:deployerId` are unbound, an exploratory deploy having no deploy
 // to name — and a registry lookup of an unregistered uri simply never answers.
-// The node must also allow exploratory deploy at all: it answers only when run as
+// rnode must also allow exploratory deploy at all: it answers only when run as
 // a read-only observer or with `--dev-mode`.
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -27,11 +27,11 @@ import { blake2b } from "@noble/hashes/blake2.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
 // ---------------------------------------------------------------------------
-// Configuration — where the node is and how a deploy is charged
+// Configuration — where rnode is and how a deploy is charged
 // ---------------------------------------------------------------------------
 
 export interface NodeConfig {
-  /** Base URL of the node's HTTP API. */
+  /** Base URL of rnode's HTTP API. */
   url: string;
   /** Shard the deploy is valid in. A deploy for the wrong shard is rejected. */
   shard: string;
@@ -67,7 +67,7 @@ export function saveConfig(cfg: NodeConfig): void {
 /** The config as display lines. The key is shown by its public half only. */
 export function describeConfig(cfg: NodeConfig): string[] {
   const out = [
-    `node   ${cfg.url}`,
+    `rnode  ${cfg.url}`,
     `shard  ${cfg.shard}`,
     `phlo   limit ${cfg.phloLimit}, price ${cfg.phloPrice}`,
   ];
@@ -79,6 +79,10 @@ export function describeConfig(cfg: NodeConfig): string[] {
       // was two identifiers for one key, neither checkable against the other by
       // eye. The secret never leaves this browser.
       out.push(`addr   ${revAddressOf(cfg.key)}`);
+      // Where this key's identity record lives. Computable from the key alone,
+      // writable only by it — so it is worth showing next to the address a
+      // balance is held against: both come from the same key.
+      out.push(`record ${registryUriOf(cfg.key)}`);
     } catch {
       out.push("key    ✗ not a valid secp256k1 key");
     }
@@ -122,13 +126,55 @@ export function publicKeyOf(secretHex: string): string {
 }
 
 /**
- * The REV address a deploy is charged to, derived the way the node derives it
+ * The REV address a deploy is charged to, derived the way rnode derives it
  * (rholang/src/util/rev_address.rs) so what is shown is what is charged:
  *
  *   eth     = last 20 bytes of keccak256(public key without its 0x04 prefix)
  *   payload = 00000000 ++ keccak256(eth)
  *   address = base58(payload ++ first 4 bytes of blake2b256(payload))
  */
+// ---------------------------------------------------------------------------
+// Where your own record lives
+//
+// rnode derives a signed-registry uri from the deployer's public key:
+//
+//     rho:id: + zbase32(blake2b256(pubkey))
+//
+// (`registry::build_uri` over `blake2b256(pub_key)` in rnode's
+// `registry_insert_signed`.) Two things follow, and both matter.
+//
+// The uri is computable from the key alone, so a browser knows where its own
+// record is BEFORE it deploys anything — no public name to remember it by, and
+// nothing to look up to find out. And `insertSigned` will only write there for
+// the key the uri came from, so the slot is unforgeable without being secret.
+//
+// z-base-32: MSB-first 5-bit groups over the full 256 bits, no padding, the
+// human-oriented alphabet rather than RFC 4648's. Checked against rnode's own
+// vector — an all-zero hash encodes to 'y' repeated 52 times.
+// ---------------------------------------------------------------------------
+
+const ZBASE32 = "ybndrfg8ejkmcpqxot1uwisza345h769";
+
+export function zbase32(data: Uint8Array, bitLength: number): string {
+  let out = "";
+  for (let p = 0; p < bitLength; p += 5) {
+    let v = 0;
+    for (let k = 0; k < 5; k++) {
+      const i = p + k;
+      v <<= 1;
+      if (i < bitLength) v |= (data[i >> 3] >> (7 - (i % 8))) & 1;
+    }
+    out += ZBASE32[v];
+  }
+  return out;
+}
+
+/** The signed-registry uri this secret key writes to, and only this key can. */
+export function registryUriOf(secretHex: string): string {
+  const pub = secp256k1.getPublicKey(unhex(secretHex), false);
+  return "rho:id:" + zbase32(blake2b(pub, { dkLen: 32 }), 256);
+}
+
 export function revAddressOf(secretHex: string): string {
   const pub = secp256k1.getPublicKey(unhex(secretHex), false);
   const eth = hex(keccak_256(pub.slice(1))).slice(-40);
@@ -141,7 +187,7 @@ export function revAddressOf(secretHex: string): string {
 // Protobuf encoding of DeployData
 //
 // The signature is over blake2b256 of the protobuf encoding of DeployDataProto
-// (models/proto/casper.proto), so the bytes must match the node's exactly. proto3
+// (models/proto/casper.proto), so the bytes must match rnode's exactly. proto3
 // omits fields at their default value — a zero timestamp is an absent field, not
 // a zero-valued one — and fields are written in ascending field number.
 // ---------------------------------------------------------------------------
@@ -190,7 +236,7 @@ export function encodeDeployData(d: DeployData): Uint8Array {
   ]);
 }
 
-/** Sign deploy data the way the node verifies it: DER secp256k1 over blake2b256. */
+/** Sign deploy data the way rnode verifies it: DER secp256k1 over blake2b256. */
 export function signDeployData(d: DeployData, secretHex: string): { deployer: string; signature: string } {
   const digest = blake2b(encodeDeployData(d), { dkLen: 32 });
   const sig = secp256k1.sign(digest, unhex(secretHex), { prehash: false, format: "der" });
@@ -200,8 +246,8 @@ export function signDeployData(d: DeployData, secretHex: string): { deployer: st
 // ---------------------------------------------------------------------------
 // The powerbox, and the wrapper every program gets
 //
-// Two problems, one answer. A deploy's output goes to the node's log, which
-// nobody running a browser can read; and the node's own capabilities are URNs
+// Two problems, one answer. A deploy's output goes to rnode's log, which
+// nobody running a browser can read; and rnode's own capabilities are URNs
 // that have to be `new`-bound before anything can be sent to them, which is a
 // line of ceremony in front of every program.
 //
@@ -215,16 +261,16 @@ export function signDeployData(d: DeployData, secretHex: string): { deployer: st
  * `deployOnly` marks `deployerId`: an eval has no deployer, and merely binding
  * it there fails to normalize ("No value set for rho:rchain:deployerId").
  *
- * The shapes here were read off the node's own argument parsers, not its docs —
+ * The shapes here were read off rnode's own argument parsers, not its docs —
  * `docs/src/qucalc/extensions.md` documents `trustLevels` ratings and `censure`
- * censures/vouchers as nested maps, and the node rejects those: it wants tuple
+ * censures/vouchers as nested maps, and rnode rejects those: it wants tuple
  * lists (`parse_rating_list`, `parse_censure_list`, and `parse_voucher_list`,
  * which is `parse_rating_list` again). Verified against a running node.
  */
 interface PowerboxEntry {
   name: string;
   urn: string;
-  /** How it is called, with the return channel where the node expects it. */
+  /** How it is called, with the return channel where rnode expects it. */
   sig: string;
   /** What arrives on that channel. */
   returns?: string;
@@ -235,7 +281,7 @@ interface PowerboxEntry {
 
 const POWERBOX: PowerboxEntry[] = [
   { name: "stdout", urn: "rho:io:stdout", sig: "stdout!(value)",
-    returns: "nothing — it prints to the node's log" },
+    returns: "nothing — it prints to rnode's log" },
 
   { name: "zfa", urn: "rho:qucalc:zfa", sig: "zfa!(history, *return)",
     returns: "(isZfa, phase) — phase is +I=1, −I=-1, +iI=2, −iI=-2",
@@ -346,7 +392,7 @@ export interface EvalResult {
   blockHash?: string;
 }
 
-/** Render one Par expression from the node's JSON into readable text. */
+/** Render one Par expression from rnode's JSON into readable text. */
 export function renderExpr(e: unknown): string {
   if (e === null || e === undefined) return "Nil";
   if (typeof e !== "object") return String(e);
@@ -378,7 +424,7 @@ export function renderExpr(e: unknown): string {
  */
 export async function evalTerm(cfg: NodeConfig, term: string): Promise<EvalResult> {
   const unwrap = (r: unknown): EvalResult => {
-    if (typeof r === "string") throw new Error(r); // the node reports errors as a bare JSON string
+    if (typeof r === "string") throw new Error(r); // rnode reports errors as a bare JSON string
     const o = (r ?? {}) as { expr?: unknown[]; block?: { blockNumber?: number; blockHash?: string } };
     return {
       values: (o.expr ?? []).map(renderExpr),
@@ -463,11 +509,11 @@ export async function readName(cfg: NodeConfig, name: string): Promise<string[]>
  * A deploy that fails sends nothing to `return`, so its result name stays empty
  * forever and looks identical to one still waiting on consensus. The block knows
  * the difference — it carries `errored` per deploy — and this is the only way to
- * tell the two apart from outside the node.
+ * tell the two apart from outside rnode.
  *
  * `systemDeployError` carries the reducer's first error since rchain-rust#15 —
  * before that it was always empty, and "it errored, and cost this much" was the
- * whole of what a deployer could learn. Treat it as optional: a node older than
+ * whole of what a deployer could learn. Treat it as optional: an rnode older than
  * that fix reports nothing there.
  */
 export async function deployFate(cfg: NodeConfig, sig: string, depth = 12): Promise<DeployFate | null> {
@@ -524,7 +570,7 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
     timestamp: Date.now(),
     phloPrice: cfg.phloPrice,
     phloLimit: cfg.phloLimit,
-    // A deploy is valid only after a block the node already has; the current
+    // A deploy is valid only after a block rnode already has; the current
     // height is always safe, and 0 (genesis) is the floor.
     validAfterBlockNumber: Math.max(0, (status.latestBlockNumber ?? 0) - 1),
     shardId: cfg.shard,
@@ -536,7 +582,7 @@ export async function deployTerm(cfg: NodeConfig, term: string): Promise<DeployO
     signature,
     sigAlgorithm: "secp256k1",
   });
-  // Success and failure both come back as a JSON string; the node says "Success!"
+  // Success and failure both come back as a JSON string; rnode says "Success!"
   // on the happy path and names the reason otherwise.
   const text = typeof reply === "string" ? reply : JSON.stringify(reply);
   const ok = /success/i.test(text);
