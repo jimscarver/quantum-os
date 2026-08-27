@@ -675,10 +675,10 @@ across deploys.
 
 | macro | expands to |
 |---|---|
-| `%trust(ratings, admins)` | `rho:gov:trustLevels` — admin-rooted web of trust |
+| `%trust(ratings, admins)` | `rho:gov:trustLevels` — admin-rooted web of trust. Ratings are a **list of `(rater, ratee, level)` tuples**, not a nested map |
 | `%weights(voters, delegations, levels)` | `rho:gov:resolveWeights` — transitive delegation |
 | `%tally(ballots, weights, mode)` | `rho:gov:tally` — weighted IRV or approval |
-| `%censure(censures, levels, vouchers)` | `rho:gov:censure` — ⅔-quorum accountability |
+| `%censure(censures, levels, vouchers)` | `rho:gov:censure` — ⅔-quorum accountability. Censures are `(censor, target)` tuples and vouchers `(rater, ratee, level)` tuples; returns `(discredited, newLevels)` |
 | `%ballot(issue, options)` | a ranked tally, for the common case |
 | `%delegate(to)` | a self-signed delegation |
 
@@ -688,7 +688,7 @@ These four take rholang maps, so they are program-form only. Composed, they are
 ```
 /rholang eval
 new levelsCh, weightsCh in {
-  %trust({"alice": {"bob": 3}}, ["alice"]) |
+  %trust([("alice", "bob", 3)], ["alice"]) |
   %weights(["alice", "bob"], {"carol": "bob"}, {}) |
   %tally({"alice": ["keep"], "bob": ["replace"]}, {"alice": 3, "bob": 1}, "ranked")
 }
