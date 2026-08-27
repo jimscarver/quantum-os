@@ -27,8 +27,8 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          formatDefinition, findMacros, bodyKind, MacroError,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { openRholangEditor } from "./rholang-editor.js";
-import { expandGlobalMacro, expandGlobalProgram, lintRholang,
-         listMacros as globalListMacros, HELP as GLOBAL_HELP } from "./global.js";
+import { expandBareMacro, expandMacroProgram, lintRholang,
+         listMacros as listRholangMacros } from "./rholang-pipeline.js";
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec, type NodeConfig } from "./rholang.js";
@@ -1670,6 +1670,12 @@ const RHOLANG_HELP = [
   "                           on its name until read, so nothing is lost by collecting it later.",
   "  /rholang status        — what the node is: version, shard, height, phlo floor.",
   "  /rholang powerbox      — the names every program gets, and what each one takes.",
+  "  /rholang macros        — the approved capability macro library (%name sites).",
+  "  /rholang macro <n> …   — expand one macro on its own, when it is the whole program.",
+  "",
+  "  A program's macro call sites expand before it is linted or signed: %name(…)",
+  "  from the library above, $name(…) from what this room defined with /macro.",
+  "  /rholang echo shows the result, which is what answers should-I-sign-this.",
   "",
   "  eval and deploy open an editor: syntax-highlighted, linted as you type,",
   "  Ctrl+Enter to run, Esc to cancel. Insert a .rho from disk at the cursor,",
@@ -1728,22 +1734,42 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
  * rather than the name any particular deploy will use.
  */
 /**
- * Expand this room's `$name(…)` macro sites in a rholang program.
+ * Expand a rholang program's macro call sites — both libraries, in one pass
+ * each, before anything is linted, echoed or signed.
  *
- * Errors never abort: a site that fails is left exactly as written, and since
- * `$` is illegal rholang the node refuses it rather than running something
- * that quietly means the wrong thing. Reported here so the reason is visible
- * before the linter says only that the program will not parse.
+ *   `%name(…)`  the approved capability library that ships with the app
+ *               (rholang-macros.js): typed templates, arguments structurally
+ *               validated, one source shared with the room agent.
+ *   `$name(…)`  what this room wrote for itself (macro-lang.js).
+ *
+ * Built-ins expand first, so a room macro may be written in terms of one.
+ *
+ * Errors never abort: a site that fails is left exactly as written. A leftover
+ * `$` is a hard error at the node, `$` being illegal rholang; a leftover `%` is
+ * rholang's modulo operator and will not be, which is why the report matters
+ * more for that half.
  */
 function expandRholangMacros(source: string, say: (t: string) => void): string {
-  if (!source.includes("$")) return source;
-  const x = expandCallSites(source, macroLookup);
-  for (const err of x.errors) say(`✗ line ${err.line}: ${err.message}`);
-  if (x.expansions.length) {
-    const names = [...new Set(x.expansions.map((e) => e.name))].map((n) => "$" + n).join(", ");
-    say(`  · expanded ${x.expansions.length} macro site${x.expansions.length === 1 ? "" : "s"}: ${names}`);
+  let out = source;
+  if (out.includes("%")) {
+    const p = expandMacroProgram(out);
+    for (const err of p.errors) say(`✗ line ${err.line}: ${err.message}`);
+    if (p.expansions.length) {
+      const names = [...new Set(p.expansions.map((e) => e.name))].map((n) => "%" + n).join(", ");
+      say(`  · expanded ${p.expansions.length} built-in site${p.expansions.length === 1 ? "" : "s"}: ${names}`);
+    }
+    out = p.source;
   }
-  return x.source;
+  if (out.includes("$")) {
+    const x = expandCallSites(out, macroLookup);
+    for (const err of x.errors) say(`✗ line ${err.line}: ${err.message}`);
+    if (x.expansions.length) {
+      const names = [...new Set(x.expansions.map((e) => e.name))].map((n) => "$" + n).join(", ");
+      say(`  · expanded ${x.expansions.length} room site${x.expansions.length === 1 ? "" : "s"}: ${names}`);
+    }
+    out = x.source;
+  }
+  return out;
 }
 
 function echoRholang(mode: "eval" | "deploy", body: string): void {
@@ -2080,7 +2106,6 @@ function handleCommand(raw: string): string[] {
       sys("  +name <args>     — run a command somebody here defined (++text to send a literal + line)");
       sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
       sys("  /rholang <sub>   — run rholang on an RChain node: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
-      sys("  /global [sub]    — RChain capability macros: <macro> <args> · macros (deprecated — prefer /rholang)");
       sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
       sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
       sys("  //message        — send a message starting with /");
@@ -4256,73 +4281,6 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
-    case "global": {
-      // RChain capability macros — expand (locally, or via a /global agent in the
-      // room), then lint → preview → sign (client-side key) → deploy to the node.
-      const g = arg.trim();
-      if (g.startsWith("node ")) {
-        const url = g.slice(5).trim();
-        saveNodeConfig({ ...loadNodeConfig(), url });
-        sys(`✓ deploy node set to ${url}  (this is /rholang's node setting — one target, not two)`);
-        break;
-      }
-      try {
-        // Two shapes: a bare single macro (`transfer 100 bob` — the whole program
-        // is one macro), or a rholang program, one line or many, with %name(…)
-        // call sites embedded in it. The rholang itself is not parsed; call sites
-        // expand in place and everything else is left as written, so whatever the
-        // result means is the linter's question and then the node's.
-        const head = g.split(/\s+/)[0]?.toLowerCase() ?? "";
-        const bare = !g.includes("%") && head !== "";
-        let source: string;
-        let title: string;
-        if (bare) {
-          const x = expandGlobalMacro(`/global ${g}`);
-          if (x.kind === "help") { for (const l of GLOBAL_HELP.split("\n")) sys(l); break; }
-          if (x.kind === "list") { for (const l of globalListMacros().split("\n")) sys(l); break; }
-          if (x.kind === "result") { sys(x.text); break; }
-          source = x.source;
-          title = `/global ${x.macro} → expanded (review, then sign & deploy):`;
-        } else {
-          const p = expandGlobalProgram(g);
-          for (const e of p.errors) sys(`✗ line ${e.line}: ${e.message}`);
-          if (!p.expansions.length) {
-            sys(p.errors.length ? "nothing expanded — fix the errors above" : "no %macro(…) call sites found — /global macros lists them");
-            break;
-          }
-          source = p.source;
-          const names = p.expansions.map((e) => `%${e.name}`).join(", ");
-          title = `/global → expanded ${p.expansions.length} macro${p.expansions.length === 1 ? "" : "s"} (${names})`
-                + `${p.errors.length ? `, ${p.errors.length} left unexpanded` : ""} — review, then sign & deploy:`;
-        }
-        const nodeUrl = loadNodeConfig().url;
-        sys(title);
-        for (const l of source.split("\n")) sys("  " + l);
-        sys(`target node: ${nodeUrl}  (change with /rholang node <url>)`);
-        void (async () => {
-          const lint = await lintRholang(source);
-          if (!lint.ok) {
-            sys("✗ malformed rholang — not signing:");
-            for (const e of lint.errors) sys("  • " + e);
-            return;
-          }
-          sys("✓ lint clean");
-          if (!window.confirm("Sign and deploy this rholang to the RChain node?")) {
-            sys("cancelled — nothing deployed");
-            return;
-          }
-          // Deploy through the same client /rholang uses: a secp256k1 signature
-          // over the node's own DeployData encoding. The old passphrase-wrapped
-          // P-256 key signed a packet no RChain node would ever verify.
-          const r = await deployTerm(loadNodeConfig(), source);
-          sys((r.ok ? "✓ " : "✗ ") + r.message);
-        })();
-      } catch (e) {
-        sys(`✗ ${(e as Error)?.message ?? e}`);
-      }
-      break;
-    }
-
     case "rholang": {
       // Talk to an RChain node: run a program, or sign and submit one. A room is
       // ephemeral; a deploy is not. `eval` and `deploy` take their program from
@@ -4379,6 +4337,28 @@ function handleCommand(raw: string): string[] {
           // editor rather than printing help at someone who asked to write code.
           if (rest) runRholangProgram(sub, rest);
           else editRholang(sub, "");
+          break;
+        }
+
+        case "macros": {
+          for (const l of listRholangMacros().split("\n")) sys(l);
+          sys("  use one in a program: /rholang eval  with %name(…) call sites in it");
+          sys("  or on its own:        /rholang macro <name> <args…>");
+          break;
+        }
+
+        case "macro": {
+          // The bare form: the whole program is one macro. A `term`-typed
+          // argument (the rho:gov:* maps) needs the program form instead,
+          // because this form splits on whitespace.
+          if (!rest) { sys("usage: /rholang macro <name> <args…>   ·   /rholang macros to list them"); break; }
+          try {
+            const x = expandBareMacro(`/rholang macro ${rest}`);
+            if (x.kind === "help") { for (const l of RHOLANG_HELP) sys(l); break; }
+            if (x.kind === "list") { for (const l of listRholangMacros().split("\n")) sys(l); break; }
+            if (x.kind === "result") { sys(x.text); break; }   // a read macro: answered locally
+            runRholangProgram("deploy", x.source);
+          } catch (e) { sys(`✗ ${(e as Error)?.message ?? e}`); }
           break;
         }
 
@@ -5785,7 +5765,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "global" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -6097,6 +6077,8 @@ const CMD_HELP: Record<string, string[]> = {
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — the node's version, network, shard, height and phlo floor. Warns when your shard does not match the node's.",
     "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
+    "/rholang macros — the approved capability macro library (grant · ballot · directory · mailbox · group · delegate · transfer · swap · philosophers · multisig); /rholang macro <name> <args…> runs one on its own.",
+    "A program's macro call sites expand before it is linted or signed: %name(…) from that library, $name(…) from what this room defined with /macro. /rholang echo shows the result.",
     "Configure with /rholang node <url> · shard <id> · phlo <limit> [price] · key generate|<hex>|show|forget · config to show it all.",
     "eval runs read-only over finalized state; pure rholang and the qucalc powerbox both return values there. It cannot reach a deploy's own identity — rho:rchain:deployId and deployerId are unbound, since an exploratory deploy is not a deploy.",
   ],
@@ -6111,7 +6093,6 @@ const CMD_HELP: Record<string, string[]> = {
     "Definitions are room state: signed, shared with everyone here, and replayed to whoever joins next. First writer wins a name, and only that author can redefine or retract it.",
     "/forget macro <name> (or the ✕ in Commands) retracts yours for everyone, and hides anyone else's from your view.",
   ],
-  global: ["/global <macro> <args…> — expand an RChain capability macro (grant · ballot · directory · mailbox · group · delegate · transfer).", "/global macros — list the macro library.", "Deprecated, pending a redesign around programs rather than argument lists — prefer /rholang, which takes rholang directly and owns the node setting (/rholang node <url>).", "Expansions are linted (WASM), previewed, then signed with your browser-held secp256k1 key and POSTed to the node — the key never leaves the browser."],
 };
 
 interface SlashCmd { name: string; template: string; desc: string }

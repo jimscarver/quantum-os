@@ -73,3 +73,6 @@ jobs:
       # covering the two lexers and the expander.
       - name: Macro language selftest
         run: node packages/browser/src/macro-lang.js --selftest
+
+      - name: Capability macro selftest
+        run: node scripts/qos-cli/rholang-macros.mjs --selftest

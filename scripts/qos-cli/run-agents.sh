@@ -21,8 +21,8 @@
 # fiddly because an observer joining to watch is itself a peer, so these are total
 # peers in the room, observer included where one was used:
 #
-#   7 (facilitator scribe skeptic memory global + browser + observer) → 0 of 6 open
-#   5 (facilitator memory global + browser + observer)                → 1 of 4 open
+#   7 (facilitator scribe skeptic memory rholang + browser + observer) → 0 of 6 open
+#   5 (facilitator memory rholang + browser + observer)                → 1 of 4 open
 #   4 (facilitator memory + browser + observer)                       → 3 of 3 open
 #
 # Four is the most that has been seen to work against the public server. The
@@ -42,9 +42,10 @@
 # that verifies — which predicate a history actually passed — and nothing else
 # does that.
 #
-# The `/global` macro agent is NOT started here. It is deprecated (see CLAUDE.md),
-# and every agent running is a peer spent against the ceiling above. Start it by
-# hand if you want it: node global-agent.mjs --room <cap> --name global
+# The `/rholang` macro agent is NOT started here — the browser expands locally,
+# so the agent is only worth a peer when you want the expansion posted into chat
+# for the room to read. Start it by hand if you do:
+#   node rholang-agent.mjs --room <cap> --name rholang
 #
 # More roles work — pass them explicitly — but each one is another peer against
 # that ceiling, and the failure is silent. Running your own signaling server

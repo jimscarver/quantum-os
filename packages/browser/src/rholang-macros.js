@@ -1,9 +1,10 @@
-// global-macros.js — the approved RChain capability macro registry, and the
-// expander that turns `/global` input into rholang.
+// rholang-macros.js — the approved RChain capability macro registry, and the
+// expander that turns `/rholang` macro input into rholang.
 //
-// SINGLE SOURCE OF TRUTH. This module is imported by both halves of `/global`:
-//   * scripts/qos-cli/global-macros.mjs — the headless room agent
-//   * packages/browser/src/global.ts    — the browser, which lints and signs
+// SINGLE SOURCE OF TRUTH. This module is imported by both halves of the macro
+// path:
+//   * scripts/qos-cli/rholang-macros.mjs   — the headless room agent
+//   * packages/browser/src/rholang-pipeline.ts — the browser, which lints and signs
 // They used to carry separate copies of the registry, the argument validators
 // and the scanner, kept in step by hand. A macro edited in one and not the
 // other meant the rholang a user reviewed in chat was not the rholang their
@@ -116,7 +117,7 @@ function cleanInt(v, name) {
 // The approved macro registry.
 //
 // Each entry:
-//   help     — one-line description (shown in `/global macros`)
+//   help     — one-line description (shown in `/rholang macros`)
 //   write    — false = read (agent answers locally); true = write (agent returns
 //              a rholang preview to sign + deploy)
 //   argSpec  — array of [name, type]  (types: string, twists, list, cap, int)
@@ -420,12 +421,12 @@ ${seats.join(" |\n")}
 // ---------------------------------------------------------------------------
 
 /**
- * The `/global` entry point. The body is either a bare single macro call
+ * The `/rholang macro` entry point. The body is either a bare single macro call
  * (`transfer 100 bob` — the whole program is one macro) or a rholang program,
  * one line or many, with `%name(…)` call sites embedded in it.
  */
-function expandGlobal(input) {
-  const body = String(input ?? "").replace(/^\s*\/?global\s*/i, "");
+function expandBare(input) {
+  const body = String(input ?? "").replace(/^\s*(\/rholang\s+macro)?\s*/i, "");
   const head = body.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
   if (head === "help") return { kind: "help" };
   if (head === "macros" || head === "list") return { kind: "list" };
@@ -434,12 +435,12 @@ function expandGlobal(input) {
   return expandProgram(body);
 }
 
-/** Parse "/global name args…" (or bare "name args…") and expand it. */
+/** Parse "/rholang macro name args…" (or bare "name args…") and expand it. */
 function expandMacro(line) {
   const s = String(line ?? "").trim();
-  const body = s.replace(/^\/global\s*/i, "");
+  const body = s.replace(/^\/rholang\s+macro\s*/i, "");
   const tokens = body.split(/\s+/).filter(Boolean);
-  if (!tokens.length) throw fail("usage: /global <macro> <args…>  (or /global help|macros)");
+  if (!tokens.length) throw fail("usage: /rholang macro <name> <args…>  (or /rholang macros)");
   const name = tokens[0].toLowerCase();
   const rest = tokens.slice(1);
 
@@ -447,7 +448,7 @@ function expandMacro(line) {
   if (name === "macros" || name === "list") return { kind: "list" };
 
   const macro = MACROS[name];
-  if (!macro) throw fail(`unknown macro ${JSON.stringify(name)} — try /global macros`);
+  if (!macro) throw fail(`unknown macro ${JSON.stringify(name)} — try /rholang macros`);
 
   // Bind positional args against the schema.
   const args = {};
@@ -464,7 +465,7 @@ function expandMacro(line) {
       case "int":    args[argName] = cleanInt(raw, argName); break;
       // A rholang term contains spaces, which the bare form splits on. Say so
       // rather than binding half a map to one argument.
-      case "term":   throw fail(`${name}: takes a rholang term — use the program form, e.g. /global %${name}(…)`);
+      case "term":   throw fail(`${name}: takes a rholang term — use the program form, e.g. /rholang eval with %${name}(…) in it`);
       default: throw fail(`${name}: internal — unknown arg type ${type}`);
     }
   }
@@ -485,7 +486,7 @@ function expandMacro(line) {
 // ---------------------------------------------------------------------------
 // Program expansion: macros embedded in rholang.
 //
-// A `/global` body is a rholang program — one line or many — with macro call
+// A `/rholang` program is rholang — one line or many — with macro call
 // sites written `%name(arg, …)`. We do NOT parse the rholang: we scan it well
 // enough to find call sites that are really call sites (skipping strings and
 // comments, balancing brackets), expand those in place, and leave every other
@@ -625,7 +626,7 @@ function expandProgram(src) {
     const macro = MACROS[name];
     out.push(text.slice(last, i));
     if (!macro) {
-      errors.push({ line: lineOf(text, i), message: `unknown macro %${name} — try /global macros` });
+      errors.push({ line: lineOf(text, i), message: `unknown macro %${name} — try /rholang macros` });
       out.push(text.slice(i, close + 1));                  // leave it as written
     } else {
       try {
@@ -647,7 +648,7 @@ function expandProgram(src) {
   return { kind: "program", source: out.join(""), expansions, errors };
 }
 
-/** One-line summary of every macro (for `/global macros`). */
+/** One-line summary of every macro (for `/rholang macros`). */
 function listMacros() {
   const lines = Object.entries(MACROS).map(
     ([name, m]) => `${name.padEnd(10)} ${m.write ? "write" : "read "}  ${m.help}`
@@ -656,15 +657,15 @@ function listMacros() {
 }
 
 const HELP =
-  `RChain capability macros — /global\n` +
-  `  /global help                 this help\n` +
-  `  /global macros               list the approved macro library\n` +
-  `  /global <macro> <args…>      expand a single macro (the whole program is one macro)\n` +
-  `  /global <rholang…>           expand %macro(…) call sites inside a rholang program;\n` +
-  `                               one line or many, everything else is left as written\n`;
+  `RChain capability macros — /rholang\n` +
+  `  /rholang macros              list the approved macro library\n` +
+  `  /rholang macro <name> <args…>  expand one macro (the whole program is one macro)\n` +
+  `  /rholang eval|deploy         %macro(…) call sites inside the program expand in\n` +
+  `                               place; one line or many, everything else is left\n` +
+  `                               exactly as written\n`;
 
 // ---------------------------------------------------------------------------
-// Self-test (node global-macros.mjs --selftest)
+// Self-test (node rholang-macros.mjs --selftest)
 // ---------------------------------------------------------------------------
 function selftest() {
   const cases = [
@@ -749,5 +750,5 @@ function selftest() {
 }
 
 
-return { MACROS, expandGlobal, expandProgram, expandMacro, listMacros, HELP, selftest };
+return { MACROS, expandBare, expandProgram, expandMacro, listMacros, HELP, selftest };
 }

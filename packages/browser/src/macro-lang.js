@@ -5,7 +5,7 @@
 // This module is the mechanism: a definition is text with `$` sites, expansion
 // is textual, and what the expansion is *for* depends on where it was invoked.
 //
-// SINGLE SOURCE OF TRUTH, on the same argument as global-macros.js: the agent
+// SINGLE SOURCE OF TRUTH, on the same argument as rholang-macros.js: the agent
 // will want to expand a macro to show a room what a `+command` does, and the
 // browser expands the one it actually runs. Those must not be able to differ.
 // Plain JS with no imports so both toolchains consume it directly — node runs
@@ -61,7 +61,7 @@ const fail = (msg) => { throw new MacroError(msg); };
 // ---------------------------------------------------------------------------
 // Scanner
 //
-// Lifted deliberately from global-macros.js rather than reinvented: it is the
+// Lifted deliberately from rholang-macros.js rather than reinvented: it is the
 // part that has been exercised against real rholang. It never parses — it
 // skips string literals and both comment forms, balances brackets, and splits
 // on top-level commas. Everything else passes through as written.

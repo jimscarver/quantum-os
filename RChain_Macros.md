@@ -1,8 +1,9 @@
 # Macros — Interact2
 
-> **This document has two halves.** The first describes the `$` macro language
-> and the `+commands` built on it, which run now. The second records the
-> `%`-sigil `/global` macros, which still work and are deprecated. Tracked in
+> **This document has two halves.** The first is the `$` macro language and the
+> `+commands` built on it — what a room writes for itself. The second is the
+> `%` capability library that ships with the app and expands inside a
+> `/rholang` program. Tracked in
 > [#65](https://github.com/rchain-community/quantum-os/issues/65).
 
 ## Where this comes from
@@ -253,10 +254,10 @@ mechanism, and policy belongs to whichever group lives with it.
 | [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) | the whole language: parser, both lexers, binder, expander, `--selftest` |
 | [`packages/browser/src/app.ts`](packages/browser/src/app.ts) | `/macro`, `+name` routing, storage, the signed wire envelopes |
 
-`macro-lang.js` is plain JS with no imports for the reason
-`global-macros.js` is: the agent will want to expand a macro to show a room what
-a `+command` does, and the browser expands the one it actually runs. Those must
-not be able to differ. Run its tests with:
+`macro-lang.js` is plain JS with no imports for the reason `rholang-macros.js`
+is: the agent will want to expand a macro to show a room what a `+command` does,
+and the browser expands the one it actually runs. Those must not be able to
+differ. Run its tests with:
 
 ```bash
 node packages/browser/src/macro-lang.js --selftest
@@ -264,13 +265,16 @@ node packages/browser/src/macro-lang.js --selftest
 
 ---
 
-# `/global` — the `%` macros
+# `%` — the capability library
 
-> Everything below documents the `%`-sigil `/global` macros. They work and are
-> deprecated; the `$` language above replaces them. Kept because it is the
-> reference for what is deployed, and because the four-step security model in
-> the next section survives the redesign unchanged — `+commands` inherit it
-> whole, since a `+command` reaches the chain through `/rholang`.
+> The approved macro library that ships with the app, expanded inside a
+> `/rholang` program. Where `$` macros are what a room writes for itself, these
+> are the reviewed capability templates: typed arguments, one source shared
+> between the browser and the room agent. Both sigils expand in the same pass,
+> built-ins first, so a room macro may be written in terms of one.
+>
+> The four-step security model below is the whole reason the split between
+> expanding and signing exists, and it covers both halves.
 
 ## How the current implementation works
 
@@ -291,18 +295,18 @@ misleading text into a chat room and nothing more**; it cannot forge a deploy or
 reach your key, because it never had either.
 
 Both halves expand through one shared registry
-([`packages/browser/src/global-macros.js`](packages/browser/src/global-macros.js)),
+([`packages/browser/src/rholang-macros.js`](packages/browser/src/rholang-macros.js)),
 so the rholang you review in chat is the rholang your browser signs. They used to
 be separate copies, which meant a macro edited in one and not the other could
 make those two things differ.
 
 ## Writing macros in rholang
 
-A `/global` body is a rholang program — one line or many. Macro call sites are
-written `%name(arg, …)`:
+A `/rholang` program is rholang — one line or many. Macro call sites are
+written `%name(arg, …)` and expand in place before it is linted or signed:
 
 ```
-/global
+/rholang eval
 new ret, log in {
   %ballot("Q4 budget", ["ship auth", "pay down debt"]) |
   for (@winner <- ret) {
@@ -324,7 +328,7 @@ all, and a site that fails is left exactly as you typed it rather than silently
 dropped:
 
 ```
-✗ line 3: unknown macro %nosuch — try /global macros
+✗ line 3: unknown macro %nosuch — try /rholang macros
 ✗ line 4: amount: expected a non-negative integer (decimal digits only)
 ```
 
@@ -336,9 +340,8 @@ works because the term supplies the boundaries. A `term`-typed argument (the
 sigil:
 
 ```
-/global transfer 100 bob
-/global macros            — list the library
-/global help
+/rholang macro transfer 100 bob
+/rholang macros                — list the library
 ```
 
 ## The library as it stands
@@ -376,7 +379,7 @@ These four take rholang maps, so they are program-form only. Composed, they are
 [`liquid_democracy.rho`](https://github.com/rchain-community/rchain-rust/blob/dev/qucalc/examples/liquid_democracy.rho):
 
 ```
-/global
+/rholang eval
 new levelsCh, weightsCh in {
   %trust({"alice": {"bob": 3}}, ["alice"]) |
   %weights(["alice", "bob"], {"carol": "bob"}, {}) |
@@ -417,7 +420,8 @@ atomicity — both deposits are consumed together or neither is. No escrow, no
 third party:
 
 ```
-/global %swap("alice-deposit", "bob-deposit", "to-alice", "to-bob")
+/rholang eval
+%swap("alice-deposit", "bob-deposit", "to-alice", "to-bob")
 ```
 
 ```rholang
@@ -471,8 +475,8 @@ Run rholang without deploying — the fastest loop, no signing, no block:
 rnode --grpc-host 127.0.0.1 --grpc-port 40402 eval mycontract.rho
 ```
 
-Point the browser at it with `/global node http://127.0.0.1:40403`, then
-`/global` as usual.
+Point the browser at it with `/rholang node http://127.0.0.1:40403`, then
+`/rholang status` to check it answers.
 
 **If a macro expands but the node says `No value set for` rho:qucalc:zfa``,** the
 node is running a build from before the QuCalc system processes were installed.
@@ -502,7 +506,7 @@ transfer means the value you approved is not the value you signed.
 - **The browser signs with ECDSA P-256**, where RChain deploys require
   secp256k1. Web Crypto offers no secp256k1, so this is a working placeholder for
   the pipeline shape. **Nothing signed today is valid on a real network** — swap
-  `generateKeyPair` / `signPayload` in `global.ts` for a secp256k1
+  `generateKeyPair` / `signPayload` in `rholang-pipeline.ts` for a secp256k1
   implementation before deploying anywhere that matters.
 - **Macros expand to standalone programs.** `%ballot(…)` becomes
   `new ret in { … }`, so embedding one mid-expression produces rholang the linter
@@ -522,9 +526,10 @@ transfer means the value you approved is not the value you signed.
 - [**MacRhoLang / @RHO-bot**](https://docs.google.com/document/d/1mTUQwWV9zW5INaJekf-hrZoukWh8Gt8ggFwIxREp1vk/edit) —
   the direct predecessor: `$` sites, `define:`/`echo:`/`find:`, and command-form
   invocation, on a Discord bot against an RChain node
-- [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md) — running the `/global` agent
+- [`scripts/qos-cli/README.md`](scripts/qos-cli/README.md) — running the macro agent
 - [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) — the `$` language
-- [`packages/browser/src/global-macros.js`](packages/browser/src/global-macros.js) — the `%` registry, one source for both halves
+- [`packages/browser/src/rholang-macros.js`](packages/browser/src/rholang-macros.js) — the `%` registry, one source for both halves
+- [`packages/browser/src/macro-lang.js`](packages/browser/src/macro-lang.js) — the `$` language
 - [QuCalc extensions](https://github.com/rchain-community/rchain-rust/blob/dev/docs/src/qucalc/extensions.md) — the system processes these macros call
 - [`Governance.md`](Governance.md) — the in-room liquid democracy the `rho:gov:*` macros mirror
 - [`SECURITY.md`](SECURITY.md) — threat model
