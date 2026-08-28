@@ -138,7 +138,12 @@ check("and its entries start their own action", palette.guiding() || ran.length 
 palette.cancel();
 ran.length = 0;
 button("other").fire("click");
-menu.children.filter((c) => c.className === "cmd-item")[0].fire("mousedown");
+const items = () => menu.children.filter((c) => c.className === "cmd-item");
+const entry = (text) => items().find((c) => c.children[0].textContent.includes(text));
+check("the list is sectioned, group first",
+      menu.children[0].className.includes("next-head")
+      && menu.children[0].textContent === "Group", menu.children[0].textContent);
+entry("Mint a note").fire("mousedown");
 input.value = "USD"; palette.submitArg();
 input.value = "10";  palette.submitArg();
 input.value = "";    palette.submitArg();
@@ -148,9 +153,7 @@ check("a note is minted from its answers", ran[0] === "/note grant USD 10", JSON
 // member with no level, is not a rating.
 ran.length = 0;
 button("other").fire("click");
-const trust = menu.children.filter((c) => c.className === "cmd-item")
-  .find((c) => c.children[0].textContent.includes("trust"));
-trust.fire("mousedown");
+entry("trust").fire("mousedown");
 input.value = ""; palette.submitArg();
 check("trust will not take an empty member", palette.guiding(), "moved on");
 input.value = "Ann"; palette.submitArg();

@@ -182,14 +182,37 @@ interface QuickAction {
   /** Asked for one at a time. A command with none simply runs. */
   args?: ArgSpec[];
   hint?: string;
+  /** Heading this entry sits under, in a menu that has sections. */
+  section?: string;
 }
 
 /**
  * `Other` — what does not earn a button but should not need /help to find.
- * An action people do, then getting set up in the order it is done.
+ *
+ * Sectioned, because it holds two unlike things: what a group does, which is
+ * ongoing, and getting set up, which is a sequence you do once. A flat list
+ * makes the second look like more of the first.
  */
 const OTHER_ACTIONS: QuickAction[] = [
-  { label: "Mint a note", ico: "$", kind: "command", cmd: "/note grant",
+  { label: "Groups", ico: "🏛", kind: "command", cmd: "/gov", section: "Group",
+    hint: "the groups in this room, and the one you are focused on — members, issues, delegation, trust" },
+  { label: "Start a group", ico: "⚖", kind: "command", cmd: "/gov new", section: "Group",
+    args: [{ prompt: "What is the group called?", example: "Steering" }],
+    hint: "members, issues, delegated voting" },
+  { label: "Rate a member's trust", ico: "★", kind: "command", cmd: "/gov trust", section: "Group",
+    args: [
+      { prompt: "Which member?", example: "Ann" },
+      { prompt: "How far do you trust them, 0–5? You can confer at most one level below your own",
+        example: "3" },
+    ],
+    hint: "trust weights their vote — and is staked: a ⅔ censure quorum slashes whoever vouched" },
+  { label: "Record where the group lives on chain", ico: "📇", kind: "command", cmd: "/gov uri",
+    section: "Group",
+    args: [{ prompt: "Which registry URI? (blank to see the one recorded)",
+             example: "rho:id:…", optional: true }],
+    hint: "a room is ephemeral and a registry entry is not — an admin records where the group was deployed" },
+
+  { label: "Mint a note", ico: "$", kind: "command", cmd: "/note grant", section: "Value",
     args: [
       { prompt: "Which currency?", example: "USD" },
       { prompt: "How much?", example: "10" },
@@ -197,36 +220,28 @@ const OTHER_ACTIONS: QuickAction[] = [
         optional: true, join: " | " },
     ],
     hint: "a bearer note in a currency you issue — terms make it its own series" },
-  { label: "Say who you are", ico: "🙂", kind: "command", cmd: "/name",
+
+  { label: "Say who you are", ico: "🙂", kind: "command", cmd: "/name", section: "Getting set up",
     args: [{ prompt: "What should the room call you?", example: "Jim" }],
     hint: "your display name, so peers see a person and not a hex id" },
-  { label: "Protect your identity", ico: "🔐", kind: "command", cmd: "/password",
+  { label: "Protect your identity", ico: "🔐", kind: "command", cmd: "/password", section: "Getting set up",
     hint: "encrypt your identity under a password so you can come back as you" },
   { label: "Log in as someone you already are", ico: "🔑", kind: "command", cmd: "/login",
+    section: "Getting set up",
     args: [{ prompt: "Which handle? (blank to paste a recovery string instead)", example: "jim", optional: true }],
     hint: "restore an identity from a group you have rejoined" },
-  { label: "Point at a chain", ico: "🔗", kind: "command", cmd: "/rholang rnode",
+  { label: "Point at a chain", ico: "🔗", kind: "command", cmd: "/rholang rnode", section: "Getting set up",
     args: [{ prompt: "Which rnode?", example: "http://localhost:40403" }],
     hint: "the node /rholang eval and deploy talk to" },
   { label: "Make a signing key", ico: "🗝", kind: "command", cmd: "/rholang key generate",
+    section: "Getting set up",
     hint: "a secp256k1 key held in this browser, wrapped by a passphrase — a deploy needs one" },
   { label: "Claim your locker record", ico: "📇", kind: "command", cmd: "/rholang register",
+    section: "Getting set up",
     hint: "the on-chain record that makes later lookups answer" },
-  { label: "Groups", ico: "🏛", kind: "command", cmd: "/gov",
-    hint: "the groups in this room, and the one you are focused on — members, issues, delegation, trust" },
-  { label: "Start a group", ico: "⚖", kind: "command", cmd: "/gov new",
-    args: [{ prompt: "What is the group called?", example: "Steering" }],
-    hint: "members, issues, delegated voting" },
-  { label: "Rate a member's trust", ico: "★", kind: "command", cmd: "/gov trust",
-    args: [
-      { prompt: "Which member?", example: "Ann" },
-      { prompt: "How far do you trust them, 0–5? You can confer at most one level below your own",
-        example: "3" },
-    ],
-    hint: "trust weights their vote — and is staked: a ⅔ censure quorum slashes whoever vouched" },
-  { label: "Show the invite link", ico: "✉", kind: "command", cmd: "/room ref",
+  { label: "Show the invite link", ico: "✉", kind: "command", cmd: "/room ref", section: "Getting set up",
     hint: "prints the room URL into the transcript — it is a capability, so only do this on a screen you trust" },
-  { label: "What can I type?", ico: "?", kind: "command", cmd: "/help",
+  { label: "What can I type?", ico: "?", kind: "command", cmd: "/help", section: "Getting set up",
     hint: "every command, with per-command detail behind /help <command>" },
 ];
 
@@ -444,11 +459,15 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
   function showNext(): void {
     if (!menu) return;
     menu.innerHTML = "";
-    const head = document.createElement("div");
-    head.className = "guide-head next-head";
-    head.textContent = "▾  Other — and getting set up, in order";
-    menu.appendChild(head);
+    let section = "";
     for (const step of OTHER_ACTIONS) {
+      if (step.section && step.section !== section) {
+        section = step.section;
+        const head = document.createElement("div");
+        head.className = "guide-head next-head";
+        head.textContent = section;
+        menu.appendChild(head);
+      }
       const item = document.createElement("div");
       item.className = "cmd-item";
       const n = document.createElement("span");
