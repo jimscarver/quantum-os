@@ -1,5 +1,11 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { readFileSync } from "node:fs";
+
+// The version the app reports about itself. Read from package.json at build
+// time so there is one place it is written down, and it cannot drift from what
+// was actually shipped.
+const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
 // The app derives every identity from SHA-256 via Web Crypto, which browsers
 // expose only in a secure context. http://localhost is one; http://<lan-ip> is
@@ -17,6 +23,7 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 // once per origin. What Web Crypto is gated on is a secure context, and
 // bypassing the interstitial grants one; the app starts normally after that.
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(version) },
   plugins: [basicSsl({ name: "quantum-os-dev" })],
   base: "/quantum-os/",   // GitHub Pages repo subpath
   build: {

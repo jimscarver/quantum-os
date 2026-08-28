@@ -109,6 +109,7 @@ const toggleBtn       = document.getElementById("sidebar-toggle") as HTMLButtonE
 const myNameEl        = document.getElementById("my-name") as HTMLInputElement;
 const myIdEl          = document.getElementById("my-id")!;
 const roomIdEl        = document.getElementById("room-id")!;
+const appVersionEl    = document.getElementById("app-version");
 const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.onrender.com";
 const signalUrlEl     = document.getElementById("signal-url") as HTMLInputElement;
 const stunUrlEl       = document.getElementById("stun-url") as HTMLInputElement;
@@ -7594,7 +7595,13 @@ let attachments: Attachments;
 /** The command menu and quick-action toolbar. Built in initUx. */
 let palette: Palette;
 
+/** Injected by vite from package.json — see vite.config.ts. */
+declare const __APP_VERSION__: string;
+
 async function init(): Promise<void> {
+  // Which build you are looking at, in the corner where nothing else wants the
+  // space. A bug report that names a version is worth several that do not.
+  if (appVersionEl) appVersionEl.textContent = `version ${__APP_VERSION__}`;
   const roomId = getRoomId();
 
   // The URL-hash room is the first joined room and becomes the active one.
