@@ -177,6 +177,20 @@ serve one screen: if the interface (layer 5) needs something the verbs cannot
 say, the verb is missing, not the screen. That is what keeps the library
 composable rather than a feature with a UI.
 
+**Two components the library needs and does not own.**
+
+*Asking* is one of them. "Send me that recording" is a request, and the holders
+are as often a group as a person — so a fetch wants a general address rather
+than a fourth private delivery rule beside `/request`, `/gov say` and
+`/channel send`. The inbox is that component, and every one of those verbs is a
+macro over it ([#104](https://github.com/rchain-community/quantum-os/issues/104)).
+
+*Who may add* is the other. A group's library should be able to require a trust
+level to write to it, which `gov.ts` already computes and currently only tallies
+use. The check runs on every receiver, so it holds with nobody enforcing it —
+and it stays separate from who may **read**, which is a capability's job
+([#105](https://github.com/rchain-community/quantum-os/issues/105)).
+
 ---
 
 ## Build order
