@@ -284,7 +284,19 @@
     }
     .share-row span { color: #555; }
     .share-row a { color: #7fdbca; text-decoration: none; word-break: break-all; }
+    .share-row a.hidden-cap { color: #5a6a6a; cursor: default; }
     .share-row a:hover { text-decoration: underline; }
+    #hide-btn {
+      background: none;
+      border: 1px solid #333;
+      border-radius: 3px;
+      color: #555;
+      font-family: inherit;
+      font-size: 0.65rem;
+      padding: 0.15rem 0.4rem;
+      cursor: pointer;
+    }
+    #hide-btn:hover { border-color: #2a5a5a; color: #7fdbca; }
     #copy-btn {
       background: none;
       border: 1px solid #333;
@@ -512,6 +524,7 @@
         <span>Share room:</span>
         <a id="share-link" href="#">—</a>
         <button id="copy-btn">copy</button>
+        <button id="hide-btn" title="Show or hide the room capability">👁</button>
       </div>
 
       <div id="actions-row" class="actions-row"></div>
