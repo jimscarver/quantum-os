@@ -56,6 +56,11 @@ export interface Group {
   // kudos (reputation) currency. The admin declares them; balances are bearer
   // notes held privately by each member.
   treasury?: string;
+  // The group's on-chain record, if it has one: a registry URI written by
+  // /rholang. A room is ephemeral and a registry entry is not, so this is the
+  // group's durable name — the thing to look it up by after every browser here
+  // has closed. Recorded, not derived: whoever deployed it says what it is.
+  uri?: string;
   kudos?: string;
   // Members' password-encrypted identities, handle -> VaultRecord, replicated so
   // a member can recover their identity in a new browser (see VaultRecord). The

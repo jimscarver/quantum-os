@@ -2211,7 +2211,7 @@ function handleCommand(raw: string): string[] {
       sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
       sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
       sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · say · status");
+      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · uri · say · status");
       sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
       sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
       sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
@@ -2571,6 +2571,23 @@ function handleCommand(raw: string): string[] {
         else if (myBal >= n) { handleCommand(`/note pass ${K} ${n} ${gParts[1]}`); }
         else { sys(`you hold ${myBal} kudos to give (need ${n}); only the issuer can mint more`); break; }
         sys(`👏 awarded ${peerLabel(pid)} ${n} kudos`);
+        break;
+      }
+      if (gsub === "uri") {
+        // Recorded by an admin, not derived: the deploy happened in someone's
+        // browser with someone's key, and only they can say where it landed.
+        const want = grest.trim();
+        if (!want) {
+          sys(g.uri ? `${g.name} on chain: ${g.uri}   (/rholang read ${g.uri})`
+                    : `${g.name} has no on-chain record. Deploy one, then: /gov uri rho:id:…`);
+          break;
+        }
+        if (!isAdmin(g, meId)) { sys("only an admin records the group's on-chain record"); break; }
+        if (!looksLikeRegistryUri(want)) { sys(`not a registry URI: ${want}   (expected rho:id:…, as /rholang register prints)`); break; }
+        g.uri = want;
+        saveGroups(); renderGroups(); refreshGroupCard(g);
+        signedBroadcast({ kind: "group-meta", groupId: g.id, uri: want });
+        sys(`📇 ${g.name} on chain: ${want}  — every member now has it; /rholang read ${want} to fetch it`);
         break;
       }
       if (gsub === "say") {
@@ -4438,7 +4455,7 @@ function handleCommand(raw: string): string[] {
           void (async () => {
             try {
               const st = await nodeStatus(cfg);
-              sys(`✓ node ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
+              sys(`✓ rnode ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
               sys(`  network ${st.networkId ?? "?"} · shard ${st.shardId ?? "?"} · peers ${st.peers ?? 0}`);
               sys(`  latest block ${st.latestBlockNumber ?? "?"} · min phlo price ${st.minPhloPrice ?? "?"}`);
               if (st.shardId && st.shardId !== cfg.shard) {
@@ -5625,6 +5642,7 @@ function connect(): void {
           if (!g || !isAdmin(g, from)) return;                  // only admins set group currencies
           if (typeof d.treasury === "string") g.treasury = d.treasury;
           if (typeof d.kudos === "string") g.kudos = d.kudos;
+          if (typeof d.uri === "string" && looksLikeRegistryUri(d.uri)) g.uri = d.uri;
           saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
@@ -6183,6 +6201,9 @@ function initUx(): void {
       // The Call action belongs to calls.ts; the palette only offers it.
       toggleCall: () => calls.toggle(),
       toggleRecord: () => recorder.toggle(),
+      // A built line goes through the box, so it echoes, logs and reaches the
+      // history exactly like one that was typed.
+      run: (text) => { msgInput.value = text; send(); },
     },
     document.getElementById("cmd-menu"),
   );
@@ -6417,6 +6438,15 @@ function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
 // Merge a Group received in a join handshake (sync-gov): adopt an unknown group
 // whole; for a known group, union members / delegations / issues by latest `at`.
 // Tombstoned groups are skipped. Returns whether anything changed.
+/**
+ * A registry URI, as `/rholang` writes and reads them: `rho:id:` + zbase32 of
+ * the deployer key's hash. Checked rather than trusted because it arrives over
+ * the wire — a group's durable name should not become a place to park text.
+ */
+function looksLikeRegistryUri(s: string): boolean {
+  return /^rho:id:[a-z0-9]{40,60}$/.test(s.trim());
+}
+
 function mergeGroupFromSync(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") return false;
   const r = raw as Record<string, unknown>;
@@ -6445,6 +6475,7 @@ function mergeGroupFromSync(raw: unknown): boolean {
       ...(Object.keys(topicDelegations).length ? { topicDelegations } : {}),
       ...(typeof r.treasury === "string" ? { treasury: r.treasury } : {}),
       ...(typeof r.kudos === "string" ? { kudos: r.kudos } : {}),
+      ...(typeof r.uri === "string" && looksLikeRegistryUri(r.uri) ? { uri: r.uri } : {}),
       ...(Object.keys(vaults).length ? { vaults } : {}), issues,
     });
     return true;
@@ -6453,6 +6484,7 @@ function mergeGroupFromSync(raw: unknown): boolean {
   let changed = false;
   if (typeof r.treasury === "string" && !existing.treasury) { existing.treasury = r.treasury; changed = true; }
   if (typeof r.kudos === "string" && !existing.kudos) { existing.kudos = r.kudos; changed = true; }
+  if (typeof r.uri === "string" && looksLikeRegistryUri(r.uri) && !existing.uri) { existing.uri = r.uri; changed = true; }
   for (const [pid, m] of Object.entries(inMembers)) {
     const cur = existing.members[pid];
     const at = typeof m.at === "number" ? m.at : 0;
@@ -7222,6 +7254,18 @@ function buildGroupCard(g: Group): HTMLElement {
     card.appendChild(fin);
   }
 
+  // The group's durable name, when it has one. Clicking reads it back, which is
+  // the only way to tell a recorded URI from a remembered one.
+  if (g.uri) {
+    const u = document.createElement("div");
+    u.className = "poll-you";
+    u.textContent = `📇 on chain: ${g.uri}`;
+    u.title = "click to read the record back from the node";
+    u.style.cursor = "pointer";
+    u.addEventListener("click", () => { prefill(`/rholang read ${g.uri}`); });
+    card.appendChild(u);
+  }
+
   // Admin / member controls
   const ctrls = document.createElement("div"); ctrls.style.marginTop = "0.4rem";
   // Card-button clicks set the focused group, so the prefilled command targets
@@ -7517,13 +7561,21 @@ async function init(): Promise<void> {
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
   msgInput.addEventListener("keydown", (e) => {
-    if (palette.isOpen()) {
+    // A quick action collecting its arguments owns Enter and Esc: the box holds
+    // an answer, not a message.
+    if (palette.guiding()) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); palette.submitArg(); return; }
+      if (e.key === "Escape") { e.preventDefault(); palette.cancel(); return; }
+    }
+    // Only when there is something to pick. A usage hint is not a menu: Enter
+    // has to send the line it is a hint about.
+    if (palette.isPicking()) {
       if (e.key === "ArrowDown") { e.preventDefault(); palette.move(1); return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); palette.move(-1); return; }
       // Shift+Enter is a continuation, not a completion: let it fall through.
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") { e.preventDefault(); palette.accept(); return; }
-      if (e.key === "Escape")    { e.preventDefault(); palette.hide(); return; }
     }
+    if (palette.isOpen() && e.key === "Escape") { e.preventDefault(); palette.hide(); return; }
     // Esc drops held lines. The line in the box is left alone — you may well
     // want to keep typing it; it is the earlier lines you are taking back.
     if (e.key === "Escape" && pendingLines.length) { e.preventDefault(); discardPending(); return; }
