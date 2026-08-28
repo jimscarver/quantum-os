@@ -61,6 +61,8 @@ export class QOSPeer {
   /** peerId → when to try dialling again, and how many times we have. */
   private retryAt = new Map<string, number>();
   private retryN = new Map<string, number>();
+  /** peerId → when the current connection attempt began. */
+  private attemptAt = new Map<string, number>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   private channels = new Map<string, RTCDataChannel>();
   private config: PeerConfig;
@@ -87,7 +89,11 @@ export class QOSPeer {
   /// How often to look for peers in the room we have no channel to.
   private static readonly SWEEP_MS = 12_000;
   /// Backoff between attempts at one peer, doubling to a ceiling.
-  private static readonly RETRY_MIN_MS = 8_000;
+  /// Long enough for a slow path to finish: mobile networks gather more
+  /// candidates and check them for longer than a laptop on wifi does.
+  private static readonly RETRY_MIN_MS = 20_000;
+  /// How long a connection may be "connecting" before it counts as stuck.
+  private static readonly ATTEMPT_PATIENCE_MS = 45_000;
   private static readonly RETRY_MAX_MS = 90_000;
   private static readonly STABLE_MS = 15000;   // a connection must survive this long to reset the backoff
   // Live-call media: the local mic/cam stream shared into all connections, and a
@@ -412,6 +418,12 @@ export class QOSPeer {
       if (peerId === this.peerId) continue;
       if (this.channels.get(peerId)?.readyState === "open") continue;
       if (this.peerId > peerId) continue;             // their side dials
+      // An attempt already under way is not a failure to retry. Redialling one
+      // sends a fresh offer with a new ICE ufrag, the far side rebuilds, and
+      // the negotiation in flight is thrown away — so a peer whose path is
+      // simply slow (mobile, more candidates, longer checks) would be reset
+      // before it could ever finish, forever.
+      if (this.connecting(peerId)) continue;
       if (now < (this.retryAt.get(peerId) ?? 0)) continue;
       const n = (this.retryN.get(peerId) ?? 0) + 1;
       this.retryN.set(peerId, n);
@@ -423,7 +435,27 @@ export class QOSPeer {
     }
   }
 
+  /**
+   * Is a connection to this peer still being made?
+   *
+   * "connecting" and "new" mean ICE is still working; a check that has been
+   * running for longer than any real handshake takes is treated as stuck, so a
+   * negotiation that silently died cannot block retries indefinitely.
+   */
+  private connecting(peerId: string): boolean {
+    const pc = this.connections.get(peerId);
+    if (!pc) return false;
+    const state = pc.connectionState;
+    if (state !== "new" && state !== "connecting") return false;
+    const since = this.attemptAt.get(peerId) ?? 0;
+    return Date.now() - since < QOSPeer.ATTEMPT_PATIENCE_MS;
+  }
+
   private async initiateConnection(remotePeerId: string): Promise<void> {
+    // When this attempt began, so the sweep can tell "still working on it" from
+    // "died quietly" without asking the connection, which says "connecting"
+    // either way.
+    this.attemptAt.set(remotePeerId, Date.now());
     const pc = this.createPeerConnection(remotePeerId);
 
     const ch = pc.createDataChannel("qos");
@@ -442,6 +474,9 @@ export class QOSPeer {
   }
 
   private async handleOffer(fromPeerId: string, sdp: string): Promise<void> {
+    // Answering is an attempt too: the sweep must not dial a peer we are in the
+    // middle of answering, or the two sides tear each other's work down.
+    this.attemptAt.set(fromPeerId, Date.now());
     // Reuse the existing connection for a renegotiation (e.g. media tracks added
     // mid-call). Only create a fresh connection for a first-time offer — the old
     // "always recreate" behaviour would have torn down the live data channel.
@@ -567,6 +602,7 @@ export class QOSPeer {
       // rather than from wherever this one left off.
       this.retryAt.delete(peerId);
       this.retryN.delete(peerId);
+      this.attemptAt.delete(peerId);
       this.config.onChannelOpen?.(peerId);
       console.log(`[qos-peer] data channel open with ${peerId}`);
       // If a call is already in progress, push our media to the newcomer (but never
