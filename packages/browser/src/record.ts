@@ -146,9 +146,16 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     try {
       // `audio: true` is what makes the room audible — it is the picker's
       // "share tab audio" box, and only a tab share offers it on Linux.
+      //
+      // `displaySurface` only says which pane the picker opens on, and "window"
+      // is where people are going: Chrome opens on the tab list otherwise, so
+      // every recording of an application costs an extra click. Switching pane
+      // is still one click, and `surfaceSwitching` lets it change mid-recording.
       display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: FPS }, audio: true,
-      });
+        video: { frameRate: FPS, displaySurface: "window" },
+        audio: true,
+        surfaceSwitching: "include",
+      } as DisplayMediaStreamOptions);
     } catch (e) {
       // Cancelling the picker is an ordinary thing to do, not an error.
       if ((e as DOMException)?.name !== "NotAllowedError") {

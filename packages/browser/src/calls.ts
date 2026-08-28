@@ -260,7 +260,12 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       return;
     }
     try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      // Open on the window pane: sharing one application is what people mean by
+      // sharing their screen, and Chrome otherwise opens on the tab list.
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: "window" },
+        surfaceSwitching: "include",
+      } as DisplayMediaStreamOptions);
     } catch (e) {
       // Cancelling the picker is an ordinary thing to do, not an error to report.
       if ((e as DOMException)?.name !== "NotAllowedError") {
