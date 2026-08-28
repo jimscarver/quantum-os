@@ -26,6 +26,10 @@ export const CMD_HELP: Record<string, string[]> = {
           "On success your seed/anchor and display name are restored, your group membership is re-linked to the restored identity, and it's re-announced so peers recognize you again. Wrong password fails cleanly with no change."],
   cap: ["/cap [label] — mint a new random ZFA capability token, local only (not broadcast).", "e.g. /cap alice-read"],
   grant: ["/grant [label] — mint a ZFA capability token AND broadcast it to the room.", "e.g. /grant moderator"],
+  record: ["/record — start recording your screen with audio; /record again (or the ⏹ button) stops and saves it.",
+           "Records what is on your screen, so it keeps whatever you had up — call tiles, chat, another window — and needs no call in progress.",
+           "Audio: your mic, plus the tab's audio if you tick “Share tab audio” in the picker — that is what captures the other voices in the room.",
+           "Saved as a .webm download (15 fps, ~540 MB/hour). The room is told when you start and stop."],
   zfa: ["/zfa <token> — validate a cap:label:hex capability; shows ZFA balance, spectral gap, twist counts."],
   braket: ["/braket <state> [state …] — evaluate bra-ket states as 2×2 density matrices.", "states: 0 1 + - i -i  (space-separated = superposition).", "e.g. /braket 0 1   ·   /braket -i"],
   qucalc: ["/qucalc [twists | @name | cap:token] — evaluate a RhoQuCalc twist sequence's ZFA balance.", "twists: symbolic ^v<>/\\+- or hex 0-7; compose lemmas with @name (or @[multi word]).", "e.g. /qucalc +-+-   ·   /qucalc @major @minor"],
@@ -114,6 +118,7 @@ export const SLASH_COMMANDS: SlashCmd[] = [
   { name: "grant",   template: "/grant ",     desc: "generate + share a capability token" },
   { name: "zfa",     template: "/zfa ",       desc: "validate a capability token" },
   { name: "braket",  template: "/braket ",    desc: "evaluate bra-ket (0 1 + - i -i)" },
+  { name: "record",  template: "/record",     desc: "record your screen with audio" },
   { name: "qucalc",  template: "/qucalc ",    desc: "evaluate a RhoQuCalc twist sequence" },
   { name: "conj",    template: "/conj ",      desc: "Hermitian adjoint of a twist sequence" },
   { name: "freq",    template: "/freq ",      desc: "ZFA frequency spectrum / C(2n,n)" },
@@ -143,6 +148,7 @@ interface QuickAction { label: string; ico: string; fill: string; hint: string }
 const QUICK_ACTIONS: QuickAction[] = [
   { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
   { label: "Call",       ico: "📞", fill: "",                hint: "" },
+  { label: "Record",     ico: "⏺", fill: "",                hint: "" },
   { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
   { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
   { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality  (multi-word: /lemma [all men are mortal])" },
@@ -162,6 +168,8 @@ export interface PaletteHost {
   say(text: string): void;
   /** The Call action, which belongs to calls.ts rather than here. */
   toggleCall(): void;
+  /** The Record action, which belongs to record.ts. */
+  toggleRecord(): void;
 }
 
 export interface Palette {
@@ -216,10 +224,14 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
       for (const a of QUICK_ACTIONS) {
         const btn = document.createElement("button");
         btn.className = "action-btn";
+        // Named so a module that owns an action can find its own button —
+        // recording repaints its one with the elapsed time.
+        btn.dataset.action = a.label.toLowerCase();
         btn.title = a.hint || "browse all commands";
         const ico = document.createElement("span"); ico.className = "ico"; ico.textContent = a.ico;
+        const lab = document.createElement("span"); lab.className = "act-label"; lab.textContent = a.label;
         btn.appendChild(ico);
-        btn.appendChild(document.createTextNode(a.label));
+        btn.appendChild(lab);
         btn.addEventListener("click", () => {
           if (a.label === "Commands") {
             if (isOpen()) hide();
@@ -227,6 +239,7 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
             return;
           }
           if (a.label === "Call") { host.toggleCall(); return; }
+          if (a.label === "Record") { host.toggleRecord(); return; }
           host.input.value = a.fill;
           host.input.focus();
           if (a.hint) host.say(a.hint);

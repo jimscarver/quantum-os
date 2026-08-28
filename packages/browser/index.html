@@ -310,6 +310,10 @@
     .action-btn { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#bdbdbd; font-family:inherit; font-size:0.7rem; padding:0.3rem 0.6rem; cursor:pointer; display:inline-flex; gap:0.35rem; align-items:center; }
     .action-btn:hover { background:#1e2e2e; border-color:#2a5a5a; color:#7fdbca; }
     .action-btn .ico { font-size:0.8rem; }
+    /* Recording is a state worth seeing from across the room. */
+    .action-btn.recording { border-color:#7a2a2a; color:#ff8a8a; background:#1e1010; }
+    .action-btn.recording .ico { animation:rec-pulse 1.6s ease-in-out infinite; }
+    @keyframes rec-pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
 
     /* Command palette / autocomplete */
     .input-wrap { position:relative; }

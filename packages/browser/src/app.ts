@@ -29,6 +29,7 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          formatDefinition, findMacros, bodyKind, MacroError,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { createCalls, type Calls } from "./calls.js";
+import { createRecorder, type Recorder } from "./record.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
 import { createAttachments, renderMedia, type Attachments,
          type MediaAttachment, type MediaKind } from "./attachments.js";
@@ -4263,6 +4264,13 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "record": {
+      // Local, and deliberately not a broadcast of its own output: the recorder
+      // tells the room itself, on start and on stop.
+      recorder.toggle();
+      break;
+    }
+
     case "render":
     case "animate": {
       // Open an animation of THIS room: its perspectives (peers, you included)
@@ -5642,6 +5650,10 @@ function connect(): void {
           addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
           return;
         }
+        if (d.kind === "record") {
+          addMessage("", `${d.on ? "⏺" : "⏹"} ${peerLabel(from)} ${d.on ? "is recording their screen" : "stopped recording"}`, "system");
+          return;
+        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
@@ -5847,7 +5859,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
@@ -6013,6 +6025,7 @@ function initUx(): void {
       say: (t) => addMessage("", t, "system"),
       // The Call action belongs to calls.ts; the palette only offers it.
       toggleCall: () => calls.toggle(),
+      toggleRecord: () => recorder.toggle(),
     },
     document.getElementById("cmd-menu"),
   );
@@ -6089,6 +6102,15 @@ function initUx(): void {
       cam:   document.getElementById("call-cam")   as HTMLButtonElement | null,
       share: document.getElementById("call-share") as HTMLButtonElement | null,
     },
+  );
+  recorder = createRecorder(
+    {
+      say: (t) => addMessage("", t, "system"),
+      // Nobody should be recorded silently, and the room cannot see the
+      // browser's own recording indicator.
+      announce: (on) => qpeer?.broadcast({ kind: "record", on }),
+    },
+    document.querySelector('#actions-row [data-action="record"]'),
   );
   attachments = createAttachments({
     peer: () => qpeer,
@@ -7248,6 +7270,9 @@ function renderGroups(): void {
 
 /** Live calls. Built in init, once the toolbar elements exist. */
 let calls: Calls;
+
+/** Screen recording. Built in init, once the toolbar button exists. */
+let recorder: Recorder;
 
 /** Attachments over the data channel. Built in init alongside calls. */
 let attachments: Attachments;
