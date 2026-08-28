@@ -5815,7 +5815,11 @@ function connect(): void {
     },
     onRemoteTrack(peerId, stream) {
       const prev = activeRoom; setActiveRoom(ctx);
-      try { if (isUiActive()) calls.remoteStream(peerId, stream); }
+      try {
+        if (isUiActive()) calls.remoteStream(peerId, stream);
+        // A peer who arrives mid-recording still belongs on it.
+        recorder.addAudio(stream);
+      }
       finally { setActiveRoom(prev); }
     },
   });
@@ -6188,6 +6192,9 @@ function initUx(): void {
       // Nobody should be recorded silently, and the room cannot see the
       // browser's own recording indicator.
       announce: (on) => qpeer?.broadcast({ kind: "record", on }),
+      // The room's voices, taken from the call rather than from whatever
+      // surface was captured — a window share carries no audio at all.
+      callAudio: () => calls.audioTracks(),
     },
     document.querySelector('#actions-row [data-action="record"]'),
   );

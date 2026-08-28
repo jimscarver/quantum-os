@@ -11,6 +11,7 @@
 // rather than held.
 
 import type { QOSPeer } from "./peer.js";
+import { preferredSurface, rememberSurface } from "./display.js";
 
 /** What calls need from the app, asked for rather than held. */
 export interface CallHost {
@@ -42,6 +43,8 @@ export interface Calls {
   toggleScreen(): void;
   /** A peer's media arrived. */
   remoteStream(peerId: string, stream: MediaStream): void;
+  /** Every peer's live audio — what a recording needs to have the room on it. */
+  audioTracks(): MediaStreamTrack[];
   /** A peer left, or ended their call: drop their tile. */
   peerGone(peerId: string): void;
   inCall(): boolean;
@@ -61,6 +64,8 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   let screenStream: MediaStream | null = null;
   let inCall = false;
   const tiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
+  /** What each peer is sending, kept so a recording can mix their voice in. */
+  const remote = new Map<string, MediaStream>();
   /** Whether our own tile is carrying the screen rather than the camera. */
   const screens = new Set<string>();
   /** The one tile currently shown big, if any. */
@@ -260,10 +265,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       return;
     }
     try {
-      // Open on the window pane: sharing one application is what people mean by
-      // sharing their screen, and Chrome otherwise opens on the tab list.
+      // Open the picker where this browser shared from last — Chrome's own
+      // default is the tab list, which is rarely what a screen share means.
       screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: "window" },
+        video: { displaySurface: preferredSurface() },
         surfaceSwitching: "include",
       } as DisplayMediaStreamOptions);
     } catch (e) {
@@ -275,6 +280,7 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     }
     const track = screenStream.getVideoTracks()[0];
     if (!track) { stopScreenTracks(); return; }
+    rememberSurface(track);
 
     // Swap it into what we are sending, keeping the camera track to put back.
     cameraTrack = localStream?.getVideoTracks()[0] ?? null;
@@ -342,9 +348,13 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       let v = tiles.get(peerId);
       if (!v) v = makeTile(peerId, host.label(peerId));
       if (v.srcObject !== stream) v.srcObject = stream;
+      remote.set(peerId, stream);
       showBar();
     },
-    peerGone(peerId) { removeTile(peerId); hideBarIfIdle(); },
+    audioTracks() {
+      return [...remote.values()].flatMap((s) => s.getAudioTracks());
+    },
+    peerGone(peerId) { remote.delete(peerId); removeTile(peerId); hideBarIfIdle(); },
     inCall: () => inCall,
   };
 }
