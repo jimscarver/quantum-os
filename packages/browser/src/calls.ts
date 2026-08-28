@@ -271,6 +271,14 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
         surfaceSwitching: "include",
+        // Chrome hides the capturing page from its own picker by default
+        // (`selfBrowserSurface` is "exclude"), which is why the room's own tab
+        // was missing from the list — and it is the tab most worth capturing
+        // here. Monitors are asked for explicitly for the same reason: what the
+        // picker offers should be everything, and the choice should be the
+        // person's.
+        selfBrowserSurface: "include",
+        monitorTypeSurfaces: "include",
       } as DisplayMediaStreamOptions);
     } catch (e) {
       // Cancelling the picker is an ordinary thing to do, not an error to report.

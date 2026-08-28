@@ -181,6 +181,14 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
         video: { frameRate: FPS },
         audio: true,
         surfaceSwitching: "include",
+        // Chrome hides the capturing page from its own picker by default
+        // (`selfBrowserSurface` is "exclude"), which is why the room's own tab
+        // was missing from the list — and it is the tab most worth capturing
+        // here. Monitors are asked for explicitly for the same reason: what the
+        // picker offers should be everything, and the choice should be the
+        // person's.
+        selfBrowserSurface: "include",
+        monitorTypeSurfaces: "include",
         // Everything the device is playing — a video, another app — can only
         // reach a recording through the picker's own checkbox: it is a consent
         // decision the browser reserves for the user, and no constraint ticks
