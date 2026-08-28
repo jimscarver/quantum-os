@@ -33,6 +33,7 @@ export const CMD_HELP: Record<string, string[]> = {
   file: ["/file add — pick files: each is hashed, its bytes kept in this browser, and an entry announced to the room.",
          "/file list [--mine|--here] — what the room has: ● you hold it · ◉ a peer here holds it · ○ no holder present · ⚠ none seen in a week.",
          "/file holders <hash|name> — who has these bytes right now, and when a holder was last seen if nobody does.",
+         "/file get <hash|name> — fetch it from a holder: asked of one peer, written as it arrives, and verified against its hash before it is kept (up to 64 MB). /file cancel gives up.",
          "/file drop <hash|name> — stop holding the bytes; the entry stays, because what the room has and what you keep are different facts.",
          "/file forget <hash|name> — retract the entry: for everyone if you added it, from your view otherwise.",
          "A file's name IS its content hash, so adding the same file twice is one entry and a copy from anyone is verifiable. Fetching from another peer comes next (#100); today the index is the useful part."],
