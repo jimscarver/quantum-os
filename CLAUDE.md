@@ -506,6 +506,8 @@ pnpm dev:signaling   # port 4444
 
 Change the signaling URL in the sidebar to `ws://localhost:4444` to use a local signaling server.
 
+**Reaching a local rnode from the browser.** The dev server is https (Web Crypto needs a secure context), and a browser refuses plain http to any host but **loopback** — where loopback means the machine the *browser* runs on. On a Chromebook that is ChromeOS while rnode is inside the Linux VM, so `http://127.0.0.1:40403` finds nothing and the VM's own address is blocked as mixed content. Vite proxies the node at **`/rnode`** for exactly this: `/rholang rnode https://<host>:5173/rnode` is same-origin https on the cert already accepted. `isBlockedMixedContent` in `app.ts` refuses only what is genuinely blocked (http to a non-loopback host) — loopback is exempt and must not be refused, or a node that works is turned away.
+
 ### Type checking
 
 ```bash

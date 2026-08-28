@@ -2392,14 +2392,15 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   say("```\n" + source + "\n```");
 
   const cfg = loadNodeConfig();
-  // A page served over https cannot fetch http, and the default node is
-  // http://127.0.0.1 — so on the deployed site every request fails before it is
-  // made, with everything looking correctly configured. Say it here rather than
-  // let it arrive as a bare network error after the signing.
-  if (location.protocol === "https:" && cfg.url.startsWith("http://")) {
-    say(`✗ this page is https and ${cfg.url} is http — the browser blocks that before the request is made`);
-    say("  run the app locally (pnpm dev:browser) to reach a node on this machine,");
-    say("  or point at one served over https:  /rholang rnode https://…");
+  // An https page cannot fetch plain http — except to loopback, which browsers
+  // treat as trustworthy, so http://127.0.0.1 and http://localhost are allowed
+  // and must not be refused here. What is genuinely blocked is http to any
+  // other host, which is worth saying before the signing rather than letting it
+  // arrive as a bare network error afterwards.
+  if (location.protocol === "https:" && isBlockedMixedContent(cfg.url)) {
+    say(`✗ this page is https and ${cfg.url} is plain http to another host — the browser blocks that before the request is made`);
+    say("  a node on this machine is reachable at http://127.0.0.1:40403 (loopback is exempt),");
+    say("  otherwise point at one served over https:  /rholang rnode https://…");
     return;
   }
   void (async () => {
@@ -7221,6 +7222,26 @@ function lockerFromGroups(): { group: string; uri: string } | null {
     if (g.locker && isMember(g, me)) return { group: g.name, uri: g.locker };
   }
   return null;
+}
+
+/**
+ * Would the browser refuse this URL as mixed content?
+ *
+ * Only for http to a host that is not loopback. Loopback is "potentially
+ * trustworthy" by the spec every browser implements, so an https page reaching
+ * http://127.0.0.1 is allowed and refusing it here would block a node that
+ * works. Note 127.0.0.1 is the loopback of whichever machine the *browser* runs
+ * on — a node on another box needs that box's address, and then this rule bites
+ * for real.
+ */
+function isBlockedMixedContent(url: string): boolean {
+  if (!url.startsWith("http://")) return false;
+  try {
+    const h = new URL(url).hostname;
+    const loopback = h === "localhost" || h.endsWith(".localhost") || h === "::1"
+      || h === "[::1]" || /^127\./.test(h);
+    return !loopback;
+  } catch { return false; }
 }
 
 function looksLikeRegistryUri(s: string): boolean {

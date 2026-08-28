@@ -48,6 +48,19 @@ export default defineConfig({
     // ws://127.0.0.1:4444 directly and skip the proxy.
     proxy: {
       "/signal": { target: "ws://127.0.0.1:4444", ws: true, changeOrigin: true },
+      // And rnode, for the same reason. The page is https; the node speaks
+      // plain http, and a browser refuses http to any host but loopback — where
+      // "loopback" means the machine the BROWSER runs on. On a Chromebook that
+      // is ChromeOS, while the node is inside the Linux VM, so 127.0.0.1 finds
+      // nothing and the VM's own address is blocked as mixed content.
+      //
+      // Coming through here it is https on the origin the page already loaded
+      // from, on the cert already accepted:  /rholang rnode https://<host>:5173/rnode
+      "/rnode": {
+        target: "http://127.0.0.1:40403",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/rnode/, ""),
+      },
     },
     // Listen on every interface: the point of the cert is to be reachable from
     // somewhere that is not this machine's loopback.
