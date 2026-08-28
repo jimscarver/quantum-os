@@ -162,6 +162,8 @@ export type RholangMode = "eval" | "deploy";
 export interface RholangEditorResult {
   source: string;
   mode: RholangMode;
+  /** Show what would be sent, and send nothing. */
+  echo?: boolean;
 }
 
 export interface RholangEditorOptions {
@@ -222,7 +224,8 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     card.appendChild(h);
 
     const sub = document.createElement("div");
-    sub.textContent = `${opts.nodeUrl} — Evaluate runs it read-only: no block, no cost. `
+    sub.textContent = `${opts.nodeUrl} — Show displays what would be sent and sends nothing. `
+      + `Evaluate runs it read-only: no block, no cost. `
       + `Deploy signs and submits it: costs phlo, lands in a block.`;
     sub.style.cssText = "font-size:12px;opacity:.7;margin-bottom:10px";
     card.appendChild(sub);
@@ -287,6 +290,14 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     evalBtn.textContent = "Evaluate";
     evalBtn.title = "run it read-only — no block, no cost";
     evalBtn.style.cssText = opts.mode === "eval" ? primary : secondary;
+    // Show answers "should I sign this": the expanded program, in the form it
+    // would be sent, without sending it. It belongs next to the buttons that
+    // send, not behind a separate command you have to know to type. Named for
+    // what MacRhoLang called it, which is also what /macro show does.
+    const echoBtn = document.createElement("button");
+    echoBtn.textContent = "Show";
+    echoBtn.title = "show the program as it would be sent — macros expanded, nothing run";
+    echoBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
     const deployBtn = document.createElement("button");
     deployBtn.textContent = "Sign and deploy";
     deployBtn.title = "sign with this browser's key and submit — costs phlo, lands in a block";
@@ -296,6 +307,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     btnRow.appendChild(clearBtn);
     btnRow.appendChild(hint);
     btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(echoBtn);
     btnRow.appendChild(opts.mode === "deploy" ? evalBtn : deployBtn);
     btnRow.appendChild(opts.mode === "deploy" ? deployBtn : evalBtn);
     card.appendChild(btnRow);
@@ -438,9 +450,9 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
       overlay.remove();
       resolve(result);
     };
-    const submit = (mode: RholangMode): void => {
+    const submit = (mode: RholangMode, echo = false): void => {
       const source = ta.value.trim();
-      close(source ? { source, mode } : null);
+      close(source ? { source, mode, ...(echo ? { echo } : {}) } : null);
     };
 
     ta.addEventListener("keydown", (e) => {
@@ -467,6 +479,9 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     cancelBtn.addEventListener("click", () => close(null));
     evalBtn.addEventListener("click", () => submit("eval"));
     deployBtn.addEventListener("click", () => submit("deploy"));
+    // Echoed in the form of whichever action is primary — the deploy form and
+    // the eval form differ, and the one worth reading is the one about to run.
+    echoBtn.addEventListener("click", () => submit(opts.mode, true));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
   });
 }

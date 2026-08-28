@@ -1848,7 +1848,7 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
     // The editor says which button ended it, so the verb that opened it is only
     // a default: a program written to be evaluated can be deployed on the spot.
     const { source, mode: chosen } = written;
-    if (echoOnly) { echoRholang(chosen, source); return; }
+    if (echoOnly || written.echo) { echoRholang(chosen, source); return; }
     runRholangProgram(chosen, source);
   })();
 }
@@ -2647,7 +2647,7 @@ function handleCommand(raw: string): string[] {
         break;
       }
 
-      if (sub === "echo") {
+      if (sub === "echo" || sub === "show") {
         // Evidence, not explanation: what the expansion actually produced,
         // before anything runs and before anything is signed.
         const def = macroStore.get((parts[2] || "").toLowerCase().replace(/^[$+]/, ""));
@@ -4477,6 +4477,7 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
+        case "show":
         case "echo": {
           // Show what would actually be sent, and run nothing. A program is
           // rewritten before it leaves the browser — wrapped so `return` and the
