@@ -154,8 +154,8 @@ const sectionOf = (text) => {
   }
   return "";
 };
-check("a node is not part of getting set up",
-      sectionOf("Point at a node") === "If you use a chain", sectionOf("Point at a node"));
+check("an rnode is not part of getting set up",
+      sectionOf("Point at an rnode") === "If you use a chain", sectionOf("Point at an rnode"));
 check("nor is a signing key",
       sectionOf("signing key") === "If you use a chain", sectionOf("signing key"));
 check("the list is sectioned, group first",

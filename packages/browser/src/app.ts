@@ -4455,7 +4455,7 @@ function handleCommand(raw: string): string[] {
           void (async () => {
             try {
               const st = await nodeStatus(cfg);
-              sys(`✓ node ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
+              sys(`✓ rnode ${st.version?.node ?? "?"} (api ${st.version?.api ?? "?"})`);
               sys(`  network ${st.networkId ?? "?"} · shard ${st.shardId ?? "?"} · peers ${st.peers ?? 0}`);
               sys(`  latest block ${st.latestBlockNumber ?? "?"} · min phlo price ${st.minPhloPrice ?? "?"}`);
               if (st.shardId && st.shardId !== cfg.shard) {

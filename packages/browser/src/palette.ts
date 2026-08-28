@@ -192,9 +192,9 @@ interface QuickAction {
  * Sectioned, because it holds unlike things: what a group does, which is
  * ongoing; getting set up, which is a sequence you do once; and reaching a
  * chain, which most rooms never do at all. A flat list makes each look like
- * more of the one before it — and putting a node and a signing key in a
+ * more of the one before it — and putting an rnode and a signing key in a
  * "getting set up" list says a chain is required, when a room is whole without
- * one. Peers, decisions, notes and groups need no node, no key and no phlo.
+ * one. Peers, decisions, notes and groups need no rnode, no key and no phlo.
  */
 const OTHER_ACTIONS: QuickAction[] = [
   { label: "Groups", ico: "🏛", kind: "command", cmd: "/gov", section: "Group",
@@ -234,11 +234,11 @@ const OTHER_ACTIONS: QuickAction[] = [
 
   // Last, and named so it reads as a branch rather than a next step. A room is
   // whole without a chain: peers, decisions, notes and groups all work with no
-  // node, no key and no phlo. A chain is for the part you want to outlive the
+  // rnode, no key and no phlo. A chain is for the part you want to outlive the
   // room, and most rooms never need it.
-  { label: "Point at a node", ico: "🔗", kind: "command", cmd: "/rholang rnode", section: "If you use a chain",
+  { label: "Point at an rnode", ico: "🔗", kind: "command", cmd: "/rholang rnode", section: "If you use a chain",
     args: [{ prompt: "Which rnode?", example: "http://localhost:40403" }],
-    hint: "where /rholang eval and deploy send programs — nothing else in the app needs it" },
+    hint: "where /rholang eval and deploy send programs — nothing else in the app needs an rnode" },
   { label: "Make a signing key", ico: "🗝", kind: "command", cmd: "/rholang key generate",
     section: "If you use a chain",
     hint: "a secp256k1 key held in this browser, wrapped by a passphrase — only a deploy needs one" },
@@ -256,8 +256,8 @@ const QUICK_ACTIONS: QuickAction[] = [
   { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
   { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
-    hint: "write rholang and run it on a node — opens the editor (Ctrl+Enter runs, Esc cancels). "
-        + "Needs a node: Other ▸ If you use a chain. Nothing else in the room does" },
+    hint: "write rholang and run it on an rnode — opens the editor (Ctrl+Enter runs, Esc cancels). "
+        + "Needs an rnode: Other ▸ If you use a chain. Nothing else in the room does" },
   { label: "Poll", ico: "🗳", kind: "command", cmd: "/poll new",
     args: [
       { prompt: "What are you deciding?", example: "Lunch — pizza, burgers or salad?" },
