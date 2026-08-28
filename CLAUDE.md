@@ -323,6 +323,12 @@ What matters is that the room **says so**: a peer in the roster with no data cha
 
 Past ten needs a different topology (an SFU for media, a relay or partial-mesh/gossip overlay for data), not a bigger rate limit.
 
+### Whether two peers can connect at all (`/ice`)
+
+STUN only tells each side what its public address looks like; the connection is still made **directly**. Two peers behind symmetric NAT — a corporate network, mobile CGNAT — have no address pair that works, so the handshake fails **permanently** and the retry sweep cannot help: it is not a timing problem. Only a TURN relay crosses that.
+
+`DEFAULT_ICE` is STUN alone, and a relay is **not** defaulted because it carries the traffic (DTLS keeps it unreadable, but whose machine it passes through is the user's decision). `/ice list · test · stun · turn · reset` is where that decision is made, persisted per device (`qos-ice`) and merged with the sidebar's STUN field by `iceServersFor`. **`/ice test`** gathers candidates for 5s and names what the network allows — `host` (same LAN), `srflx` (STUN answered), `relay` (a TURN server is available) — which is the difference between "this pair is slow to connect" and "this pair cannot connect".
+
 ### Signaling reconnect / false peer left-right
 
 When the signaling WebSocket drops and reconnects (Render.com sleep, network blip):

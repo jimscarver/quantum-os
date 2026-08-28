@@ -22,7 +22,18 @@ export interface PeerConfig {
   onRemoteTrack?: (peerId: string, stream: MediaStream) => void;   // live-call media
 }
 
-const DEFAULT_ICE: RTCIceServer[] = [
+/**
+ * STUN alone, which is enough for most pairs and not for all.
+ *
+ * STUN only tells each side what its public address looks like; the connection
+ * is still made directly. Two peers behind symmetric NAT — a corporate network,
+ * a mobile carrier doing CGNAT — have no address pair that works, so the
+ * handshake fails permanently and retrying cannot help. That case needs a TURN
+ * relay, which is not defaulted because a relay carries the traffic: DTLS keeps
+ * it unreadable, but whose machine it passes through is the user's decision to
+ * make, not ours to make quietly. `/ice` is where it is made.
+ */
+export const DEFAULT_ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ];
 

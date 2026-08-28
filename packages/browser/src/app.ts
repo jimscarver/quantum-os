@@ -2,7 +2,7 @@ import { loadZfa, generateCapability, validateCapability,
          spectralGap, achievesZfa, isPauliClosed,
          classifyCoupling, isPairwiseBalanced, signedAction,
          foldsToScalar, COUPLED_BASELINE } from "./zfa.js";
-import { QOSPeer } from "./peer.js";
+import { QOSPeer, DEFAULT_ICE } from "./peer.js";
 import { parseNoteLabel, denomination as noteDenomination,
          mintCurrencyToken, mintNote, mintNoteSeries, mintReceipt,
          termsHash8, seriesKey as makeSeriesKey,
@@ -1003,6 +1003,36 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
 
 // "connected · N peers" — the live count lets you watch peers drop and reconnect
 // (e.g. after a tab switch) instead of a static "connected".
+/**
+ * The ICE servers this browser uses, per device rather than per room.
+ *
+ * Kept here rather than in `peer.ts` because it is a preference: whose relay a
+ * connection may pass through is a decision, and the peer transport should not
+ * be the thing that holds it.
+ */
+const ICE_KEY = "qos-ice";
+
+function loadIceServers(): RTCIceServer[] {
+  try {
+    const raw = localStorage.getItem(ICE_KEY);
+    if (!raw) return DEFAULT_ICE;
+    const list = JSON.parse(raw) as RTCIceServer[];
+    return Array.isArray(list) && list.length ? list : DEFAULT_ICE;
+  } catch { return DEFAULT_ICE; }
+}
+
+function saveIceServers(list: RTCIceServer[] | null): void {
+  if (list) localStorage.setItem(ICE_KEY, JSON.stringify(list));
+  else localStorage.removeItem(ICE_KEY);
+}
+
+/** What a connection may use: what `/ice` holds, with the sidebar's STUN first. */
+function iceServersFor(stun: string): RTCIceServer[] {
+  const saved = loadIceServers();
+  if (!stun) return saved;
+  return [{ urls: stun }, ...saved.filter((s) => JSON.stringify(s.urls) !== JSON.stringify(stun))];
+}
+
 function connectedLabel(): string {
   const n = peers.size;
   const out = unreachablePeers().length;
@@ -1048,7 +1078,8 @@ function reportUnreachable(id: string): void {
       + `${peerLabel(id)} is in the room but not connected to you: neither of you sees what the other types. `
       + `Split the group (five is where a room actually thinks together) or run your own signaling server.`
     : `⚠ still not connected to ${peerLabel(id)} — they are in the room but no channel has opened, `
-      + `so neither of you sees what the other types. It keeps retrying; reloading either side also settles it.`,
+      + `so neither of you sees what the other types. It keeps retrying; reloading either side also settles it. `
+      + `If it never connects, the two networks may have no direct path — /ice test says whether yours can be crossed.`,
     "system");
   renderPeers();
 }
@@ -5051,6 +5082,79 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "ice": {
+      // Whether two peers can connect at all is decided here, and it is the one
+      // piece of the room that no amount of retrying can substitute for: two
+      // peers behind symmetric NAT have no direct path, and only a relay makes
+      // one.
+      const iParts = arg.trim().split(/\s+/).filter(Boolean);
+      const isub = (iParts[0] || "list").toLowerCase();
+
+      if (isub === "list" || isub === "") {
+        const list = iceServersFor(stunUrlEl.value.trim());
+        sys(`ice servers (${list.length}):`);
+        for (const srv of list) {
+          const urls = Array.isArray(srv.urls) ? srv.urls.join(", ") : srv.urls;
+          sys(`  ${urls}${srv.username ? "   (with credentials)" : ""}`);
+        }
+        if (!list.some((srv) => String(srv.urls).includes("turn:"))) {
+          sys("  no relay (turn:) — two peers behind restrictive NAT cannot connect without one");
+          sys("  /ice turn turn:host:3478 <user> <pass>   ·   /ice test  to see what your network allows");
+        }
+        break;
+      }
+
+      if (isub === "turn" || isub === "stun") {
+        const url = iParts[1];
+        if (!url || !url.startsWith(isub + ":")) { sys(`usage: /ice ${isub} ${isub}:host:port` + (isub === "turn" ? " <user> <pass>" : "")); break; }
+        const entry: RTCIceServer = isub === "turn"
+          ? { urls: url, username: iParts[2] ?? "", credential: iParts[3] ?? "" }
+          : { urls: url };
+        const list = loadIceServers().filter((srv) => srv.urls !== url);
+        saveIceServers([...list, entry]);
+        sys(`✓ added ${url} — reconnect for it to take effect (Disconnect, then Connect)`);
+        if (isub === "turn") sys("  a relay carries your traffic; DTLS keeps it unreadable, but it passes through that machine");
+        break;
+      }
+
+      if (isub === "reset") { saveIceServers(null); sys("ice servers back to the default (stun only) — reconnect to apply"); break; }
+
+      if (isub === "test") {
+        // Ask the network what it will give us. Only a relay candidate answers
+        // "can I reach somebody whose network is as awkward as mine".
+        sys("gathering candidates…");
+        void (async () => {
+          const seen = new Set<string>();
+          const pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
+          pc.createDataChannel("probe");
+          pc.onicecandidate = (e) => {
+            if (!e.candidate) return;
+            const type = /\btyp (\w+)/.exec(e.candidate.candidate)?.[1];
+            if (type) seen.add(type);
+          };
+          await pc.setLocalDescription(await pc.createOffer());
+          await new Promise((r) => setTimeout(r, 5000));
+          pc.close();
+          const kinds = [...seen];
+          addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
+          addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
+          addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
+                                                 : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
+          addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
+                                                 : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
+        })();
+        break;
+      }
+
+      sys(`unknown subcommand: /ice ${isub}`);
+      sys("  /ice list                          — what a connection may use");
+      sys("  /ice stun stun:host:3478           — add a STUN server");
+      sys("  /ice turn turn:host:3478 <u> <p>   — add a relay, for networks direct connection cannot cross");
+      sys("  /ice test                          — what your network actually allows");
+      sys("  /ice reset                         — back to the default");
+      break;
+    }
+
     case "record": {
       // Local, and deliberately not a broadcast of its own output: the recorder
       // tells the room itself, on start and on stop.
@@ -5432,7 +5536,7 @@ function connect(): void {
   const newPeer = new QOSPeer({
     signalingUrl,
     roomId,
-    iceServers: stunUrl ? [{ urls: stunUrl }] : undefined,
+    iceServers: iceServersFor(stunUrl),
     onSignalingOpen() {
       const prev = activeRoom; setActiveRoom(ctx);
       try {
