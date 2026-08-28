@@ -140,6 +140,24 @@ ran.length = 0;
 button("other").fire("click");
 const items = () => menu.children.filter((c) => c.className === "cmd-item");
 const entry = (text) => items().find((c) => c.children[0].textContent.includes(text));
+// A chain is a branch, not a step. Nothing that needs a node may sit in the
+// sequence someone reads as "what I have to do to start".
+const heads = () => menu.children.filter((c) => c.className.includes("next-head"))
+  .map((c) => c.textContent);
+check("reaching a chain is its own section, and it is last",
+      heads()[heads().length - 1] === "If you use a chain", heads().join(" | "));
+const sectionOf = (text) => {
+  let sec = "";
+  for (const c of menu.children) {
+    if (c.className.includes("next-head")) sec = c.textContent;
+    else if (c.children[0]?.textContent.includes(text)) return sec;
+  }
+  return "";
+};
+check("a node is not part of getting set up",
+      sectionOf("Point at a node") === "If you use a chain", sectionOf("Point at a node"));
+check("nor is a signing key",
+      sectionOf("signing key") === "If you use a chain", sectionOf("signing key"));
 check("the list is sectioned, group first",
       menu.children[0].className.includes("next-head")
       && menu.children[0].textContent === "Group", menu.children[0].textContent);

@@ -189,9 +189,12 @@ interface QuickAction {
 /**
  * `Other` — what does not earn a button but should not need /help to find.
  *
- * Sectioned, because it holds two unlike things: what a group does, which is
- * ongoing, and getting set up, which is a sequence you do once. A flat list
- * makes the second look like more of the first.
+ * Sectioned, because it holds unlike things: what a group does, which is
+ * ongoing; getting set up, which is a sequence you do once; and reaching a
+ * chain, which most rooms never do at all. A flat list makes each look like
+ * more of the one before it — and putting a node and a signing key in a
+ * "getting set up" list says a chain is required, when a room is whole without
+ * one. Peers, decisions, notes and groups need no node, no key and no phlo.
  */
 const OTHER_ACTIONS: QuickAction[] = [
   { label: "Groups", ico: "🏛", kind: "command", cmd: "/gov", section: "Group",
@@ -206,12 +209,6 @@ const OTHER_ACTIONS: QuickAction[] = [
         example: "3" },
     ],
     hint: "trust weights their vote — and is staked: a ⅔ censure quorum slashes whoever vouched" },
-  { label: "Record where the group lives on chain", ico: "📇", kind: "command", cmd: "/gov uri",
-    section: "Group",
-    args: [{ prompt: "Which registry URI? (blank to see the one recorded)",
-             example: "rho:id:…", optional: true }],
-    hint: "a room is ephemeral and a registry entry is not — an admin records where the group was deployed" },
-
   { label: "Mint a note", ico: "$", kind: "command", cmd: "/note grant", section: "Value",
     args: [
       { prompt: "Which currency?", example: "USD" },
@@ -230,26 +227,37 @@ const OTHER_ACTIONS: QuickAction[] = [
     section: "Getting set up",
     args: [{ prompt: "Which handle? (blank to paste a recovery string instead)", example: "jim", optional: true }],
     hint: "restore an identity from a group you have rejoined" },
-  { label: "Point at a chain", ico: "🔗", kind: "command", cmd: "/rholang rnode", section: "Getting set up",
-    args: [{ prompt: "Which rnode?", example: "http://localhost:40403" }],
-    hint: "the node /rholang eval and deploy talk to" },
-  { label: "Make a signing key", ico: "🗝", kind: "command", cmd: "/rholang key generate",
-    section: "Getting set up",
-    hint: "a secp256k1 key held in this browser, wrapped by a passphrase — a deploy needs one" },
-  { label: "Claim your locker record", ico: "📇", kind: "command", cmd: "/rholang register",
-    section: "Getting set up",
-    hint: "the on-chain record that makes later lookups answer" },
   { label: "Show the invite link", ico: "✉", kind: "command", cmd: "/room ref", section: "Getting set up",
     hint: "prints the room URL into the transcript — it is a capability, so only do this on a screen you trust" },
   { label: "What can I type?", ico: "?", kind: "command", cmd: "/help", section: "Getting set up",
     hint: "every command, with per-command detail behind /help <command>" },
+
+  // Last, and named so it reads as a branch rather than a next step. A room is
+  // whole without a chain: peers, decisions, notes and groups all work with no
+  // node, no key and no phlo. A chain is for the part you want to outlive the
+  // room, and most rooms never need it.
+  { label: "Point at a node", ico: "🔗", kind: "command", cmd: "/rholang rnode", section: "If you use a chain",
+    args: [{ prompt: "Which rnode?", example: "http://localhost:40403" }],
+    hint: "where /rholang eval and deploy send programs — nothing else in the app needs it" },
+  { label: "Make a signing key", ico: "🗝", kind: "command", cmd: "/rholang key generate",
+    section: "If you use a chain",
+    hint: "a secp256k1 key held in this browser, wrapped by a passphrase — only a deploy needs one" },
+  { label: "Claim your locker record", ico: "📇", kind: "command", cmd: "/rholang register",
+    section: "If you use a chain",
+    hint: "the on-chain record that makes later lookups answer" },
+  { label: "Record where a group lives on chain", ico: "📇", kind: "command", cmd: "/gov uri",
+    section: "If you use a chain",
+    args: [{ prompt: "Which registry URI? (blank to see the one recorded)",
+             example: "rho:id:…", optional: true }],
+    hint: "a room is ephemeral and a registry entry is not — an admin records where the group was deployed" },
 ];
 
 const QUICK_ACTIONS: QuickAction[] = [
   { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
   { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
-    hint: "write rholang and run it on a node — opens the editor (Ctrl+Enter runs, Esc cancels)" },
+    hint: "write rholang and run it on a node — opens the editor (Ctrl+Enter runs, Esc cancels). "
+        + "Needs a node: Other ▸ If you use a chain. Nothing else in the room does" },
   { label: "Poll", ico: "🗳", kind: "command", cmd: "/poll new",
     args: [
       { prompt: "What are you deciding?", example: "Lunch — pizza, burgers or salad?" },
