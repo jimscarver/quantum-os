@@ -144,5 +144,18 @@ input.value = "10";  palette.submitArg();
 input.value = "";    palette.submitArg();
 check("a note is minted from its answers", ran[0] === "/note grant USD 10", JSON.stringify(ran));
 
+// Trust is two answers and both are required — a level with no member, or a
+// member with no level, is not a rating.
+ran.length = 0;
+button("other").fire("click");
+const trust = menu.children.filter((c) => c.className === "cmd-item")
+  .find((c) => c.children[0].textContent.includes("trust"));
+trust.fire("mousedown");
+input.value = ""; palette.submitArg();
+check("trust will not take an empty member", palette.guiding(), "moved on");
+input.value = "Ann"; palette.submitArg();
+input.value = "3";   palette.submitArg();
+check("trust is conferred from its answers", ran[0] === "/gov trust Ann 3", JSON.stringify(ran));
+
 console.log(failed === 0 ? "\npalette: all passed" : `\npalette: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);

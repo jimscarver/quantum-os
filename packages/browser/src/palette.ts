@@ -214,6 +214,13 @@ const OTHER_ACTIONS: QuickAction[] = [
   { label: "Start a group", ico: "⚖", kind: "command", cmd: "/gov new",
     args: [{ prompt: "What is the group called?", example: "Steering" }],
     hint: "members, issues, delegated voting" },
+  { label: "Rate a member's trust", ico: "★", kind: "command", cmd: "/gov trust",
+    args: [
+      { prompt: "Which member?", example: "Ann" },
+      { prompt: "How far do you trust them, 0–5? You can confer at most one level below your own",
+        example: "3" },
+    ],
+    hint: "trust weights their vote — and is staked: a ⅔ censure quorum slashes whoever vouched" },
   { label: "Show the invite link", ico: "✉", kind: "command", cmd: "/room ref",
     hint: "prints the room URL into the transcript — it is a capability, so only do this on a screen you trust" },
   { label: "What can I type?", ico: "?", kind: "command", cmd: "/help",
