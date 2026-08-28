@@ -100,12 +100,11 @@ provide("navigator", { mediaDevices: {
 // --- the room: one person, nobody connected ---------------------------------
 
 const sentToJoiners = [];      // what addLocalMedia was handed, by track label
-const sentEnvelopes = [];      // what went out on the wire
 let senders = [];              // what the connections carry, when there are any
 const peer = {
   peerId: "abc123",
   addLocalMedia(s) { sentToJoiners.push(s.getVideoTracks().map((t) => t.label)); },
-  removeLocalMedia() {}, broadcast(env) { sentEnvelopes.push(env); },
+  removeLocalMedia() {}, broadcast() {},
   videoSenders() { return senders; },
 };
 const said = [];
@@ -157,10 +156,9 @@ check("the browser's stop-sharing restores the camera",
       replaced.includes("camera"), JSON.stringify(replaced));
 
 // --- a screen is not a thumbnail --------------------------------------------
-// 160×120 is unreadable for a shared screen, so the tile says what it is (the
-// caption, and `contain` instead of `cover` via the data attribute) and the
-// far side is told, since a receiver cannot tell a screen from a face by
-// looking at the track.
+// 160×120 is unreadable for a shared screen, so any tile can be clicked to
+// fill the window, and our own tile says which one it is (the caption, and
+// `contain` instead of `cover` via the data attribute).
 const localTile = () => tileFor("__local__");
 
 calls.toggleScreen();          // share once more
@@ -169,40 +167,30 @@ check("the local tile knows it is a screen", localTile()?.dataset.screen === "1"
       JSON.stringify(localTile()?.dataset));
 check("and says so", localTile()?.querySelector(".call-name")?.textContent === "you — screen",
       localTile()?.querySelector(".call-name")?.textContent);
-check("the room is told a screen started",
-      sentEnvelopes.some((e) => e.kind === "call-screen" && e.on === true),
-      JSON.stringify(sentEnvelopes));
 
 calls.toggleScreen();          // stop
 await settle();
-check("the room is told it stopped",
-      sentEnvelopes.some((e) => e.kind === "call-screen" && e.on === false),
-      JSON.stringify(sentEnvelopes));
-check("and the tile is a face again", localTile()?.dataset.screen === undefined,
+check("and is a face again when sharing stops", localTile()?.dataset.screen === undefined,
       JSON.stringify(localTile()?.dataset));
 
-// --- somebody else shares ----------------------------------------------------
-// The announce and the track race, so the announce lands first here — the tile
-// does not exist yet, and it still has to end up big when the track arrives.
-calls.peerScreen("bob", true);
-calls.remoteStream("bob", new Stream([new Track("video", "bob-screen")]));
-check("their screen comes up big", tileFor("bob")?.classList.contains("expanded"),
+// --- clicking a tile is what makes it big ------------------------------------
+// Nothing comes up big on its own: a tile is big because somebody clicked it.
+calls.remoteStream("bob", new Stream([new Track("video", "bob-video")]));
+check("a tile arrives small", !tileFor("bob")?.classList.contains("expanded"),
       tileFor("bob")?.className);
-check("and is not cropped", tileFor("bob")?.dataset.screen === "1",
-      JSON.stringify(tileFor("bob")?.dataset));
+
+tileFor("bob")?.fire("click");
+check("clicking it makes it big", tileFor("bob")?.classList.contains("expanded"),
+      tileFor("bob")?.className);
 
 docHandlers.keydown?.({ key: "Escape" });
 check("Esc shrinks it", !tileFor("bob")?.classList.contains("expanded"), tileFor("bob")?.className);
 
 tileFor("bob")?.fire("click");
-check("clicking the tile brings it back", tileFor("bob")?.classList.contains("expanded"),
-      tileFor("bob")?.className);
-
-calls.peerScreen("bob", false);
-check("when they stop sharing it shrinks", !tileFor("bob")?.classList.contains("expanded"),
-      tileFor("bob")?.className);
+calls.remoteStream("dot", new Stream([new Track("video", "dot-video")]));
+tileFor("dot")?.fire("click");
 check("only one tile is ever big",
-      tilesEl.children.filter((c) => c.classList.contains("expanded")).length === 0,
+      tilesEl.children.filter((c) => c.classList.contains("expanded")).length === 1,
       tilesEl.children.map((c) => c.className).join(" | "));
 
 
