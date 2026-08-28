@@ -41,6 +41,16 @@ export class QOSPeer {
   readonly peerId: string;
   private ws: WebSocket | null = null;
   private connections = new Map<string, RTCPeerConnection>();
+  /**
+   * Who the server says is in the room. Kept because being in the room and
+   * having a connection are different facts, and the gap between them is what
+   * has to be retried.
+   */
+  private roster = new Set<string>();
+  /** peerId → when to try dialling again, and how many times we have. */
+  private retryAt = new Map<string, number>();
+  private retryN = new Map<string, number>();
+  private sweepTimer?: ReturnType<typeof setInterval>;
   private channels = new Map<string, RTCDataChannel>();
   private config: PeerConfig;
   private _disconnected = false;   // true after explicit disconnect()
@@ -63,6 +73,11 @@ export class QOSPeer {
   private static readonly RECONNECT_MAX = 30000;
   /// Gap between offers when dialling a room's existing peers (see "peers" below).
   private static readonly JOIN_STAGGER_MS = 50;
+  /// How often to look for peers in the room we have no channel to.
+  private static readonly SWEEP_MS = 12_000;
+  /// Backoff between attempts at one peer, doubling to a ceiling.
+  private static readonly RETRY_MIN_MS = 8_000;
+  private static readonly RETRY_MAX_MS = 90_000;
   private static readonly STABLE_MS = 15000;   // a connection must survive this long to reset the backoff
   // Live-call media: the local mic/cam stream shared into all connections, and a
   // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
@@ -97,10 +112,15 @@ export class QOSPeer {
       console.warn(`[qos-peer] roomId ZFA check failed (may be cached token): ${this.config.roomId}`);
     }
     this._openSignaling().catch(() => this._scheduleReconnect());
+    // A peer in the room we have no channel to is a peer nothing we type
+    // reaches. Look for those on a timer rather than only when the server
+    // happens to re-send the room's list.
+    if (!this.sweepTimer) this.sweepTimer = setInterval(() => this.sweep(), QOSPeer.SWEEP_MS);
   }
 
   disconnect(): void {
     this._disconnected = true;
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     if (this._stableTimer) clearTimeout(this._stableTimer);
     this.signal({ type: "leave", roomId: this.config.roomId, peerId: this.peerId });
@@ -315,6 +335,7 @@ export class QOSPeer {
         // per-connection rate limit trips exactly when the room is big enough
         // to need every handshake to land. A join spread over a second or two
         // is not slower in any way a person notices.
+        this.roster = new Set(msg.peers);
         let nth = 0;
         for (const peerId of msg.peers) {
           const ch = this.channels.get(peerId);
@@ -331,9 +352,16 @@ export class QOSPeer {
         break;
       }
       case "joined":
+        // The joiner dials us, which is why nothing is initiated here — but a
+        // dial that never lands has to be retried by somebody, and the sweep
+        // below is what does it.
+        this.roster.add(msg.peerId);
         this.config.onPeerJoined?.(msg.peerId);
         break;
       case "left":
+        this.roster.delete(msg.peerId);
+        this.retryAt.delete(msg.peerId);
+        this.retryN.delete(msg.peerId);
         this.cleanup(msg.peerId);
         this.config.onPeerLeft?.(msg.peerId);
         break;
@@ -349,6 +377,38 @@ export class QOSPeer {
       case "error":
         console.error("[signaling]", msg.message);
         break;
+    }
+  }
+
+  /**
+   * Dial the peers we are in a room with and have no channel to.
+   *
+   * A handshake that fails once used to stay failed: connections are only
+   * initiated from the server's peers list, which arrives when *we* join or
+   * reconnect. So two people who failed to connect stayed silent to each other
+   * indefinitely — until somebody else joined and the list was re-sent, which
+   * is a fix arriving by coincidence.
+   *
+   * Only one side of a pair retries, chosen by comparing ids. Two peers dialling
+   * each other at the same moment is glare — each answering an offer while
+   * holding one of its own — and the recovery for glare is worse than the
+   * failure it would be recovering from.
+   */
+  private sweep(): void {
+    if (this._disconnected || !this.isSignalingUp()) return;
+    const now = Date.now();
+    for (const peerId of this.roster) {
+      if (peerId === this.peerId) continue;
+      if (this.channels.get(peerId)?.readyState === "open") continue;
+      if (this.peerId > peerId) continue;             // their side dials
+      if (now < (this.retryAt.get(peerId) ?? 0)) continue;
+      const n = (this.retryN.get(peerId) ?? 0) + 1;
+      this.retryN.set(peerId, n);
+      const wait = Math.min(QOSPeer.RETRY_MAX_MS, QOSPeer.RETRY_MIN_MS * 2 ** (n - 1));
+      // Jitter, so a room that all failed at once does not all retry at once.
+      this.retryAt.set(peerId, now + Math.round(wait * (0.75 + Math.random() * 0.5)));
+      console.log(`[qos-peer] retrying ${peerId} (attempt ${n})`);
+      void this.initiateConnection(peerId);
     }
   }
 
@@ -492,6 +552,10 @@ export class QOSPeer {
   private setupDataChannel(peerId: string, ch: RTCDataChannel): void {
     ch.onopen = () => {
       this.channels.set(peerId, ch);
+      // It worked: forget the backoff, so a later failure starts from patient
+      // rather than from wherever this one left off.
+      this.retryAt.delete(peerId);
+      this.retryN.delete(peerId);
       this.config.onChannelOpen?.(peerId);
       console.log(`[qos-peer] data channel open with ${peerId}`);
       // If a call is already in progress, push our media to the newcomer (but never
