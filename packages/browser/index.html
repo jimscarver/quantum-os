@@ -337,9 +337,20 @@
     .call-bar { border-bottom:1px solid #1a1a1a; background:#0a0f0f; padding:0.6rem 1rem; display:flex; flex-direction:column; gap:0.5rem; }
     .call-bar[hidden] { display:none; }   /* `display:flex` above otherwise overrides the [hidden] attribute */
     .call-tiles { display:flex; flex-wrap:wrap; gap:0.5rem; }
-    .call-tile { position:relative; width:160px; height:120px; background:#000; border:1px solid #234; border-radius:6px; overflow:hidden; }
+    .call-tile { position:relative; width:160px; height:120px; background:#000; border:1px solid #234; border-radius:6px; overflow:hidden; cursor:zoom-in; }
     .call-tile video { width:100%; height:100%; object-fit:cover; background:#000; }
+    /* A screen is never cropped — `cover` would cut off whatever is at the edges. */
+    .call-tile[data-screen] video { object-fit:contain; }
     .call-tile .call-name { position:absolute; left:4px; bottom:3px; font-size:0.6rem; color:#cfe9e2; background:rgba(0,0,0,0.55); padding:0 0.3rem; border-radius:3px; }
+    .call-tile .call-zoom { position:absolute; right:3px; top:3px; padding:0 0.25rem; font-size:0.7rem; line-height:1.4; color:#cfe9e2; background:rgba(0,0,0,0.6); border:1px solid #2a3a3a; border-radius:4px; opacity:0; transition:opacity .15s; }
+    .call-tile:hover .call-zoom, .call-tile.expanded .call-zoom { opacity:1; }
+    /* Expanded: the tile itself goes fixed, so nothing is reparented and the
+       video never re-attaches (which would restart the stream). The huge
+       box-shadow is the backdrop. */
+    .call-tile.expanded { position:fixed; inset:2vh 2vw; width:auto; height:auto; z-index:200; cursor:zoom-out; border-color:#2a6b5e; box-shadow:0 0 0 100vmax rgba(0,0,0,0.88); }
+    .call-tile.expanded video { object-fit:contain; }
+    .call-tile.expanded .call-name { font-size:0.8rem; left:8px; bottom:8px; padding:0.1rem 0.5rem; }
+    .call-tile:fullscreen { inset:0; width:100%; height:100%; border:0; border-radius:0; box-shadow:none; }
     .call-controls { display:flex; gap:0.5rem; }
     .call-ctl { background:#141414; border:1px solid #2a2a2a; border-radius:5px; color:#cfe9e2; font-size:0.85rem; padding:0.3rem 0.7rem; cursor:pointer; }
     .call-ctl:disabled { opacity:0.4; cursor:default; }

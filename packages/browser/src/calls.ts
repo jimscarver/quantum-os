@@ -42,6 +42,8 @@ export interface Calls {
   toggleScreen(): void;
   /** A peer's media arrived. */
   remoteStream(peerId: string, stream: MediaStream): void;
+  /** A peer said they started or stopped sharing their screen. */
+  peerScreen(peerId: string, on: boolean): void;
   /** A peer left, or ended their call: drop their tile. */
   peerGone(peerId: string): void;
   inCall(): boolean;
@@ -61,33 +63,93 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   let screenStream: MediaStream | null = null;
   let inCall = false;
   const tiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
+  /** Tiles whose video is a shared screen rather than a face. */
+  const screens = new Set<string>();
+  /** The one tile currently shown big, if any. */
+  let expanded: string | null = null;
 
   const showBar = () => { if (els.bar) els.bar.hidden = false; };
   const hideBarIfIdle = () => {
     if (els.bar && !inCall && tiles.size === 0) els.bar.hidden = true;
   };
 
+  const tileOf = (key: string): HTMLElement | null =>
+    tiles.get(key)?.closest(".call-tile") as HTMLElement | null;
+
   function makeTile(key: string, label: string): HTMLVideoElement {
     const wrap = document.createElement("div");
     wrap.className = "call-tile";
     wrap.dataset.key = key;
+    wrap.dataset.label = label;
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     const cap = document.createElement("span");
     cap.className = "call-name"; cap.textContent = label;
-    wrap.appendChild(v); wrap.appendChild(cap);
+    // A 160×120 thumbnail is unreadable for a shared screen, so any tile can be
+    // shown big. The button is for discovery; the whole tile is the target.
+    const zoom = document.createElement("button");
+    zoom.className = "call-zoom"; zoom.textContent = "⛶";
+    zoom.title = "Show this big";
+    zoom.addEventListener("click", (e) => { e.stopPropagation(); toggleExpand(key); });
+    wrap.addEventListener("click", () => toggleExpand(key));
+    // Double-click goes to the browser's own full screen, where a shared screen
+    // is finally shown at something like its real size.
+    wrap.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      else void wrap.requestFullscreen?.().catch(() => {});
+    });
+    wrap.append(v, cap, zoom);
     els.tiles?.appendChild(wrap);
     tiles.set(key, v);
+    if (screens.has(key)) markScreen(key, true);
     return v;
   }
 
   function removeTile(key: string): void {
     const v = tiles.get(key);
     if (!v) return;
+    if (expanded === key) setExpanded(null);
     v.srcObject = null;
     v.closest(".call-tile")?.remove();
     tiles.delete(key);
+    screens.delete(key);
   }
+
+  /** Label a tile as a screen, and stop cropping it. */
+  function markScreen(key: string, on: boolean): void {
+    if (on) screens.add(key); else screens.delete(key);
+    const wrap = tileOf(key);
+    if (!wrap) return;
+    if (on) wrap.dataset.screen = "1"; else delete wrap.dataset.screen;
+    const base = wrap.dataset.label ?? "";
+    const cap = wrap.querySelector(".call-name");
+    if (cap) cap.textContent = on ? `${base} — screen` : base;
+  }
+
+  function setExpanded(key: string | null): void {
+    if (expanded) {
+      const was = tileOf(expanded);
+      was?.classList.remove("expanded");
+      const btn = was?.querySelector(".call-zoom");
+      if (btn) btn.textContent = "⛶";
+    }
+    expanded = key && tiles.has(key) ? key : null;
+    const wrap = expanded ? tileOf(expanded) : null;
+    if (wrap) {
+      wrap.classList.add("expanded");
+      const btn = wrap.querySelector(".call-zoom");
+      if (btn) { btn.textContent = "✕"; (btn as HTMLElement).title = "Shrink (Esc)"; }
+    }
+  }
+
+  const toggleExpand = (key: string) => setExpanded(expanded === key ? null : key);
+
+  // Esc shrinks whatever is big. Full screen swallows its own Esc, so this only
+  // ever fires for the in-page version.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && expanded && !document.fullscreenElement) setExpanded(null);
+  });
 
   /** The senders carrying our video — one per peer, all of which a share replaces. */
   function videoSenders(): RTCRtpSender[] {
@@ -227,6 +289,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     track.addEventListener("ended", () => { void stopScreen(); });
     const local = tiles.get("__local__");
     if (local && localStream) local.srcObject = localStream;
+    // Say so on the wire: a receiver cannot tell a screen from a camera by
+    // looking at the track, and a screen wants the big tile, not a thumbnail.
+    markScreen("__local__", true);
+    host.peer()?.broadcast({ kind: "call-screen", on: true });
     host.say("🖥 you are sharing your screen");
     updateControls();
   }
@@ -246,6 +312,9 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     cameraTrack = null;
     const local = tiles.get("__local__");
     if (local && localStream) local.srcObject = localStream;
+    markScreen("__local__", false);
+    if (expanded === "__local__") setExpanded(null);
+    host.peer()?.broadcast({ kind: "call-screen", on: false });
     if (inCall) host.say("🖥 you stopped sharing your screen");
     updateControls();
   }
@@ -270,9 +339,21 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       // are "alone" in a call and spuriously raises the call bar. Humans only.
       if (host.isAgent(peerId)) return;
       let v = tiles.get(peerId);
+      const isNew = !v;
       if (!v) v = makeTile(peerId, host.label(peerId));
       if (v.srcObject !== stream) v.srcObject = stream;
       showBar();
+      // The share was announced before the track arrived: pop it up now that
+      // there is something to show.
+      if (isNew && screens.has(peerId)) setExpanded(peerId);
+    },
+    peerScreen(peerId, on) {
+      if (host.isAgent(peerId)) return;
+      markScreen(peerId, on);
+      // Show a screen big without being asked — that is the whole point of
+      // someone sharing one. `setExpanded` no-ops until their tile exists.
+      if (on) setExpanded(peerId);
+      else if (expanded === peerId) setExpanded(null);
     },
     peerGone(peerId) { removeTile(peerId); hideBarIfIdle(); },
     inCall: () => inCall,
