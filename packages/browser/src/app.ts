@@ -1024,8 +1024,14 @@ function connectedLabel(): string {
  * broken.
  */
 const ROOM_HOLDS = 10;
-/** How long a handshake gets before we call it failed rather than slow. */
-const HANDSHAKE_GRACE_MS = 12_000;
+/**
+ * How long a handshake gets before we call it failed rather than slow.
+ *
+ * Longer than a retry cycle, deliberately: `peer.ts` sweeps every 12s and makes
+ * its first attempt after 8, so a shorter grace announces a failure while the
+ * repair is still in progress — and most of those repair themselves.
+ */
+const HANDSHAKE_GRACE_MS = 30_000;
 
 /**
  * A peer has been in the room without a channel long enough that it is not
@@ -1041,8 +1047,8 @@ function reportUnreachable(id: string): void {
     ? `⚠ the room is full — ${size} here, and a browser mesh holds about ${ROOM_HOLDS}. `
       + `${peerLabel(id)} is in the room but not connected to you: neither of you sees what the other types. `
       + `Split the group (five is where a room actually thinks together) or run your own signaling server.`
-    : `⚠ couldn't connect to ${peerLabel(id)} — they are in the room but the handshake never completed, `
-      + `so neither of you sees what the other types. Reloading either side usually settles it.`,
+    : `⚠ still not connected to ${peerLabel(id)} — they are in the room but no channel has opened, `
+      + `so neither of you sees what the other types. It keeps retrying; reloading either side also settles it.`,
     "system");
   renderPeers();
 }
@@ -6533,7 +6539,12 @@ function connect(): void {
         // Always repaint, not only for a peer new to the roster: a peer already
         // listed from signaling was being shown as unreachable until now.
         peers.add(peerId);
-        unreachableWarned.delete(peerId);
+        // If we said this peer was unreachable, say that it worked out — a
+        // warning left standing after the thing it warned about has fixed
+        // itself teaches people to ignore warnings.
+        if (unreachableWarned.delete(peerId)) {
+          addMessage("", `✓ connected to ${peerLabel(peerId)} after all`, "system");
+        }
         renderPeers();
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
