@@ -24,17 +24,28 @@
 // Screen content is mostly static frames, so a low frame rate and a modest
 // bitrate cost it very little and save a great deal.
 
+import { preferredSurface, rememberSurface } from "./display.js";
+
 /** What recording needs from the app. */
 export interface RecordHost {
   /** Put a line in the transcript. */
   say(text: string): void;
   /** Tell the room a recording started or stopped — nobody should be recorded silently. */
   announce(on: boolean): void;
+  /**
+   * The call's live audio. Capturing a window offers no audio at all, and even
+   * a tab share only carries the room because its voices come out of the page —
+   * but the app is holding those streams, so they can be mixed in directly and
+   * the recording has the room on it whatever surface you picked.
+   */
+  callAudio(): MediaStreamTrack[];
 }
 
 export interface Recorder {
   /** Start if idle, stop and save if recording. */
   toggle(): void;
+  /** A peer's media arrived mid-recording: mix their voice in from here on. */
+  addAudio(stream: MediaStream): void;
   recording(): boolean;
 }
 
@@ -72,6 +83,9 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
   /** Everything acquired for this recording, all of it stopped at the end. */
   let sources: MediaStreamTrack[] = [];
   let audioCtx: AudioContext | null = null;
+  let mixDest: MediaStreamAudioDestinationNode | null = null;
+  /** Tracks already in the mix — a renegotiation re-delivers a peer's stream. */
+  const mixed = new Set<string>();
   let handle: FileHandle | null = null;
   let file: Writable | null = null;
   /** Chunks only live here when there is no file to stream them to. */
@@ -103,19 +117,25 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
   }
 
   /**
-   * One audio track out of however many we have. The screen's audio carries the
-   * room — remote voices come out of the page, not off the network — and the
-   * mic carries yours, so a recording of a conversation usually needs both.
+   * One audio track out of however many we have: your mic, the call's other
+   * voices, and the surface's own audio where the picker offered it.
+   *
+   * Everything goes through the mixer even when there is only one source, so a
+   * peer who joins after the recording started can still be added to it.
    */
-  function mixAudio(tracks: MediaStreamTrack[]): MediaStreamTrack | null {
+  function beginMix(tracks: MediaStreamTrack[]): MediaStreamTrack | null {
     if (tracks.length === 0) return null;
-    if (tracks.length === 1) return tracks[0];
     audioCtx = new AudioContext();
-    const dest = audioCtx.createMediaStreamDestination();
-    for (const t of tracks) {
-      audioCtx.createMediaStreamSource(new MediaStream([t])).connect(dest);
-    }
-    return dest.stream.getAudioTracks()[0] ?? tracks[0];
+    mixDest = audioCtx.createMediaStreamDestination();
+    mixed.clear();
+    tracks.forEach(addToMix);
+    return mixDest.stream.getAudioTracks()[0] ?? null;
+  }
+
+  function addToMix(t: MediaStreamTrack): void {
+    if (!audioCtx || !mixDest || mixed.has(t.id)) return;
+    mixed.add(t.id);
+    audioCtx.createMediaStreamSource(new MediaStream([t])).connect(mixDest);
   }
 
   /** The scratch file, or null where OPFS is unavailable (then memory it is). */
@@ -152,9 +172,16 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
       // every recording of an application costs an extra click. Switching pane
       // is still one click, and `surfaceSwitching` lets it change mid-recording.
       display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: FPS, displaySurface: "window" },
+        video: { frameRate: FPS, displaySurface: preferredSurface() },
         audio: true,
         surfaceSwitching: "include",
+        // Everything the device is playing — a video, another app — can only
+        // reach a recording through the picker's own checkbox: it is a consent
+        // decision the browser reserves for the user, and no constraint ticks
+        // it. `systemAudio: "include"` asks that the option be offered at all,
+        // which is the whole of what a page is allowed to do. Chrome offers it
+        // for a whole-screen capture on ChromeOS and Windows, and not on Linux.
+        systemAudio: "include",
       } as DisplayMediaStreamOptions);
     } catch (e) {
       // Cancelling the picker is an ordinary thing to do, not an error.
@@ -165,6 +192,7 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     }
     const video = display.getVideoTracks()[0];
     if (!video) { display.getTracks().forEach((t) => t.stop()); return; }
+    rememberSurface(video);
     sources = display.getTracks();
 
     // A recording with no mic is worth having; one that refuses to start
@@ -177,7 +205,9 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     } catch { /* no mic, carry on */ }
 
     const shared = display.getAudioTracks();
-    const audio = mixAudio([...shared, ...(mic ? [mic] : [])]);
+    // The call's voices come from the call, not from whatever was captured.
+    const voices = host.callAudio();
+    const audio = beginMix([...shared, ...(mic ? [mic] : []), ...voices]);
     const stream = new MediaStream(audio ? [video, audio] : [video]);
 
     await openScratch();
@@ -209,10 +239,17 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     ticker = setInterval(paint, 1000);
     paint();
     host.announce(true);
-    host.say(shared.length
-      ? "⏺ recording your screen with its audio and your mic — click ⏹ to stop and save"
-      : "⏺ recording your screen — no tab audio was shared, so only your mic is on it "
-        + "(pick a Chrome Tab and tick “Share tab audio” to capture the room's voices)");
+    const on = ["your mic"];
+    if (voices.length) on.push(`${voices.length} voice${voices.length === 1 ? "" : "s"} from the call`);
+    if (shared.length) on.push("the captured audio");
+    host.say(`⏺ recording your screen — ${on.join(" + ")} on it. Click ⏹ to stop and save.`);
+    // The room is on it either way; anything else the device is playing is not,
+    // and the checkbox is the only way in. Say so at the one moment it is
+    // actionable rather than leaving it to be discovered on playback.
+    if (!shared.length) {
+      host.say("   to also capture what your device is playing, share an Entire Screen "
+        + "and tick “Share system audio” (offered on ChromeOS and Windows, not on Linux)");
+    }
   }
 
   function stop(): void {
@@ -226,6 +263,7 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     sources.forEach((t) => t.stop());
     sources = [];
     if (audioCtx) { await audioCtx.close().catch(() => {}); audioCtx = null; }
+    mixDest = null; mixed.clear();
     if (ticker) { clearInterval(ticker); ticker = null; }
   }
 
@@ -274,6 +312,7 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
   paint();
   return {
     toggle() { if (rec) stop(); else void start(); },
+    addAudio(stream) { if (rec) stream.getAudioTracks().forEach(addToMix); },
     recording: () => !!rec,
   };
 }

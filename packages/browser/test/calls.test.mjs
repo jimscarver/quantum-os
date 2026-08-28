@@ -88,10 +88,16 @@ const provide = (name, value) =>
 
 provide("document", { createElement: () => el(), addEventListener(n, f) { docHandlers[n] = f; } });
 provide("window", { isSecureContext: true });
+const store = new Map();
+provide("localStorage", {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+});
 
 const camera = new Track("video", "camera");
 const mic    = new Track("audio", "mic");
 const screen = new Track("video", "screen");
+screen.getSettings = () => ({ displaySurface: "monitor" });
 provide("navigator", { mediaDevices: {
   getUserMedia:    async () => new Stream([mic, camera]),
   getDisplayMedia: async () => new Stream([screen]),
@@ -155,6 +161,17 @@ await settle();
 check("the browser's stop-sharing restores the camera",
       replaced.includes("camera"), JSON.stringify(replaced));
 
+// --- what a recording can reach ---------------------------------------------
+// A recording needs the room's voices from the call itself: capturing a window
+// offers no audio, so the picker cannot supply them.
+calls.remoteStream("ann", new Stream([new Track("audio", "ann-voice"), new Track("video", "ann-cam")]));
+check("a peer's voice is reachable for recording",
+      calls.audioTracks().map((t) => t.label).includes("ann-voice"),
+      JSON.stringify(calls.audioTracks().map((t) => t.label)));
+calls.peerGone("ann");
+check("and is gone when they leave", calls.audioTracks().length === 0,
+      JSON.stringify(calls.audioTracks().map((t) => t.label)));
+
 // --- a screen is not a thumbnail --------------------------------------------
 // 160×120 is unreadable for a shared screen, so any tile can be clicked to
 // fill the window, and our own tile says which one it is (the caption, and
@@ -193,6 +210,9 @@ check("only one tile is ever big",
       tilesEl.children.filter((c) => c.classList.contains("expanded")).length === 1,
       tilesEl.children.map((c) => c.className).join(" | "));
 
+
+check("sharing remembers the surface, so the picker opens there next time",
+      store.get("qos-share-surface") === "monitor", String(store.get("qos-share-surface")));
 
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);

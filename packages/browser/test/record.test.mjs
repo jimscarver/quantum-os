@@ -33,8 +33,12 @@ const provide = (name, value) =>
 
 const allTracks = [];
 class Track {
-  constructor(kind, label) { this.kind = kind; this.label = label; this._h = {}; allTracks.push(this); }
+  constructor(kind, label) {
+    this.kind = kind; this.label = label; this.id = `${label}-${allTracks.length}`;
+    this._h = {}; allTracks.push(this);
+  }
   stop() { this.stopped = true; }
+  getSettings() { return { displaySurface: this.surface }; }
   addEventListener(n, f) { this._h[n] = f; }
   fire(n) { this._h[n]?.(); }
 }
@@ -45,6 +49,13 @@ class Stream {
   getAudioTracks() { return this.tracks.filter((t) => t.kind === "audio"); }
 }
 provide("MediaStream", Stream);
+
+// The picker opens on whatever was shared last, which is remembered here.
+const store = new Map();
+provide("localStorage", {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+});
 
 // The scratch file: every write is kept so the test can see chunks land as they
 // arrive rather than in one lump at the end.
@@ -97,9 +108,13 @@ class FakeRecorder {
 provide("MediaRecorder", FakeRecorder);
 
 let mixed = false;
+const connected = [];       // every track that reached the mix
 provide("AudioContext", class {
   createMediaStreamDestination() { mixed = true; return { stream: new Stream([new Track("audio", "mix")]) }; }
-  createMediaStreamSource() { return { connect() {} }; }
+  createMediaStreamSource(s) {
+    const t = s.getAudioTracks()[0];
+    return { connect() { connected.push(t); } };
+  }
   async close() { this.closed = true; }
 });
 
@@ -117,9 +132,15 @@ const btn = {
   title: "", classList: { toggle: (c, on) => (on ? btnClasses.add(c) : btnClasses.delete(c)) },
   querySelector: () => ({ textContent: "" }),
 };
-const host = { say: (t) => said.push(t), announce: (on) => announced.push(on) };
+let voices = [];
+const host = {
+  say: (t) => said.push(t), announce: (on) => announced.push(on),
+  callAudio: () => voices,
+};
 
-const screenTrack = () => new Track("video", "screen");
+const screenTrack = (surface = "window") => {
+  const t = new Track("video", "screen"); t.surface = surface; return t;
+};
 let displayAnswer = () => new Stream([screenTrack(), new Track("audio", "tab")]);
 let micAnswer = () => new Stream([new Track("audio", "mic")]);
 
@@ -186,16 +207,37 @@ check("no mic is not a reason to refuse", rec.recording(), said.join(" | "));
 rec.toggle();
 await settle();
 
-// --- nobody ticked "share tab audio" ----------------------------------------
+// --- the room's voices come from the call, not from the surface -------------
+// A window share offers no audio at all, so a recording that relied on the
+// picker's audio box would be your own voice talking to nobody.
 said.length = 0;
-displayAnswer = () => new Stream([screenTrack()]);
+displayAnswer = () => new Stream([screenTrack("window")]);
 micAnswer = () => new Stream([new Track("audio", "mic")]);
+voices = [new Track("audio", "ann"), new Track("audio", "dave")];
 rec.toggle();
 await settle();
-check("it says how to capture the room's voices",
-      said.some((s) => s.includes("Share tab audio")), said.join(" | "));
+check("a window share still has the room on it",
+      said.some((s) => s.includes("2 voices from the call")), said.join(" | "));
+check("and it says how to catch what the device is playing, which it cannot",
+      said.some((s) => s.includes("Share system audio")), said.join(" | "));
+
+// A peer who joins after the recording started belongs on it too, and a
+// renegotiation re-delivers a stream we already have.
+const late = new Track("audio", "late");
+rec.addAudio(new Stream([late]));
+rec.addAudio(new Stream([late]));
+rec.addAudio(new Stream([voices[0]]));
+check("a peer arriving mid-recording is mixed in, once",
+      connected.filter((t) => t === late).length === 1, `${connected.filter((t) => t === late).length}`);
+check("and a re-delivered stream is not doubled",
+      connected.filter((t) => t === voices[0]).length === 1,
+      `${connected.filter((t) => t === voices[0]).length}`);
+
 rec.toggle();
 await settle();
+check("the picker will open where this share ended up",
+      store.get("qos-share-surface") === "window", String(store.get("qos-share-surface")));
+voices = [];
 
 // --- no OPFS: memory, but it still works ------------------------------------
 said.length = 0;
