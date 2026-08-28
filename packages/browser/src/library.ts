@@ -102,6 +102,28 @@ export function findEntry(entries: Iterable<LibraryEntry>, needle: string): Libr
   return partial.length === 1 ? partial[0] : null;
 }
 
+/**
+ * Whether the bytes can actually be had.
+ *
+ * Kept apart from the index because it fails apart from it: an entry is a
+ * durable fact and a holder is a live one. A library that says "known" when
+ * nobody is holding something is telling the truth; one that lists it exactly
+ * like a file you can play is a list of broken links.
+ */
+export type Availability = "held" | "here" | "known" | "gone";
+
+/** How long without a holder before an entry stops being merely offline. */
+export const GONE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function availabilityOf(
+  hash: string, held: boolean, holdersPresent: number, lastSeen: number | undefined, now = Date.now(),
+): Availability {
+  if (held) return "held";
+  if (holdersPresent > 0) return "here";
+  if (lastSeen === undefined || now - lastSeen > GONE_AFTER_MS) return "gone";
+  return "known";
+}
+
 /** What kind of thing it is, for an interface that treats media differently. */
 export function kindOf(mime: string): "image" | "audio" | "video" | "file" {
   if (mime.startsWith("image/")) return "image";
@@ -117,11 +139,20 @@ export function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-/** One line per entry, for the transcript. `held` marks what this peer has. */
-export function describeEntry(e: LibraryEntry, held: boolean): string {
+/** The mark that says whether an entry can be had, and from whom. */
+export const AVAILABILITY_MARK: Record<Availability, string> = {
+  held: "●",     // the bytes are here
+  here: "◉",     // a peer in the room has them
+  known: "○",    // the entry exists; no holder is present
+  gone: "⚠",     // no holder seen in a long time — the entry may be all that is left
+};
+
+/** One line per entry, for the transcript. */
+export function describeEntry(e: LibraryEntry, avail: Availability, holders = 0): string {
   const icon = { image: "🖼", audio: "🎵", video: "🎬", file: "📄" }[kindOf(e.mime)];
-  return `${held ? "●" : "○"} ${icon} ${e.name}   ${fmtSize(e.size)}  ${shortHash(e.hash)}`
-    + `  · added by ${e.addedLabel}${e.cap ? "  · " + e.cap.split(":")[1] : ""}`;
+  const from = avail === "here" ? `  · ${holders} holder${holders === 1 ? "" : "s"} here` : "";
+  return `${AVAILABILITY_MARK[avail]} ${icon} ${e.name}   ${fmtSize(e.size)}  ${shortHash(e.hash)}`
+    + `  · added by ${e.addedLabel}${from}${e.cap ? "  · " + e.cap.split(":")[1] : ""}`;
 }
 
 // ---------------------------------------------------------------------------

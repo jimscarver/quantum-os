@@ -31,8 +31,8 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
 import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
-         putBytes, dropBytes, heldHashes, fmtSize as fmtFileSize,
-         type LibraryEntry } from "./library.js";
+         putBytes, dropBytes, heldHashes, availabilityOf, fmtSize as fmtFileSize,
+         type LibraryEntry, type Availability } from "./library.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
 import { createAttachments, renderMedia, type Attachments,
          type MediaAttachment, type MediaKind } from "./attachments.js";
@@ -231,6 +231,11 @@ interface RoomContext {
   // until they ask).
   libraryStore: Map<string, LibraryEntry>;
   heldFiles: Set<string>;
+  /** hash → peers here who say they hold it. Live state: never persisted, and
+   *  emptied of a peer the moment it leaves. */
+  fileHolders: Map<string, Set<string>>;
+  /** hash → when a holder was last seen, so "offline" and "gone" differ. */
+  holderSeen: Map<string, number>;
   // Lemma + note stores (the public room knowledge)
   lemmaStore: Map<string, LemmaEntry>;
   currencyTokens: Map<string, string>;
@@ -300,6 +305,8 @@ function createRoom(roomId: string): RoomContext {
     unreachableWarned: new Set(),
     libraryStore: new Map(),
     heldFiles: new Set(),
+    fileHolders: new Map(),
+    holderSeen: new Map(),
     lemmaStore: new Map(),
     currencyTokens: new Map(),
     noteStore: new Map(),
@@ -370,6 +377,8 @@ let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let unreachableWarned: Set<string> = new Set();
 let libraryStore: Map<string, LibraryEntry> = new Map();
 let heldFiles: Set<string> = new Set();
+let fileHolders: Map<string, Set<string>> = new Map();
+let holderSeen: Map<string, number> = new Map();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
 let noteStore: Map<string, NoteEntry> = new Map();
@@ -414,6 +423,8 @@ function setActiveRoom(ctx: RoomContext): void {
   unreachableWarned  = ctx.unreachableWarned;
   libraryStore       = ctx.libraryStore;
   heldFiles          = ctx.heldFiles;
+  fileHolders        = ctx.fileHolders;
+  holderSeen         = ctx.holderSeen;
   lemmaStore         = ctx.lemmaStore;
   currencyTokens     = ctx.currencyTokens;
   noteStore          = ctx.noteStore;
@@ -485,6 +496,10 @@ function saveLibrary(): void {
   // are not, and a peer that cleared its storage should say so rather than
   // claim to still have them.
   localStorage.setItem(`qos-library-held-${activeRoom.roomId}`, JSON.stringify([...heldFiles]));
+  // When a holder was last seen is what separates "offline" from "gone", and
+  // it only means anything across sessions.
+  localStorage.setItem(`qos-library-seen-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(holderSeen)));
 }
 
 function loadLibrary(): void {
@@ -502,6 +517,57 @@ function loadLibrary(): void {
     try { for (const h of JSON.parse(held) as string[]) heldFiles.add(h); }
     catch { /* ignore corrupt data */ }
   }
+  const seen = localStorage.getItem(`qos-library-seen-${activeRoom.roomId}`);
+  if (seen) {
+    try {
+      for (const [h, t] of Object.entries(JSON.parse(seen) as Record<string, number>)) {
+        if (typeof t === "number") holderSeen.set(h, t);
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+  // What this browser holds is a claim about a disk, so ask the disk. Storage
+  // can be cleared without the room being told, and claiming to hold bytes we
+  // do not have is the one lie a library must not tell.
+  void (async () => {
+    const onDisk = new Set(await heldHashes());
+    let changed = false;
+    for (const h of [...heldFiles]) if (!onDisk.has(h)) { heldFiles.delete(h); changed = true; }
+    if (changed) saveLibrary();
+  })();
+}
+
+/** What can be had, for one entry, right now. */
+function availabilityFor(hash: string): Availability {
+  return availabilityOf(hash, heldFiles.has(hash),
+    fileHolders.get(hash)?.size ?? 0, holderSeen.get(hash));
+}
+
+/** Tell the room what we are holding — or tell one peer, when they arrive. */
+function announceHeld(to?: string): void {
+  if (heldFiles.size === 0 && !to) return;
+  const env = { kind: "library-have", hashes: [...heldFiles] };
+  if (to) signedSend(to, env); else signedBroadcast(env);
+}
+
+/** A peer said what it holds. Availability is live state — replace, never merge. */
+function noteHolder(peerId: string, hashes: unknown): void {
+  const list = Array.isArray(hashes) ? hashes.filter((h): h is string => typeof h === "string") : [];
+  for (const set of fileHolders.values()) set.delete(peerId);
+  const now = Date.now();
+  for (const hash of list.slice(0, 2000)) {
+    const h = hash.toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(h)) continue;
+    let set = fileHolders.get(h);
+    if (!set) { set = new Set(); fileHolders.set(h, set); }
+    set.add(peerId);
+    holderSeen.set(h, now);
+  }
+  saveLibrary();
+}
+
+/** A peer left: it is holding nothing here any more. */
+function forgetHolder(peerId: string): void {
+  for (const set of fileHolders.values()) set.delete(peerId);
 }
 
 /**
@@ -1938,6 +2004,7 @@ function addFilesToLibrary(): void {
           continue;
         }
         heldFiles.add(hash);
+        announceHeld();
         const known = libraryStore.get(hash);
         if (known) {
           saveLibrary();
@@ -4643,15 +4710,41 @@ function handleCommand(raw: string): string[] {
 
       if (fsub === "list" || fsub === "") {
         const mine = /^--?mine$/i.test(frest);
-        const all = sortEntries(libraryStore.values())
-          .filter((e) => !mine || heldFiles.has(e.hash));
+        const here = /^--?here$/i.test(frest);
+        const all = sortEntries(libraryStore.values()).filter((e) => {
+          const a = availabilityFor(e.hash);
+          if (mine) return a === "held";
+          if (here) return a === "held" || a === "here";      // what can be had now
+          return true;
+        });
         if (all.length === 0) {
-          sys(mine ? "you are holding nothing in this room" : "the room's library is empty — /file add");
+          sys(mine ? "you are holding nothing in this room"
+            : here ? "nothing in the library can be had right now — no holder is present"
+            : "the room's library is empty — /file add");
           break;
         }
-        sys(`library — ${all.length} entr${all.length === 1 ? "y" : "ies"}` +
-            `, ${heldFiles.size} held here  (● held · ○ indexed)`);
-        for (const e of all) sys("  " + describeEntry(e, heldFiles.has(e.hash)));
+        const reachable = all.filter((e) => availabilityFor(e.hash) !== "known"
+                                         && availabilityFor(e.hash) !== "gone").length;
+        sys(`library — ${all.length} entr${all.length === 1 ? "y" : "ies"}, ${reachable} available now`
+          + "  (● you hold · ◉ a peer here holds · ○ no holder present · ⚠ none seen in a week)");
+        for (const e of all) {
+          sys("  " + describeEntry(e, availabilityFor(e.hash), fileHolders.get(e.hash)?.size ?? 0));
+        }
+        break;
+      }
+
+      if (fsub === "holders") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file holders <hash|name>"); break; }
+        const who = [...(fileHolders.get(target.hash) ?? [])];
+        sys(`${target.name}  ${shortHash(target.hash)}`);
+        if (heldFiles.has(target.hash)) sys("  ● you");
+        for (const p of who) sys(`  ◉ ${peerLabel(p)}`);
+        if (!who.length && !heldFiles.has(target.hash)) {
+          const seen = holderSeen.get(target.hash);
+          sys(seen ? `  ○ nobody here now — last seen with a holder ${new Date(seen).toLocaleString()}`
+                   : "  ⚠ no holder has ever been seen from this browser");
+        }
         break;
       }
 
@@ -4677,6 +4770,7 @@ function handleCommand(raw: string): string[] {
         if (!heldFiles.has(target.hash)) { sys(`you are not holding ${target.name}`); break; }
         heldFiles.delete(target.hash);
         saveLibrary();
+        announceHeld();
         void dropBytes(target.hash);
         sys(`dropped the bytes for ${target.name} — the entry stays (${shortHash(target.hash)})`);
         break;
@@ -4684,7 +4778,8 @@ function handleCommand(raw: string): string[] {
 
       sys(`unknown subcommand: /file ${fsub}`);
       sys("  /file add                  — pick files to hash, hold and index");
-      sys("  /file list [--mine]        — what the room has, or only what you hold");
+      sys("  /file list [--mine|--here] — what the room has; only yours, or only what can be had now");
+      sys("  /file holders <hash|name>  — who has these bytes right now");
       sys("  /file drop <hash|name>     — stop holding the bytes, keep the entry");
       sys("  /file forget <hash|name>   — retract the entry (yours to retract for everyone)");
       break;
@@ -6101,6 +6196,12 @@ function connect(): void {
           }
           return;
         }
+        if (d.kind === "library-have") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          noteHolder(from, d.hashes);
+          return;
+        }
         if (d.kind === "sync-library") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -6159,6 +6260,9 @@ function connect(): void {
           // asks for what it wants.
           signedSend(peerId, { kind: "sync-library", entries: Array.from(libraryStore.values()) });
         }
+        // And what we are holding, so their list says what can be had rather
+        // than only what once existed.
+        announceHeld(peerId);
         if (groupStore.size > 0) {
           const groups = Array.from(groupStore.values());
           signedSend(peerId, { kind: "sync-gov", groups });
@@ -6212,6 +6316,10 @@ function connect(): void {
         try {
           pendingLeaves.delete(id);
           peers.delete(id);
+          // Their bytes left with them: availability is about who is here, and
+          // a departed holder listed as one is the broken link this design is
+          // built to avoid.
+          forgetHolder(id);
           renderPeers();
           // If their join was never announced (no name arrived / a quick refresh),
           // stay silent on the leave too — no "<id> joined"/"left" noise.

@@ -88,10 +88,32 @@ check("an ambiguous partial name refuses rather than picks",
 check("nothing matching is null", lib.findEntry(set, "nowhere") === null, "invented one");
 check("an empty needle is null", lib.findEntry(set, "  ") === null, "matched something");
 
+// --- can it actually be had? --------------------------------------------------
+// The states have to be distinguishable, because they are what stops a library
+// from being a list of broken links.
+const now = 1_000_000_000_000;
+const day = 24 * 60 * 60 * 1000;
+check("holding it beats every other state",
+      lib.availabilityOf(H("a"), true, 0, undefined, now) === "held", "not held");
+check("a peer here holding it is available now",
+      lib.availabilityOf(H("a"), false, 2, now - day, now) === "here", "not here");
+check("no holder present, but seen recently, is known",
+      lib.availabilityOf(H("a"), false, 0, now - day, now) === "known", "not known");
+check("no holder for a week is gone",
+      lib.availabilityOf(H("a"), false, 0, now - 8 * day, now) === "gone", "not gone");
+check("a holder never seen at all is gone, not known",
+      lib.availabilityOf(H("a"), false, 0, undefined, now) === "gone", "not gone");
+
 // --- what a person reads ------------------------------------------------------
-check("held and indexed look different",
-      lib.describeEntry(entry(), true).startsWith("●") && lib.describeEntry(entry(), false).startsWith("○"),
-      lib.describeEntry(entry(), true));
+check("each state has its own mark",
+      new Set(Object.values(lib.AVAILABILITY_MARK)).size === 4,
+      JSON.stringify(lib.AVAILABILITY_MARK));
+check("held and merely-indexed look different",
+      lib.describeEntry(entry(), "held").startsWith("●") && lib.describeEntry(entry(), "known").startsWith("○"),
+      lib.describeEntry(entry(), "held"));
+check("a line says how many holders are here",
+      lib.describeEntry(entry(), "here", 2).includes("2 holders here"),
+      lib.describeEntry(entry(), "here", 2));
 check("sizes are readable", lib.fmtSize(1536) === "2 KB" && lib.fmtSize(5 * 1024 * 1024) === "5.0 MB",
       `${lib.fmtSize(1536)} / ${lib.fmtSize(5 * 1024 * 1024)}`);
 check("media is told apart from files",
