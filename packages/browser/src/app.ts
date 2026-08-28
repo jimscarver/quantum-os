@@ -31,8 +31,9 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
 import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
-         putBytes, dropBytes, heldHashes, availabilityOf, fmtSize as fmtFileSize,
+         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, fmtSize as fmtFileSize,
          type LibraryEntry, type Availability } from "./library.js";
+import { createLibraryFetch, FETCH_MAX, type LibraryFetch } from "./library-fetch.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
 import { createAttachments, renderMedia, type Attachments,
          type MediaAttachment, type MediaKind } from "./attachments.js";
@@ -4733,6 +4734,32 @@ function handleCommand(raw: string): string[] {
         break;
       }
 
+      if (fsub === "get") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file get <hash|name>"); break; }
+        if (heldFiles.has(target.hash)) { sys(`you already hold ${target.name}`); break; }
+        if (target.size > FETCH_MAX) {
+          sys(`${target.name} is ${fmtFileSize(target.size)} — over the ${fmtFileSize(FETCH_MAX)} a fetch will carry today`);
+          break;
+        }
+        // Ask one holder rather than the room: a fetch is between two peers,
+        // and asking everyone would be the broadcast this is not.
+        const holders = [...(fileHolders.get(target.hash) ?? [])].filter((p) => peers.has(p));
+        if (!holders.length) {
+          sys(`nobody here is holding ${target.name} — /file holders ${shortHash(target.hash)}`);
+          break;
+        }
+        libraryFetch.want(target.hash, holders[0], target.name);
+        break;
+      }
+
+      if (fsub === "cancel") {
+        const target = frest ? findEntry(libraryStore.values(), frest) : null;
+        libraryFetch.cancel(target?.hash);
+        if (!frest) sys("cancelled every fetch in flight");
+        break;
+      }
+
       if (fsub === "holders") {
         const target = findEntry(libraryStore.values(), frest);
         if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file holders <hash|name>"); break; }
@@ -4779,7 +4806,9 @@ function handleCommand(raw: string): string[] {
       sys(`unknown subcommand: /file ${fsub}`);
       sys("  /file add                  — pick files to hash, hold and index");
       sys("  /file list [--mine|--here] — what the room has; only yours, or only what can be had now");
+      sys("  /file get <hash|name>      — fetch it from a holder, verified against its hash");
       sys("  /file holders <hash|name>  — who has these bytes right now");
+      sys("  /file cancel [hash|name]   — give up on a fetch");
       sys("  /file drop <hash|name>     — stop holding the bytes, keep the entry");
       sys("  /file forget <hash|name>   — retract the entry (yours to retract for everyone)");
       break;
@@ -6196,6 +6225,10 @@ function connect(): void {
           }
           return;
         }
+        // The lib-* transfer envelopes are the fetch module's, and are not
+        // dyncap-signed: the hash is what makes an arrival trustworthy, so a
+        // signature would prove only who sent bytes that are checked anyway.
+        if (String(d.kind ?? "").startsWith("lib-")) { libraryFetch.inbound(from, d); return; }
         if (d.kind === "library-have") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
@@ -6732,6 +6765,30 @@ function initUx(): void {
     },
     document.querySelector('#actions-row [data-action="record"]'),
   );
+  libraryFetch = createLibraryFetch({
+    peer: () => qpeer,
+    say: (t) => addMessage("", t, "system"),
+    label: (id) => peerLabel(id),
+    // Serving only what we actually hold — the index is public, the bytes are
+    // not, and a hash we never kept is not ours to answer for.
+    bytesFor: (hash) => (heldFiles.has(hash) ? getBytes(hash) : Promise.resolve(null)),
+    received: async (hash, file, name, mime) => {
+      await putBytes(hash, file);
+      heldFiles.add(hash);
+      // An entry for something fetched from a peer who had it but never
+      // indexed it: keep the name it arrived under.
+      if (!libraryStore.has(hash) && !isRetracted("library", hash)) {
+        const entry: LibraryEntry = {
+          hash, name, mime, size: file.size,
+          addedBy: myPeerId(), addedLabel: myName || shortId(myPeerId()), at: Date.now(),
+        };
+        libraryStore.set(hash, entry);
+        signedBroadcast({ kind: "library-entry", entry });
+      }
+      saveLibrary();
+      announceHeld();
+    },
+  });
   attachments = createAttachments({
     peer: () => qpeer,
     say: (t) => addMessage("", t, "system"),
@@ -7916,6 +7973,9 @@ let calls: Calls;
 
 /** Screen recording. Built in init, once the toolbar button exists. */
 let recorder: Recorder;
+
+/** Fetching a library file from whoever holds it. */
+let libraryFetch: LibraryFetch;
 
 /** Attachments over the data channel. Built in init alongside calls. */
 let attachments: Attachments;

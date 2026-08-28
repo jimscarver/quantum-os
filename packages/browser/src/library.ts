@@ -215,6 +215,44 @@ export async function dropBytes(hash: string): Promise<void> {
   try { await dir?.removeEntry(hash); } catch { /* already gone */ }
 }
 
+// A fetch arrives in pieces over minutes, so it is written as it comes rather
+// than assembled in memory: a partial file has a `.part` suffix, which
+// `heldHashes` refuses to count, so an interrupted fetch can never be mistaken
+// for a file we hold.
+const PART = ".part";
+
+export interface PartWriter {
+  write(chunk: BlobPart): Promise<void>;
+  close(): Promise<File | null>;
+  abort(): Promise<void>;
+}
+
+/** Somewhere to put a fetch while it arrives. Null when storage refuses. */
+export async function openPart(hash: string): Promise<PartWriter | null> {
+  const dir = await bytesDir(true);
+  if (!dir) return null;
+  try {
+    const handle = await dir.getFileHandle(hash + PART, { create: true });
+    const w = await handle.createWritable();
+    return {
+      async write(chunk) { await w.write(new Blob([chunk])); },
+      async close() {
+        await w.close();
+        try { return await handle.getFile(); } catch { return null; }
+      },
+      async abort() {
+        try { await w.close(); } catch { /* already gone */ }
+        try { await dir.removeEntry(hash + PART); } catch { /* already gone */ }
+      },
+    };
+  } catch { return null; }
+}
+
+export async function dropPart(hash: string): Promise<void> {
+  const dir = await bytesDir();
+  try { await dir?.removeEntry(hash + PART); } catch { /* already gone */ }
+}
+
 /** What is actually on disk — the truth behind what we claim to hold. */
 export async function heldHashes(): Promise<string[]> {
   const dir = await bytesDir();
