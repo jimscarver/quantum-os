@@ -50,15 +50,15 @@ function isWellFormed(msg: SignalMsg): boolean {
 // completing while every peer still appears in the room — indistinguishable,
 // from a browser, from the other peers never having started.
 //
-// Env-overridable so a local or self-hosted server can lift it (SIGNAL_RATE_LIMIT
-// =200 comfortably holds a full cast). Defaults unchanged, so the public
-// deployment behaves exactly as before.
+// Env-overridable, and the public deployment sets SIGNAL_RATE_LIMIT=200 in
+// render.yaml, which comfortably holds a full cast. The code default stays
+// tight for anyone running this unconfigured.
 const RATE_LIMIT = parseInt(process.env.SIGNAL_RATE_LIMIT ?? "20", 10);
 const RATE_WINDOW_MS = parseInt(process.env.SIGNAL_RATE_WINDOW_MS ?? "1000", 10);
 
 // Build marker — surfaced at GET / so a deploy can be confirmed from outside
 // (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
-const BUILD = "2026-06-23-heartbeat-2miss";
+const BUILD = "2026-08-28-rate-limit-200";
 
 export class SignalingServer {
   private wss: WebSocketServer;

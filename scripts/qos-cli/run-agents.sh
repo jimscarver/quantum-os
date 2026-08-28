@@ -9,31 +9,21 @@
 # Defaults: the public room + facilitator. Stable identity per role under
 # ./.qos-<role>; logs + pids under ./.agents. Stop with ./stop-agents.sh.
 #
-# WHY ONE ROLE BY DEFAULT, AND WHY THE LONG STAGGER
+# HOW MANY AGENTS, AND WHY THE STAGGER
 #
-# The free signaling server rate-limits, and the limit applies to the WebRTC
-# offer/answer/ICE exchange itself — not just to joining. Past a handful of peers
-# in one room, handshakes stop completing: peers still appear in the room, and no
-# data channel ever opens. From a browser that looks exactly like the agents
-# never showed up, with nothing in any log saying why.
+# A peer joining a room of N sends N-1 offers and then a burst of ICE candidates,
+# so the per-connection signaling rate during a join is superlinear in room size.
+# The signaling server caps that rate per connection (SIGNAL_RATE_LIMIT, set to
+# 200/s for the public deployment in render.yaml); over the cap, handshakes stop
+# completing while every peer still appears in the room — from a browser that is
+# indistinguishable from the other peers never having arrived. The roster marks
+# a peer it has no data channel to, so the failure is visible where the peer is.
 #
-# Measured against this signaling server, same room, same code. Counting peers is
-# fiddly because an observer joining to watch is itself a peer, so these are total
-# peers in the room, observer included where one was used:
+# The stagger keeps a set of agents from arriving as one burst, which is the
+# shape that costs the most rate for the least reason.
 #
-#   7 (facilitator scribe skeptic memory rholang + browser + observer) → 0 of 6 open
-#   5 (facilitator memory rholang + browser + observer)                → 1 of 4 open
-#   4 (facilitator memory + browser + observer)                       → 3 of 3 open
-#
-# Four is the most that has been seen to work against the public server. The
-# default set below — facilitator, memory, and one browser — is three.
-#
-# The failing case also churns: `peer: rate limit exceeded`, then a signaling
-# drop, then a rejoin that re-sends the whole peers list and trips the limit
-# again. So the defaults here stay small and slow: facilitator and skeptic, with
-# the room's memory carried by the first of them rather than run as its own peer
-# — three peers with one browser — and a stagger long enough that the joins do
-# not arrive as a burst.
+# The defaults are facilitator + skeptic, with the room's memory carried by the
+# first of them rather than run as its own peer.
 #
 # `scribe` is not among them because it needs no peer of its own: its duties are
 # a strict subset of the facilitator's (see agent-roles.mjs), so a facilitator
@@ -47,9 +37,6 @@
 # for the room to read. Start it by hand if you do:
 #   node rholang-agent.mjs --room <cap> --name rholang
 #
-# More roles work — pass them explicitly — but each one is another peer against
-# that ceiling, and the failure is silent. Running your own signaling server
-# removes the limit entirely and is the real fix if you want a full cast.
 set -euo pipefail
 cd "$(dirname "$0")"
 

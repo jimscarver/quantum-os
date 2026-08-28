@@ -8,4 +8,14 @@ services:
     envVars:
       - key: PORT
         generateValue: false
+      # A peer joining a room of N sends N-1 offers and then a burst of ICE
+      # candidates, so the per-connection message rate during a join is
+      # superlinear in room size. At the code default of 20/s the window blows
+      # at about four peers and handshakes stop completing — while every peer
+      # still appears in the room, which is indistinguishable from the others
+      # never having arrived. 200/s holds a full cast; the messages are small
+      # and the 64 KB payload cap and wsIndex relay auth are what actually
+      # guard the server.
+      - key: SIGNAL_RATE_LIMIT
+        value: "200"
     autoDeploy: true
