@@ -2,7 +2,8 @@
 
 How a room builds a library of recordings — **with no chain anywhere in it**.
 A chain can be synced to later, and the last section says what that would add;
-everything before it works with peers, browsers and the room memory daemon.
+everything before it works with peers and browsers alone — no server, and no
+always-on anything that the library depends on.
 
 Tracking issue: [#99](https://github.com/rchain-community/quantum-os/issues/99).
 
@@ -41,12 +42,24 @@ Three places, all of which exist today:
 - **The user's own filesystem**, through a directory handle
   (`showDirectoryPicker`, Chromium) or a file input elsewhere. Read lazily, so a
   20 GB folder costs nothing until something is fetched from it.
-- **The room memory daemon** (`scripts/qos-cli/room-memory.mjs`), which is a
-  peer with a disk and no browser quota. It already holds the durable half of a
-  room and re-serves it to joiners. **This is what makes a library survive
-  everybody closing their laptops — not a chain.**
+- **Every peer that fetches a copy**, because fetching *is* replication: a
+  fetch ends with the bytes on that peer's disk and an announcement that it
+  holds them (layer 3). A file that people actually want spreads by being
+  wanted, and needs nobody to arrange it.
 
-No layer above cares which of the three a peer is using.
+No layer above cares which of these a peer is using.
+
+**Durability is replication, not a server.** A library survives because several
+peers hold a copy and any of them can answer — the same way the index survives
+because every peer keeps it and replays it to whoever joins next. There is no
+always-on anything in this design and there must not be: an always-on peer that
+the library *needs* is a server, whatever it is called.
+
+What the design owes a person instead is **legibility about risk**: an entry
+with one holder is one closed laptop from being an entry with none, and the room
+should say so while a second copy can still be made. A memory daemon, or anyone
+who leaves a tab open, then *improves* those odds without being load-bearing —
+an enhancement, exactly like the chain in layer 6.
 
 ## Layer 1 — a name that is the content
 
@@ -68,7 +81,8 @@ per-room store, and it is the same shape as every other store in this app:
 - replayed to joiners in the existing `sync-*` handshake;
 - removable through the existing tombstone machinery (`retract`, kind
   `"library"`), so a removal does not heal back on the next sync;
-- persisted per room in `localStorage`, and by the daemon on disk.
+- persisted per room in `localStorage`, by every peer that has it — which is
+  what makes the index durable without anywhere central to keep it.
 
 Nothing here is new machinery. It is the lemma store with different fields, and
 it should be built by copying that shape rather than inventing beside it.
@@ -84,7 +98,10 @@ UI then distinguishes three states that matter to a person:
 - **gone** — no holder has been seen for a long time, and someone should be told
   before the entry is trusted as a library
 
-The daemon holding a copy is what turns most *known* into *here*.
+*Known* becomes *here* when a holder returns, and the surest way to have one is
+for several peers to hold a copy. An entry with a single holder is worth
+marking: it is one closed laptop from having none, and the moment to make a
+second copy is while the first is still reachable.
 
 ## Layer 4 — fetch, rather than broadcast
 
@@ -110,7 +127,7 @@ into the chat sends it.
 Everything above works with no chain, and most rooms will never want one. What
 a chain adds, when a group does:
 
-- an index that survives losing **every** peer *and* the daemon;
+- an index that survives losing **every** peer at once;
 - a name for the library that outlives the room, and can be handed to someone
   who was never in it;
 - a capability that a group holds and enforces on chain, once a group can act
@@ -141,7 +158,7 @@ inside a macro body:
 | `/file holders <hash>` | 3 | who has these bytes right now |
 | `/file get <hash\|name>` | 4 | fetch from a holder, with progress |
 | `/file drop <hash>` | 3 | stop holding it (the entry stays) |
-| `/file pin <hash>` | 0 | ask the daemon to hold a copy — durability, no chain |
+| `/file get <hash\|name>` | 4 | fetch **and keep** — the only replication there is |
 | `/file cap <hash> [label]` | 2 | mint the capability that says who may read it |
 | `/file forget <hash>` | 2 | retract the entry (existing tombstone machinery) |
 
@@ -200,8 +217,9 @@ and it stays separate from who may **read**, which is a capability's job
 2. **Layer 3** — availability, so the list says what can be had.
 3. **Layer 4** — fetch on request, past 8 MB, with progress
    ([#100](https://github.com/rchain-community/quantum-os/issues/100)).
-4. **Layer 0's durable half** — the daemon holds copies, so the library outlives
-   the browsers.
+4. **Replication** — fetching is already keeping, so what is missing is saying
+   when a copy is at risk: an entry with a single holder, marked as such, while
+   a second copy can still be made.
 5. **Layer 5** — the interface
    ([#101](https://github.com/rchain-community/quantum-os/issues/101)).
 6. **Layer 6** — chain sync, if a group wants it

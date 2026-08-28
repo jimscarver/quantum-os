@@ -115,6 +115,21 @@ export type Availability = "held" | "here" | "known" | "gone";
 /** How long without a holder before an entry stops being merely offline. */
 export const GONE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * One copy is one closed laptop from none.
+ *
+ * There is no server here and there is not meant to be, so a file survives by
+ * being held in several places. That makes "how many hold this" the number
+ * worth showing: an entry with a single holder is not broken, it is one
+ * departure from broken, and the moment to make another copy is while the
+ * first is still reachable.
+ */
+export const AT_RISK_HOLDERS = 1;
+
+export function atRisk(holders: number): boolean {
+  return holders > 0 && holders <= AT_RISK_HOLDERS;
+}
+
 export function availabilityOf(
   hash: string, held: boolean, holdersPresent: number, lastSeen: number | undefined, now = Date.now(),
 ): Availability {

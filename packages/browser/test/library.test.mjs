@@ -104,6 +104,14 @@ check("no holder for a week is gone",
 check("a holder never seen at all is gone, not known",
       lib.availabilityOf(H("a"), false, 0, undefined, now) === "gone", "not gone");
 
+// --- one copy is one departure from none -------------------------------------
+// There is no server: a file exists for as long as somebody holds it, so the
+// count of copies is the thing durability actually rests on.
+check("a single copy is at risk", lib.atRisk(1), "not flagged");
+check("two are not", !lib.atRisk(2), "flagged");
+check("nothing held at all is not 'at risk' — it is already gone",
+      !lib.atRisk(0), "flagged a file nobody has");
+
 // --- what a person reads ------------------------------------------------------
 check("each state has its own mark",
       new Set(Object.values(lib.AVAILABILITY_MARK)).size === 4,

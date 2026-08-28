@@ -31,7 +31,7 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
 import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
-         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, AVAILABILITY_MARK,
+         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, AVAILABILITY_MARK, atRisk,
          fmtSize as fmtFileSize,
          type LibraryEntry, type Availability } from "./library.js";
 import { createLibraryFetch, FETCH_MAX, type LibraryFetch } from "./library-fetch.js";
@@ -539,6 +539,17 @@ function loadLibrary(): void {
     for (const h of [...heldFiles]) if (!onDisk.has(h)) { heldFiles.delete(h); changed = true; }
     if (changed) saveLibrary();
   })();
+}
+
+/**
+ * How many copies of an entry are reachable, this one included.
+ *
+ * The number durability actually depends on: with no server, a file exists for
+ * as long as somebody still has it.
+ */
+function copiesOf(hash: string): number {
+  const others = [...(fileHolders.get(hash) ?? [])].filter((p) => peers.has(p)).length;
+  return others + (heldFiles.has(hash) ? 1 : 0);
 }
 
 /** What can be had, for one entry, right now. */
@@ -1447,10 +1458,15 @@ function renderLibrary(): void {
     size.className = "lib-size";
     size.textContent = fmtFileSize(e.size);
 
+    const copies = copiesOf(e.hash);
+    if (atRisk(copies)) li.classList.add("lib-thin");
     li.title = avail === "held" ? `${e.name} — you hold it. Click to play or save.`
       : avail === "here" ? `${e.name} — ${holders} holder${holders === 1 ? "" : "s"} here. Click to fetch.`
       : avail === "known" ? `${e.name} — no holder is here right now.`
       : `${e.name} — no holder has been seen in a week; the entry may be all that is left.`;
+    if (atRisk(copies)) {
+      li.title += "\nOnly one copy exists. Another peer running /file get is what makes it survive.";
+    }
     li.append(mark, name, size);
     li.addEventListener("click", () => openLibraryEntry(e));
     appendRemoveBtn(li, "remove this entry", () => forgetLibraryEntry(e));
@@ -4814,8 +4830,20 @@ function handleCommand(raw: string): string[] {
                                          && availabilityFor(e.hash) !== "gone").length;
         sys(`library — ${all.length} entr${all.length === 1 ? "y" : "ies"}, ${reachable} available now`
           + "  (● you hold · ◉ a peer here holds · ○ no holder present · ⚠ none seen in a week)");
+        const thin: LibraryEntry[] = [];
         for (const e of all) {
-          sys("  " + describeEntry(e, availabilityFor(e.hash), fileHolders.get(e.hash)?.size ?? 0));
+          const copies = copiesOf(e.hash);
+          if (atRisk(copies)) thin.push(e);
+          sys("  " + describeEntry(e, availabilityFor(e.hash), fileHolders.get(e.hash)?.size ?? 0)
+            + (atRisk(copies) ? "  · only copy" : ""));
+        }
+        // Nothing here is backed up by anything but other people, so the count
+        // of copies is the thing worth saying out loud.
+        if (thin.length) {
+          const mine = thin.filter((e) => heldFiles.has(e.hash)).length;
+          sys(`⚠ ${thin.length} entr${thin.length === 1 ? "y has" : "ies have"} a single copy`
+            + (mine ? ` — ${mine} of them only here, so nobody else has it` : "")
+            + ". A second copy is somebody running /file get while the first is still reachable.");
         }
         break;
       }
