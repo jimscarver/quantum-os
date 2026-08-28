@@ -3059,6 +3059,21 @@ function handleCommand(raw: string): string[] {
         sys(`👏 awarded ${peerLabel(pid)} ${n} kudos`);
         break;
       }
+      if (gsub === "locker") {
+        const want = grest.trim();
+        if (!want) {
+          sys(g.locker ? `${g.name} uses the locker at ${g.locker}`
+                       : `${g.name} has no locker recorded. An admin: /gov locker rho:id:…  (/rholang locker install mints one)`);
+          break;
+        }
+        if (!isAdmin(g, meId)) { sys("only an admin records the group's locker"); break; }
+        if (!looksLikeRegistryUri(want)) { sys(`not a registry URI: ${want}`); break; }
+        g.locker = want;
+        saveGroups(); renderGroups(); refreshGroupCard(g);
+        signedBroadcast({ kind: "group-meta", groupId: g.id, locker: want });
+        sys(`📇 ${g.name} uses the locker at ${want} — every member's /rholang now finds it`);
+        break;
+      }
       if (gsub === "uri") {
         // Recorded by an admin, not derived: the deploy happened in someone's
         // browser with someone's key, and only they can say where it landed.
@@ -5139,7 +5154,12 @@ function handleCommand(raw: string): string[] {
             break;
           }
           if (rest) { saveNodeConfig({ ...cfg, locker: rest }); sys(`✓ locker set to ${rest}`); break; }
-          sys(cfg.locker ? `locker ${cfg.locker}` : "no locker set");
+          if (cfg.locker) sys(`locker ${cfg.locker}`);
+          else {
+            const fromGroup = lockerFromGroups();
+            sys(fromGroup ? `no locker of your own — using ${fromGroup.group}'s: ${fromGroup.uri}`
+                          : "no locker set");
+          }
           sys("  /rholang locker <uri>    — point at one somebody installed");
           sys("  /rholang locker install  — publish one at the uri your key derives");
           break;
@@ -5150,28 +5170,40 @@ function handleCommand(raw: string): string[] {
         case "resolve":
         case "record":
         case "grant": {
+          // Being in a group is enough to reach the group's locker. A member
+          // should not have to be handed a uri out of band that the group
+          // already knows, so an unset local locker falls back to one a group
+          // you belong to has recorded — named, so it is never a silent
+          // substitution of somebody else's directory for your own.
+          const groupLocker = lockerFromGroups();
           // Every locker verb is its own deploy. `deployerId` exists only
           // inside one, and a facet reached through the registry answers the
           // first call in a program and nothing after it (rchain-rust#21) — so
           // one verb per program is the shape either way.
-          if (!cfg.locker) { sys("no locker — /rholang locker <uri>, or /rholang locker install"); break; }
+          const locker = cfg.locker ?? groupLocker?.uri;
+          if (!locker) {
+            sys("no locker — /rholang locker <uri>, or /rholang locker install");
+            sys("  a group can carry one for its members: /gov locker rho:id:…");
+            break;
+          }
+          if (!cfg.locker && groupLocker) sys(`using ${groupLocker.group}'s locker  ${groupLocker.uri}`);
           if (!cfg.key)    { sys("no key — /rholang key generate first"); break; }
           const a = rest.split(/\s+/).filter(Boolean);
           let program: string | null = null;
           if (sub === "register") {
-            program = registerProgram(cfg.locker, revAddressOf(cfg.key));
+            program = registerProgram(locker, revAddressOf(cfg.key));
             sys(`registering ${revAddressOf(cfg.key)}`);
           } else if (sub === "bind") {
             if (a.length < 2) sys("usage: /rholang bind <name> <uri>");
-            else program = bindProgram(cfg.locker, a[0], a.slice(1).join(" "));
+            else program = bindProgram(locker, a[0], a.slice(1).join(" "));
           } else if (sub === "resolve") {
             if (!a[0]) sys("usage: /rholang resolve <name>");
-            else program = resolveProgram(cfg.locker, a[0]);
+            else program = resolveProgram(locker, a[0]);
           } else if (sub === "record") {
-            program = readProgram(cfg.locker);
+            program = readProgram(locker);
           } else if (sub === "grant") {
             if (!a[0]) sys("usage: /rholang grant <name>  — a write-only cap for that one name");
-            else program = grantProgram(cfg.locker, a[0]);
+            else program = grantProgram(locker, a[0]);
           }
           if (program) runRholangProgram("deploy", program);
           break;
@@ -6287,6 +6319,7 @@ function connect(): void {
           if (typeof d.treasury === "string") g.treasury = d.treasury;
           if (typeof d.kudos === "string") g.kudos = d.kudos;
           if (typeof d.uri === "string" && looksLikeRegistryUri(d.uri)) g.uri = d.uri;
+          if (typeof d.locker === "string" && looksLikeRegistryUri(d.locker)) g.locker = d.locker;
           saveGroups(); renderGroups(); refreshGroupCard(g);
           return;
         }
@@ -7171,6 +7204,25 @@ function mergePollFromSync(raw: unknown): "added" | "updated" | "none" {
  * the deployer key's hash. Checked rather than trusted because it arrives over
  * the wire — a group's durable name should not become a place to park text.
  */
+/**
+ * A locker a group you belong to has recorded.
+ *
+ * The focused group first, because that is the one you are working in; then any
+ * other you are a member of, so a single group with a locker just works. Only
+ * groups you are actually a member of — a locker is a directory somebody else
+ * installed, and adopting one from a group you merely see would be adopting a
+ * stranger's.
+ */
+function lockerFromGroups(): { group: string; uri: string } | null {
+  const me = myPeerId();
+  const focused = focusedGroup ? groupStore.get(focusedGroup) : undefined;
+  const ordered = [focused, ...groupStore.values()].filter((g): g is Group => !!g);
+  for (const g of ordered) {
+    if (g.locker && isMember(g, me)) return { group: g.name, uri: g.locker };
+  }
+  return null;
+}
+
 function looksLikeRegistryUri(s: string): boolean {
   return /^rho:id:[a-z0-9]{40,60}$/.test(s.trim());
 }
@@ -7204,6 +7256,7 @@ function mergeGroupFromSync(raw: unknown): boolean {
       ...(typeof r.treasury === "string" ? { treasury: r.treasury } : {}),
       ...(typeof r.kudos === "string" ? { kudos: r.kudos } : {}),
       ...(typeof r.uri === "string" && looksLikeRegistryUri(r.uri) ? { uri: r.uri } : {}),
+      ...(typeof r.locker === "string" && looksLikeRegistryUri(r.locker) ? { locker: r.locker } : {}),
       ...(Object.keys(vaults).length ? { vaults } : {}), issues,
     });
     return true;
@@ -7213,6 +7266,7 @@ function mergeGroupFromSync(raw: unknown): boolean {
   if (typeof r.treasury === "string" && !existing.treasury) { existing.treasury = r.treasury; changed = true; }
   if (typeof r.kudos === "string" && !existing.kudos) { existing.kudos = r.kudos; changed = true; }
   if (typeof r.uri === "string" && looksLikeRegistryUri(r.uri) && !existing.uri) { existing.uri = r.uri; changed = true; }
+  if (typeof r.locker === "string" && looksLikeRegistryUri(r.locker) && !existing.locker) { existing.locker = r.locker; changed = true; }
   for (const [pid, m] of Object.entries(inMembers)) {
     const cur = existing.members[pid];
     const at = typeof m.at === "number" ? m.at : 0;

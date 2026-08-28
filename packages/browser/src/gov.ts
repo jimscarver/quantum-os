@@ -61,6 +61,11 @@ export interface Group {
   // group's durable name — the thing to look it up by after every browser here
   // has closed. Recorded, not derived: whoever deployed it says what it is.
   uri?: string;
+  // The locker the group uses — a directory contract someone installed and the
+  // group agreed to share. Recorded here so that being in a group is enough to
+  // reach it: a member should not have to be told a uri out of band that the
+  // group already knows.
+  locker?: string;
   kudos?: string;
   // Members' password-encrypted identities, handle -> VaultRecord, replicated so
   // a member can recover their identity in a new browser (see VaultRecord). The
