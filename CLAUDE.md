@@ -260,6 +260,17 @@ Wire kinds (all dyncap-signed, idempotent, out-of-order tolerant): `poll-open` (
 
 For the broader family of group-decision processes this interface supports (approval / ranked-choice / consensus / atomic rendezvous / delegation / sortition / …) — built and sketched, each mapped to its primitive — see [Group_Decisions.md](Group_Decisions.md).
 
+### The room's library (`/file` — `library.ts` + `app.ts`)
+
+Layers 1–2 of [Media_Libraries.md](Media_Libraries.md): **a file's name is its content hash**, and the index of those names is ordinary room state. **No chain anywhere** — a chain is an optional later sync of the index (#102), and what makes a library outlive every browser is the memory daemon holding copies, not a block.
+
+- `hashBlob` (SHA-256, the digest `dyncap` already uses) names an entry, so two peers adding one file agree by construction, a copy from anyone is verifiable, and a fetch is resumable from a different holder later.
+- `LibraryEntry = {hash, name, mime, size, addedBy, addedLabel, at, cap?}`. `entryFromWire` validates every field because every entry arrives from a peer; `findEntry` takes a hash, a prefix or a name and **returns null rather than guessing** between two matches; `sortEntries` is newest-first with the hash as tie-break, so every peer lists the same order.
+- Two facts, kept apart: `libraryStore` (the index — public, gossiped, `qos-library-<room>`) and `heldFiles` (whose bytes this browser has — local, `qos-library-held-<room>`). An entry can exist with no holder present, and the list says so (`●` held · `○` indexed).
+- Bytes live in **OPFS** (`putBytes`/`getBytes`/`dropBytes`/`heldHashes` in `library.ts`, the filesystem `record.ts` streams into). Every operation answers rather than throws, so a browser that refuses storage still indexes and lists.
+- Wire: dyncap-signed `library-entry`, `sync-library` on the join handshake (the index, never the bytes), and removal through the existing tombstone machinery (`retract` kind `"library"`, honored only from the peer who added it).
+- Verbs, not a feature — `/file add · list [--mine] · drop · forget`, each answering in lines so a room composes its own workflow in a `+command` body. Fetching from another peer is #100; the index is useful before it exists.
+
 ### Removal & retraction (`/forget` — `app.ts`)
 
 Per-item removal of polls, lemmas, and held notes (sidebar ✕ on each row; a `remove` button on poll cards; the `/forget <poll <id> | lemma <name> | note <token|currency denom> | list>` command).

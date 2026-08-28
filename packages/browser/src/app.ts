@@ -30,6 +30,9 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
+import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
+         putBytes, dropBytes, heldHashes, fmtSize as fmtFileSize,
+         type LibraryEntry } from "./library.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
 import { createAttachments, renderMedia, type Attachments,
          type MediaAttachment, type MediaKind } from "./attachments.js";
@@ -223,6 +226,11 @@ interface RoomContext {
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Peers already reported as unreachable, so a full room says so once.
   unreachableWarned: Set<string>;
+  // What the room has: the index (public, gossiped) and what this peer is
+  // actually holding the bytes for (local — nobody else's business to be told
+  // until they ask).
+  libraryStore: Map<string, LibraryEntry>;
+  heldFiles: Set<string>;
   // Lemma + note stores (the public room knowledge)
   lemmaStore: Map<string, LemmaEntry>;
   currencyTokens: Map<string, string>;
@@ -290,6 +298,8 @@ function createRoom(roomId: string): RoomContext {
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
     unreachableWarned: new Set(),
+    libraryStore: new Map(),
+    heldFiles: new Set(),
     lemmaStore: new Map(),
     currencyTokens: new Map(),
     noteStore: new Map(),
@@ -358,6 +368,8 @@ let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let unreachableWarned: Set<string> = new Set();
+let libraryStore: Map<string, LibraryEntry> = new Map();
+let heldFiles: Set<string> = new Set();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
 let noteStore: Map<string, NoteEntry> = new Map();
@@ -400,6 +412,8 @@ function setActiveRoom(ctx: RoomContext): void {
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
   unreachableWarned  = ctx.unreachableWarned;
+  libraryStore       = ctx.libraryStore;
+  heldFiles          = ctx.heldFiles;
   lemmaStore         = ctx.lemmaStore;
   currencyTokens     = ctx.currencyTokens;
   noteStore          = ctx.noteStore;
@@ -462,6 +476,48 @@ function loadLemmas(): void {
     for (const [name, entry] of Object.entries(data)) lemmaStore.set(name, entry);
     renderLemmas();
   } catch { /* ignore corrupt data */ }
+}
+
+function saveLibrary(): void {
+  localStorage.setItem(`qos-library-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(libraryStore.entries())));
+  // What we hold is per-room and per-browser: the entry is public, the bytes
+  // are not, and a peer that cleared its storage should say so rather than
+  // claim to still have them.
+  localStorage.setItem(`qos-library-held-${activeRoom.roomId}`, JSON.stringify([...heldFiles]));
+}
+
+function loadLibrary(): void {
+  const raw = localStorage.getItem(`qos-library-${activeRoom.roomId}`);
+  if (raw) {
+    try {
+      for (const [hash, e] of Object.entries(JSON.parse(raw) as Record<string, LibraryEntry>)) {
+        const entry = entryFromWire(e);
+        if (entry && !isRetracted("library", hash)) libraryStore.set(hash, entry);
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+  const held = localStorage.getItem(`qos-library-held-${activeRoom.roomId}`);
+  if (held) {
+    try { for (const h of JSON.parse(held) as string[]) heldFiles.add(h); }
+    catch { /* ignore corrupt data */ }
+  }
+}
+
+/**
+ * Record an entry, from wherever it came.
+ *
+ * First writer wins by hash, which needs no arbitration: the hash IS the
+ * content, so two peers adding the same file agree by construction, and a
+ * second entry for one hash can only differ in what it is called.
+ */
+function addLibraryEntry(raw: unknown): LibraryEntry | null {
+  const entry = entryFromWire(raw);
+  if (!entry || isRetracted("library", entry.hash)) return null;
+  if (libraryStore.has(entry.hash)) return null;
+  libraryStore.set(entry.hash, entry);
+  saveLibrary();
+  return entry;
 }
 
 function savePolls(): void {
@@ -1149,6 +1205,7 @@ function loadRoomState(ctx: RoomContext): void {
   const previousActive = activeRoom;
   setActiveRoom(ctx);
   loadLemmas();
+  loadLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
@@ -1854,6 +1911,74 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
     if (action === "show" || echoOnly) { echoRholang(chosen, source); return; }
     runRholangProgram(chosen, source);
   })();
+}
+
+/**
+ * Pick files, hash them, keep the bytes, and tell the room what exists.
+ *
+ * Deliberately not a broadcast of the file: a library entry is a name for
+ * something, and the bytes move later, to whoever asks. Adding an entry the
+ * room already has is not an error — the hash is the content, so both peers
+ * are talking about the same thing, and the second one has simply become
+ * another holder of it.
+ */
+function addFilesToLibrary(): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.addEventListener("change", () => {
+    void (async () => {
+      const files = [...(input.files ?? [])];
+      if (!files.length) return;
+      for (const file of files) {
+        const hash = await hashBlob(file);
+        const kept = await putBytes(hash, file);
+        if (!kept) {
+          addMessage("", `⚠ could not keep ${file.name} — this browser's storage refused it, so the entry would name bytes nobody has`, "system");
+          continue;
+        }
+        heldFiles.add(hash);
+        const known = libraryStore.get(hash);
+        if (known) {
+          saveLibrary();
+          addMessage("", `● you are now holding ${known.name} (${shortHash(hash)}) — already in the library`, "system");
+          continue;
+        }
+        const entry: LibraryEntry = {
+          hash, name: file.name, mime: file.type || "application/octet-stream",
+          size: file.size, addedBy: myPeerId(), addedLabel: myName || shortId(myPeerId()),
+          at: Date.now(),
+        };
+        libraryStore.set(hash, entry);
+        saveLibrary();
+        signedBroadcast({ kind: "library-entry", entry });
+        addMessage("", `● added ${entry.name}  ${fmtFileSize(entry.size)}  ${shortHash(hash)}`, "system");
+      }
+    })();
+  });
+  input.click();
+}
+
+/**
+ * Retract an entry — for everyone if it is yours, from this view otherwise.
+ *
+ * The same rule the rest of the room's state follows (`/forget`): an owner
+ * retracts, anyone else hides. Tombstoned either way, so a peer's next sync
+ * does not heal it back.
+ */
+function forgetLibraryEntry(entry: LibraryEntry): void {
+  const mine = entry.addedBy === myPeerId();
+  libraryStore.delete(entry.hash);
+  retracted.add(`library:${entry.hash}`);
+  saveRetracted();
+  if (heldFiles.has(entry.hash)) { heldFiles.delete(entry.hash); void dropBytes(entry.hash); }
+  saveLibrary();
+  if (mine) {
+    signedBroadcast({ kind: "retract", what: "library", id: entry.hash });
+    addMessage("", `retracted ${entry.name} — removed for everyone`, "system");
+  } else {
+    addMessage("", `hid ${entry.name} — it is ${entry.addedLabel}'s to retract for the room`, "system");
+  }
 }
 
 /**
@@ -4507,6 +4632,64 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "file":
+    case "files": {
+      // Verbs, not a feature. Each does one thing and answers in lines, so a
+      // room composes its own workflow in a macro body rather than waiting for
+      // the workflow it wants to be built. See Media_Libraries.md.
+      const fParts = arg.trim().split(/\s+/);
+      const fsub = (fParts[0] || "list").toLowerCase();
+      const frest = fParts.slice(1).join(" ").trim();
+
+      if (fsub === "list" || fsub === "") {
+        const mine = /^--?mine$/i.test(frest);
+        const all = sortEntries(libraryStore.values())
+          .filter((e) => !mine || heldFiles.has(e.hash));
+        if (all.length === 0) {
+          sys(mine ? "you are holding nothing in this room" : "the room's library is empty — /file add");
+          break;
+        }
+        sys(`library — ${all.length} entr${all.length === 1 ? "y" : "ies"}` +
+            `, ${heldFiles.size} held here  (● held · ○ indexed)`);
+        for (const e of all) sys("  " + describeEntry(e, heldFiles.has(e.hash)));
+        break;
+      }
+
+      if (fsub === "add") {
+        // Pick, hash, keep the bytes, announce the entry. The hash is the name,
+        // so adding the same file twice is one entry and needs no arbitration.
+        void addFilesToLibrary();
+        break;
+      }
+
+      if (fsub === "forget") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file forget <hash|name>"); break; }
+        forgetLibraryEntry(target);
+        break;
+      }
+
+      if (fsub === "drop") {
+        // Stop holding the bytes; the entry stays, because what the room has is
+        // a different fact from what this browser is keeping.
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file drop <hash|name>"); break; }
+        if (!heldFiles.has(target.hash)) { sys(`you are not holding ${target.name}`); break; }
+        heldFiles.delete(target.hash);
+        saveLibrary();
+        void dropBytes(target.hash);
+        sys(`dropped the bytes for ${target.name} — the entry stays (${shortHash(target.hash)})`);
+        break;
+      }
+
+      sys(`unknown subcommand: /file ${fsub}`);
+      sys("  /file add                  — pick files to hash, hold and index");
+      sys("  /file list [--mine]        — what the room has, or only what you hold");
+      sys("  /file drop <hash|name>     — stop holding the bytes, keep the entry");
+      sys("  /file forget <hash|name>   — retract the entry (yours to retract for everyone)");
+      break;
+    }
+
     case "record": {
       // Local, and deliberately not a broadcast of its own output: the recorder
       // tells the room itself, on start and on stop.
@@ -5624,6 +5807,19 @@ function connect(): void {
           const what = String(d.what ?? "");
           const id = String(d.id ?? "");
           if (!id) return;
+          if (what === "library") {
+            // Only whoever added it, as with a poll's creator: an entry names
+            // content by its hash, so a retract from anyone else would be one
+            // peer deciding what a room may remember.
+            const entry = libraryStore.get(id.toLowerCase());
+            if (!entry || entry.addedBy !== from) return;
+            markRetracted("library", entry.hash);
+            libraryStore.delete(entry.hash);
+            if (heldFiles.has(entry.hash)) { heldFiles.delete(entry.hash); void dropBytes(entry.hash); }
+            saveLibrary();
+            addMessage("", `${peerLabel(from)} retracted ${entry.name} from the library`, "system");
+            return;
+          }
           if (what === "poll") {
             const poll = pollStore.get(id);
             if (!poll || from !== poll.creator) return;   // only the creator can retract a poll for everyone
@@ -5895,6 +6091,25 @@ function connect(): void {
           addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
           return;
         }
+        if (d.kind === "library-entry") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const entry = addLibraryEntry(d.entry);
+          if (entry) {
+            addMessage("", `○ ${peerLabel(from)} added ${entry.name}  ${fmtFileSize(entry.size)}  `
+              + `${shortHash(entry.hash)}  — /file list`, "system");
+          }
+          return;
+        }
+        if (d.kind === "sync-library") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const list = Array.isArray(d.entries) ? d.entries : [];
+          let added = 0;
+          for (const raw of list.slice(0, 500)) if (addLibraryEntry(raw)) added++;
+          if (added) addMessage("", `+${added} librar${added === 1 ? "y entry" : "y entries"} via sync`, "system");
+          return;
+        }
         if (d.kind === "record") {
           addMessage("", `${d.on ? "⏺" : "⏹"} ${peerLabel(from)} ${d.on ? "is recording their screen" : "stopped recording"}`, "system");
           return;
@@ -5938,6 +6153,11 @@ function connect(): void {
         if (pollStore.size > 0) {
           const polls = Array.from(pollStore.values());
           signedSend(peerId, { kind: "sync-polls", polls });
+        }
+        if (libraryStore.size > 0) {
+          // The index, never the bytes: a joiner learns what the room has and
+          // asks for what it wants.
+          signedSend(peerId, { kind: "sync-library", entries: Array.from(libraryStore.values()) });
         }
         if (groupStore.size > 0) {
           const groups = Array.from(groupStore.values());
@@ -7645,6 +7865,7 @@ async function init(): Promise<void> {
   await loadZfa();
   await loadDyncap();
   loadLemmas();
+  loadLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
