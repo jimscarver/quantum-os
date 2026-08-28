@@ -208,6 +208,12 @@ use. The check runs on every receiver, so it holds with nobody enforcing it —
 and it stays separate from who may **read**, which is a capability's job
 ([#105](https://github.com/rchain-community/quantum-os/issues/105)).
 
+*Who may receive it* is the third, and it is not the library's to answer either.
+A group's index is group memory, and group memory syncs to a newcomer only with
+the members' consent — ⅔ of the active ones by default, a fraction the group can
+override ([#106](https://github.com/rchain-community/quantum-os/issues/106)).
+The same quorum #103 gives a group for acting, applied to disclosing.
+
 ---
 
 ## Build order
