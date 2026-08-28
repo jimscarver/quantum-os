@@ -61,6 +61,7 @@ export const CMD_HELP: Record<string, string[]> = {
            "note: deletes a held note (destroys its value, confirm required)."],
   gov: ["/gov new <name> · show <name> · list — liquid-democracy groups.",
         "/gov member add|remove <peer> [admin] · issue <title>",
+        "/gov uri [rho:id:…] — show the group's on-chain record, or (admin) record where it was deployed; every member gets it and /rholang read fetches it.",
         "/gov delegate <member> [on <issue>] · undelegate [on <issue>] — your vote flows to your delegate unless you vote (per-issue overrides global).",
         "/gov trust <member> <0-5> — confer a trust level BELOW your own (0 clears); admins are the root (5), vote weight = 1 + level (liquid trust).",
         "/gov censure <member> · uncensure <member> — flag undeserved trust; a ⅔ quorum of eligible censurers (min 2, even over an admin) discredits the target and slashes their vouchers.",
