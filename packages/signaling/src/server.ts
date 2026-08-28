@@ -80,7 +80,14 @@ export class SignalingServer {
     // HTTP server handles both health checks (GET /) and WS upgrades.
     const http = createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", build: BUILD, rooms: this.rooms.size }));
+      // The limit is reported because it is the room ceiling and it comes from
+      // the environment: a deploy proves the code shipped, and proves nothing
+      // about the env it shipped into. Inferring it by tripping the limiter
+      // from outside works and should not be necessary.
+      res.end(JSON.stringify({
+        status: "ok", build: BUILD, rooms: this.rooms.size,
+        limit: RATE_LIMIT, burst: RATE_BURST, windowMs: RATE_WINDOW_MS,
+      }));
     });
     this.wss = new WebSocketServer({ server: http, maxPayload: 65_536 });
     this._http = http;
