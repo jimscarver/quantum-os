@@ -2117,6 +2117,20 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false, ex
       // unbound — which is what /rholang eval's own help says it will.
       scope: ["return", ...powerboxNames("deploy")],
       nodeUrl: cfg.url,
+      // Asked live rather than passed in: the editor stays open across a node
+      // starting or stopping, and a status from when it opened would be a
+      // statement about the past.
+      status: async () => {
+        try {
+          const st = await nodeStatus(loadNodeConfig());
+          const mismatch = st.shardId && cfg.shard && st.shardId !== cfg.shard;
+          return `rnode ${st.version?.node ?? "?"} · shard ${st.shardId ?? "?"}`
+            + `${mismatch ? ` ⚠ you are set to ${cfg.shard}` : ""}`
+            + ` · block ${st.latestBlockNumber ?? "?"} · phlo ≥ ${st.minPhloPrice ?? "?"}`;
+        } catch {
+          return "not answering";
+        }
+      },
       lint: lintRholang,
       // Per device, not per room: a program is written against an rnode, and the
       // same one is usually run from whichever room you happen to be in.

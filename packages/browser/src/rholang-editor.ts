@@ -183,6 +183,14 @@ export interface RholangEditorOptions {
   scope: readonly string[];
   /** Where the program will run, shown so it is never a surprise. */
   nodeUrl: string;
+  /**
+   * Ask the node how it is, for the line under the title.
+   *
+   * Checked when the editor opens and again on click, because the answer
+   * changes while the editor is open — a node stops, a chain advances — and
+   * finding out by pressing Evaluate is finding out too late.
+   */
+  status?: () => Promise<string>;
   /** Check the program's shape; the result is shown live under the editor. */
   lint?: (source: string) => Promise<{ ok: boolean; errors: string[] }>;
   /**
@@ -227,11 +235,33 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     card.appendChild(h);
 
     const sub = document.createElement("div");
-    sub.textContent = `${opts.nodeUrl} — Explain says what it will do, Show displays what would be sent; `
-      + `neither sends anything. Evaluate runs it read-only: no block, no cost. `
-      + `Deploy signs and submits it: costs phlo, lands in a block.`;
-    sub.style.cssText = "font-size:12px;opacity:.7;margin-bottom:10px";
+    sub.textContent = "Explain says what it will do, Show displays what would be sent; "
+      + "neither sends anything. Evaluate runs it read-only: no block, no cost. "
+      + "Deploy signs and submits it: costs phlo, lands in a block.";
+    sub.style.cssText = "font-size:12px;opacity:.7;margin-bottom:6px";
+
+    // The node, and how it is. A click re-checks: the answer goes stale while
+    // the editor is open, and pressing Evaluate is the wrong way to find out.
+    const nodeLine = document.createElement("div");
+    nodeLine.style.cssText = "font-size:12px;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap";
+    const nodeUrl = document.createElement("span");
+    nodeUrl.textContent = opts.nodeUrl;
+    nodeUrl.style.cssText = "opacity:.85";
+    const nodeStat = document.createElement("button");
+    nodeStat.textContent = opts.status ? "checking…" : "status";
+    nodeStat.title = "click to check the node again";
+    nodeStat.style.cssText = "background:#22252c;color:#9fb4c7;border:1px solid #3a3d46;border-radius:5px;padding:2px 8px;font:inherit;font-size:11px;cursor:pointer";
+    const checkNode = (): void => {
+      if (!opts.status) return;
+      nodeStat.textContent = "checking…";
+      void opts.status().then((line) => { nodeStat.textContent = line; })
+        .catch(() => { nodeStat.textContent = "not answering"; });
+    };
+    nodeStat.addEventListener("click", checkNode);
+    nodeLine.append(nodeUrl, nodeStat);
     card.appendChild(sub);
+    card.appendChild(nodeLine);
+    checkNode();
 
     const wrap = document.createElement("div");
     wrap.className = "rh-wrap";
