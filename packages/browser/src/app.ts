@@ -1922,6 +1922,60 @@ function applyCommit(state: ProposalState, commitRows: CommitRow[]): boolean {
 // styles (no CSS-class dependency); resolves to the field values in order, or
 // null if cancelled. Password fields are masked (type=password).
 interface SecureField { label: string; type: "password" | "text" | "textarea"; placeholder?: string; value?: string }
+/**
+ * Ask yes or no without stopping the page.
+ *
+ * `window.confirm` is synchronous: it blocks every timer, every callback and
+ * every render until it is answered, so a dialog that opens behind another
+ * window — or on a phone, where it is easy to miss — is indistinguishable from
+ * the app having died. It was doing that in front of a deploy, which is the
+ * worst place for it: the moment someone is deciding whether to spend phlo.
+ */
+function confirmDialog(title: string, body: string, okLabel = "OK"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px";
+    const card = document.createElement("div");
+    card.style.cssText = "background:#1b1d23;color:#e8e8ea;border:1px solid #3a3d46;border-radius:10px;max-width:440px;width:100%;padding:18px 18px 14px;box-shadow:0 8px 40px rgba(0,0,0,.5);font:14px/1.5 system-ui,sans-serif";
+    const h = document.createElement("div");
+    h.textContent = title;
+    h.style.cssText = "font-weight:600;font-size:15px;margin-bottom:8px";
+    const p = document.createElement("div");
+    p.textContent = body;
+    p.style.cssText = "font-size:13px;opacity:.85;white-space:pre-wrap;margin-bottom:14px";
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
+    const ok = document.createElement("button");
+    ok.textContent = okLabel;
+    ok.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
+    row.append(cancel, ok);
+    card.append(h, p, row);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    let done = false;
+    const close = (answer: boolean): void => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(answer);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") { e.preventDefault(); close(false); }
+      else if (e.key === "Enter") { e.preventDefault(); close(true); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    cancel.addEventListener("click", () => close(false));
+    ok.addEventListener("click", () => close(true));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
+    setTimeout(() => ok.focus(), 0);
+  });
+}
+
 function secureDialog(title: string, fields: SecureField[], submitLabel = "OK"): Promise<string[] | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -2338,6 +2392,16 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
   say("```\n" + source + "\n```");
 
   const cfg = loadNodeConfig();
+  // A page served over https cannot fetch http, and the default node is
+  // http://127.0.0.1 — so on the deployed site every request fails before it is
+  // made, with everything looking correctly configured. Say it here rather than
+  // let it arrive as a bare network error after the signing.
+  if (location.protocol === "https:" && cfg.url.startsWith("http://")) {
+    say(`✗ this page is https and ${cfg.url} is http — the browser blocks that before the request is made`);
+    say("  run the app locally (pnpm dev:browser) to reach a node on this machine,");
+    say("  or point at one served over https:  /rholang rnode https://…");
+    return;
+  }
   void (async () => {
     // Never ask anyone to sign what cannot parse. The linter checks the shape of
     // the program, not what it is permitted to reach — that is rnode's call.
@@ -2362,9 +2426,10 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
     }
 
     if (!cfg.key) { say("✗ no deploy key — /rholang key generate, or /rholang key <hex>"); return; }
-    const confirmText = "Sign and deploy this to " + cfg.url + "?\n\n"
-      + "phlo limit " + cfg.phloLimit + " × price " + cfg.phloPrice + ", shard " + cfg.shard;
-    if (!window.confirm(confirmText)) { say("cancelled — nothing deployed"); return; }
+    const okToDeploy = await confirmDialog("Sign and deploy?",
+      `to ${cfg.url}\nphlo limit ${cfg.phloLimit} × price ${cfg.phloPrice}, shard ${cfg.shard}`,
+      "Sign and deploy");
+    if (!okToDeploy) { say("cancelled — nothing deployed"); return; }
     say("signing and deploying to " + cfg.url + "…");
     try {
       const r = await deployTerm(cfg, source);
@@ -5223,15 +5288,21 @@ function handleCommand(raw: string): string[] {
             break;
           }
           if (rest.toLowerCase() === "generate") {
-            if (cfg.key && !window.confirm("Replace the existing deploy key? The old one is not recoverable.")) {
-              sys("cancelled — key unchanged");
-              break;
-            }
-            const k = generateDeployKey();
-            saveNodeConfig({ ...cfg, key: k });
-            sys("✓ deploy key generated (stored in this browser only)");
-            sys(`  address ${revAddressOf(k)}`);
-            sys("  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge");
+            // handleCommand answers in lines, so the question is asked without
+            // blocking it: the dialog resolves later and finishes the work.
+            void (async () => {
+              if (cfg.key && !(await confirmDialog("Replace the deploy key?",
+                  "The existing one is not recoverable, and anything registered under it stays there.",
+                  "Replace it"))) {
+                addMessage("", "cancelled — key unchanged", "system");
+                return;
+              }
+              const k = generateDeployKey();
+              saveNodeConfig({ ...loadNodeConfig(), key: k });
+              addMessage("", "✓ deploy key generated (stored in this browser only)", "system");
+              addMessage("", `  address ${revAddressOf(k)}`, "system");
+              addMessage("", "  it holds no REV until a wallet funds it — a deploy from an unfunded key fails at pre-charge", "system");
+            })();
             break;
           }
           if (rest.toLowerCase() === "forget") {
