@@ -11,7 +11,7 @@
 // rather than held.
 
 import type { QOSPeer } from "./peer.js";
-import { preferredSurface, rememberSurface } from "./display.js";
+import { noScreenCapture } from "./record.js";
 
 /** What calls need from the app, asked for rather than held. */
 export interface CallHost {
@@ -261,14 +261,15 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     if (!inCall) { host.say("start a call before sharing your screen"); return; }
     if (screenStream) return;
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      host.say("⚠ this browser cannot share a screen (getDisplayMedia is unavailable)");
+      host.say(noScreenCapture("share"));
       return;
     }
     try {
-      // Open the picker where this browser shared from last — Chrome's own
-      // default is the tab list, which is rarely what a screen share means.
+      // No `displaySurface`: Chrome treats it as a filter on what the picker
+      // returns rather than a hint about where it opens, so naming one takes
+      // the choice away from the person making it.
       screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: preferredSurface() },
+        video: true,
         surfaceSwitching: "include",
       } as DisplayMediaStreamOptions);
     } catch (e) {
@@ -280,7 +281,6 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     }
     const track = screenStream.getVideoTracks()[0];
     if (!track) { stopScreenTracks(); return; }
-    rememberSurface(track);
 
     // Swap it into what we are sending, keeping the camera track to put back.
     cameraTrack = localStream?.getVideoTracks()[0] ?? null;
@@ -301,7 +301,9 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     const local = tiles.get("__local__");
     if (local && localStream) local.srcObject = localStream;
     markScreen("__local__", true);
-    host.say("🖥 you are sharing your screen");
+    const kind = (track.getSettings?.() as { displaySurface?: string } | undefined)?.displaySurface;
+    host.say(`🖥 you are sharing ${kind === "monitor" ? "your entire screen"
+      : kind === "window" ? "one window" : kind === "browser" ? "one browser tab" : "your screen"}`);
     updateControls();
   }
 

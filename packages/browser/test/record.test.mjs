@@ -79,6 +79,7 @@ const makeScratch = () => ({
 });
 
 let opfs = true;
+let lastDisplayOpts = null;
 provide("navigator", {
   storage: {
     getDirectory: async () => {
@@ -88,7 +89,7 @@ provide("navigator", {
     },
   },
   mediaDevices: {
-    getDisplayMedia: async () => displayAnswer(),
+    getDisplayMedia: async (opts) => { lastDisplayOpts = opts; return displayAnswer(); },
     getUserMedia: async () => micAnswer(),
   },
 });
@@ -216,6 +217,9 @@ micAnswer = () => new Stream([new Track("audio", "mic")]);
 voices = [new Track("audio", "ann"), new Track("audio", "dave")];
 rec.toggle();
 await settle();
+check("nothing constrains the surface — the person picks",
+      lastDisplayOpts && !("displaySurface" in (lastDisplayOpts.video ?? {})),
+      JSON.stringify(lastDisplayOpts?.video));
 check("a window share still has the room on it",
       said.some((s) => s.includes("2 voices from the call")), said.join(" | "));
 check("and it says how to catch what the device is playing, which it cannot",
@@ -233,10 +237,11 @@ check("and a re-delivered stream is not doubled",
       connected.filter((t) => t === voices[0]).length === 1,
       `${connected.filter((t) => t === voices[0]).length}`);
 
+check("it names what was actually captured, not what was asked for",
+      said.some((s) => s.includes("recording one window")), said.join(" | "));
+
 rec.toggle();
 await settle();
-check("the picker will open where this share ended up",
-      store.get("qos-share-surface") === "window", String(store.get("qos-share-surface")));
 voices = [];
 
 // --- no OPFS: memory, but it still works ------------------------------------

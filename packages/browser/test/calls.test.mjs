@@ -138,7 +138,7 @@ calls.toggleScreen();
 await settle();
 check("sharing alone is not refused",
       !said.some((s) => s.includes("nothing to share in its place")), said.join(" | "));
-check("it says it is sharing", said.some((s) => s.includes("sharing your screen")), said.join(" | "));
+check("it says it is sharing", said.some((s) => s.includes("you are sharing")), said.join(" | "));
 check("a joiner would be given the screen", lastSent().includes("screen"), JSON.stringify(sentToJoiners));
 check("a joiner would not be given the camera", !lastSent().includes("camera"), JSON.stringify(sentToJoiners));
 
@@ -211,8 +211,8 @@ check("only one tile is ever big",
       tilesEl.children.map((c) => c.className).join(" | "));
 
 
-check("sharing remembers the surface, so the picker opens there next time",
-      store.get("qos-share-surface") === "monitor", String(store.get("qos-share-surface")));
+check("it says which surface was actually shared",
+      said.some((s) => s.includes("sharing your entire screen")), said.join(" | "));
 
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);
