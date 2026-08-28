@@ -294,9 +294,17 @@ Per-room `groupStore: Map<groupId, Group>` (persisted `qos-groups-<roomId>`, syn
 The signaling server is an **untrusted relay**:
 - Routes SDP/ICE between peers; never sees WebRTC data channel contents (DTLS-encrypted)
 - `wsIndex: Map<WebSocket, string>` — binds each socket to its peerId at join; validates `msg.from` on every relay to prevent forgery
-- Rate-limited per connection (fixed window): `SIGNAL_RATE_LIMIT`, 200/s on the public deployment via `render.yaml`, 20/s if unset. The join burst is superlinear in room size, so this is also the ceiling on how many peers a room holds
+- Rate-limited per connection as a **token bucket** — `SIGNAL_RATE_LIMIT` sustained (200/s on the public deployment via `render.yaml`, 20/s if unset) with `SIGNAL_RATE_BURST` depth (4× by default). Joining is bursty then quiet — offers plus their ICE candidates arrive in a clump — and a fixed window punished exactly that shape; the sustained rate protects the server, the burst is what lets a legitimate join land. The client also staggers its offers 50ms apart (`QOSPeer.JOIN_STAGGER_MS`), since the burst is otherwise self-inflicted
 - Message size capped at 64 KB (`maxPayload: 65_536`)
 - Logs show only last 8 chars of IDs
+
+### How many people a room holds
+
+Full mesh: every browser opens a connection to every other, so the cost per person is the room's size and a browser gives out somewhere past ten (fewer on a call, where each link carries media). `ROOM_HOLDS = 10` in `app.ts` is that fact, not a configured cap — nothing is refused at the door. Five is where a group actually thinks together, so the human limit binds first.
+
+What matters is that the room **says so**: a peer in the roster with no data channel is `⚠`/dimmed (`QOSPeer.hasChannel`), the status line counts them, and a handshake still unfinished after `HANDSHAKE_GRACE_MS` (12s) posts one line per peer — "the room is full" past `ROOM_HOLDS`, "the handshake never completed" below it. Unmarked, this is indistinguishable from chat being broken, which is how it was reported: two browsers each had a channel to the agents and none to each other, so only the agent's replies landed.
+
+Past ten needs a different topology (an SFU for media, a relay or partial-mesh/gossip overlay for data), not a bigger rate limit.
 
 ### Signaling reconnect / false peer left-right
 

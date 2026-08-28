@@ -61,6 +61,8 @@ export class QOSPeer {
   private _reconnectDelay = 1500;
   private static readonly RECONNECT_MIN = 1500;
   private static readonly RECONNECT_MAX = 30000;
+  /// Gap between offers when dialling a room's existing peers (see "peers" below).
+  private static readonly JOIN_STAGGER_MS = 50;
   private static readonly STABLE_MS = 15000;   // a connection must survive this long to reset the backoff
   // Live-call media: the local mic/cam stream shared into all connections, and a
   // per-peer "we have an outstanding offer" flag for perfect-negotiation glare.
@@ -302,16 +304,32 @@ export class QOSPeer {
 
   private handleSignal(msg: SignalMsg): void {
     switch (msg.type) {
-      case "peers":
+      case "peers": {
         // On signaling reconnect the server re-sends the peers list. Skip peers
         // where the WebRTC data channel is still open — no need to re-establish.
+        //
+        // The rest are dialled on a stagger. Firing every offer at once is a
+        // burst the joiner inflicts on itself: each connection follows its offer
+        // with its own ICE candidates, so a room of N costs N-1 offers plus
+        // their candidate storms in the same instant, and the server's
+        // per-connection rate limit trips exactly when the room is big enough
+        // to need every handshake to land. A join spread over a second or two
+        // is not slower in any way a person notices.
+        let nth = 0;
         for (const peerId of msg.peers) {
           const ch = this.channels.get(peerId);
           if (ch?.readyState === "open") continue;
           this.config.onPeerJoined?.(peerId);
-          this.initiateConnection(peerId);
+          const at = nth++ * QOSPeer.JOIN_STAGGER_MS;
+          if (at === 0) { this.initiateConnection(peerId); continue; }
+          setTimeout(() => {
+            if (this._disconnected) return;
+            if (this.channels.get(peerId)?.readyState === "open") return;
+            this.initiateConnection(peerId);
+          }, at);
         }
         break;
+      }
       case "joined":
         this.config.onPeerJoined?.(msg.peerId);
         break;

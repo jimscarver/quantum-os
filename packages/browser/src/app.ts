@@ -219,6 +219,8 @@ interface RoomContext {
   peerAgents: Map<string, string>;
   pendingLeaves: Map<string, ReturnType<typeof setTimeout>>;
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
+  // Peers already reported as unreachable, so a full room says so once.
+  unreachableWarned: Set<string>;
   // Lemma + note stores (the public room knowledge)
   lemmaStore: Map<string, LemmaEntry>;
   currencyTokens: Map<string, string>;
@@ -285,6 +287,7 @@ function createRoom(roomId: string): RoomContext {
     peerAgents: new Map(),
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
+    unreachableWarned: new Set(),
     lemmaStore: new Map(),
     currencyTokens: new Map(),
     noteStore: new Map(),
@@ -352,6 +355,7 @@ let lastKnownNames: Map<string, string> = new Map();
 let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
+let unreachableWarned: Set<string> = new Set();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
 let noteStore: Map<string, NoteEntry> = new Map();
@@ -393,6 +397,7 @@ function setActiveRoom(ctx: RoomContext): void {
   peerAgents         = ctx.peerAgents;
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
+  unreachableWarned  = ctx.unreachableWarned;
   lemmaStore         = ctx.lemmaStore;
   currencyTokens     = ctx.currencyTokens;
   noteStore          = ctx.noteStore;
@@ -860,6 +865,43 @@ function connectedLabel(): string {
   const out = unreachablePeers().length;
   return `connected · ${n} peer${n === 1 ? "" : "s"}`
        + (out ? ` · ${out} unreachable` : "");
+}
+
+/**
+ * How many people a room actually holds.
+ *
+ * Not a configured cap — a fact about a full mesh: every browser opens a
+ * connection to every other, so the cost per person is the room's size and a
+ * browser gives out somewhere past ten. Five is where a group thinks together
+ * at all (the collective-intelligence number), so ten is already generous and
+ * the interesting limit is the human one.
+ *
+ * Nothing is refused at the door. The room simply cannot connect everyone past
+ * this, and what matters is that it SAYS so rather than looking like chat is
+ * broken.
+ */
+const ROOM_HOLDS = 10;
+/** How long a handshake gets before we call it failed rather than slow. */
+const HANDSHAKE_GRACE_MS = 12_000;
+
+/**
+ * A peer has been in the room without a channel long enough that it is not
+ * coming. Say so once, in the terms that are actually true: past ten the room
+ * is full, below it something else went wrong.
+ */
+function reportUnreachable(id: string): void {
+  if (!qpeer || qpeer.hasChannel(id) || !peers.has(id)) return;
+  if (unreachableWarned.has(id)) return;
+  unreachableWarned.add(id);
+  const size = peers.size + 1;
+  addMessage("", size > ROOM_HOLDS
+    ? `⚠ the room is full — ${size} here, and a browser mesh holds about ${ROOM_HOLDS}. `
+      + `${peerLabel(id)} is in the room but not connected to you: neither of you sees what the other types. `
+      + `Split the group (five is where a room actually thinks together) or run your own signaling server.`
+    : `⚠ couldn't connect to ${peerLabel(id)} — they are in the room but the handshake never completed, `
+      + `so neither of you sees what the other types. Reloading either side usually settles it.`,
+    "system");
+  renderPeers();
 }
 
 /**
@@ -5747,6 +5789,7 @@ function connect(): void {
         // Always repaint, not only for a peer new to the roster: a peer already
         // listed from signaling was being shown as unreachable until now.
         peers.add(peerId);
+        unreachableWarned.delete(peerId);
         renderPeers();
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
@@ -5791,6 +5834,11 @@ function connect(): void {
         if (peers.has(id)) return;
         peers.add(id);
         renderPeers();
+        // A handshake that never completes is silent, so time it.
+        setTimeout(() => {
+          const p2 = activeRoom; setActiveRoom(ctx);
+          try { reportUnreachable(id); } finally { setActiveRoom(p2); }
+        }, HANDSHAKE_GRACE_MS);
         // Wait for the peer's name before announcing — browsers send it right after
         // the channel opens — so the line shows a name, not a raw id; fall back to the
         // id after a timeout. Fired early by the name handler; cleared on leave.
