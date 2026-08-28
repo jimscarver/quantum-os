@@ -434,6 +434,12 @@ export function renderExpr(e: unknown): string {
   if (typeof e !== "object") return String(e);
   const o = e as Record<string, unknown>;
   if ("ExprInt" in o) return String(o.ExprInt);
+  // Several values on one name arrive as a par, which is rholang's own `|` —
+  // so it is written the way it would be written in the program.
+  if ("ExprPar" in o) {
+    const parts = (o.ExprPar as unknown[]).map(renderExpr);
+    return parts.length ? parts.join(" | ") : "Nil";
+  }
   if ("ExprString" in o) return JSON.stringify(o.ExprString);
   if ("ExprBool" in o) return String(o.ExprBool);
   if ("ExprBytes" in o) return `0x${String(o.ExprBytes)}`;
@@ -446,6 +452,17 @@ export function renderExpr(e: unknown): string {
   if ("ExprMap" in o) {
     const entries = (o.ExprMap as [string, unknown][]) ?? [];
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}: ${renderExpr(v)}`).join(", ")}}`;
+  }
+  // An expression this build names differently: render what is inside rather
+  // than printing rnode's wire shape at somebody. A single Expr-prefixed key is
+  // the pattern every one of the above follows, so the odd one out is very
+  // unlikely to be better served by raw JSON.
+  const keys = Object.keys(o);
+  if (keys.length === 1 && keys[0].startsWith("Expr")) {
+    const inner = o[keys[0]];
+    if (Array.isArray(inner)) return inner.map(renderExpr).join(", ");
+    if (inner !== null && typeof inner === "object") return renderExpr(inner);
+    return String(inner);
   }
   return JSON.stringify(o);
 }

@@ -2433,7 +2433,12 @@ function runRholangProgram(mode: "eval" | "deploy", source: string): void {
         const r = await evalTerm(cfg, source);
         if (r.values.length) for (const v of r.values) say("  → " + v);
         else say("  → (no value — a term reports by sending on a name called `return`)");
-        if (r.blockNumber !== undefined) say("  at block " + r.blockNumber);
+        // Order is rnode's, not the program's, and a reader will assume
+        // otherwise the moment there is more than one line to read.
+        if (r.values.length > 1) {
+          say("  (several sends to `return` — they come back in no dependable order)");
+        }
+        if (r.blockNumber !== undefined) say("  read against block " + r.blockNumber);
       } catch (e) {
         say("✗ " + ((e as Error)?.message ?? e));
       }
