@@ -39,7 +39,8 @@ import { expandBareMacro, expandMacroProgram, lintRholang,
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
-         registryUriOf, readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
+         registryUriOf, powerboxUsed, DEFAULT_CONFIG as DEFAULT_NODE_CONFIG,
+         readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -108,6 +109,7 @@ const toggleBtn       = document.getElementById("sidebar-toggle") as HTMLButtonE
 const myNameEl        = document.getElementById("my-name") as HTMLInputElement;
 const myIdEl          = document.getElementById("my-id")!;
 const roomIdEl        = document.getElementById("room-id")!;
+const appVersionEl    = document.getElementById("app-version");
 const DEFAULT_SIGNAL  = "wss://quantum-os-signaling.onrender.com";
 const signalUrlEl     = document.getElementById("signal-url") as HTMLInputElement;
 const stunUrlEl       = document.getElementById("stun-url") as HTMLInputElement;
@@ -1830,20 +1832,128 @@ const RHOLANG_HELP = [
 function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): void {
   const cfg = loadNodeConfig();
   void (async () => {
-    const source = await openRholangEditor({
+    const written = await openRholangEditor({
       mode,
       seed,
-      scope: ["return", ...powerboxNames(mode)],
+      // Deploy's names are the superset, and the editor can end in either mode
+      // now, so highlight against them: `deployId`/`deployerId` are marked in
+      // scope in a program that is then evaluated, where rnode reports them
+      // unbound — which is what /rholang eval's own help says it will.
+      scope: ["return", ...powerboxNames("deploy")],
       nodeUrl: cfg.url,
       lint: lintRholang,
       // Per device, not per room: a program is written against an rnode, and the
       // same one is usually run from whichever room you happen to be in.
       draftKey: "qos-rholang-draft",
     });
-    if (source === null) { addMessage("", "cancelled — nothing run", "system"); return; }
-    if (echoOnly) { echoRholang(mode, source); return; }
-    runRholangProgram(mode, source);
+    if (written === null) { addMessage("", "cancelled — nothing run", "system"); return; }
+    // The editor says which button ended it, so the verb that opened it is only
+    // a default: a program written to be evaluated can be deployed on the spot.
+    const { source, mode: chosen, action } = written;
+    if (action === "explain") { explainRholang(chosen, source); return; }
+    if (action === "show" || echoOnly) { echoRholang(chosen, source); return; }
+    runRholangProgram(chosen, source);
   })();
+}
+
+/**
+ * Say what a program will do, before it does it.
+ *
+ * Not a summary of the rholang — nothing here reads the program's meaning, and
+ * a tool that guessed at it would be worse than nothing. It is the account the
+ * app can give truthfully: where this goes, what it costs, which of rnode's
+ * powers it reaches and what each answers, whether anything comes back, and
+ * what a deploy does that an evaluation does not. Show answers "what exactly
+ * is sent"; this answers "what will happen if I do".
+ */
+function explainRholang(mode: "eval" | "deploy", source: string): void {
+  const cfg = loadNodeConfig();
+  void explainRholangAsync(mode, source, cfg);
+}
+
+async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg: NodeConfig): Promise<void> {
+  const out: string[] = [];
+  const say = (l: string) => out.push(l);
+
+  say(mode === "deploy"
+    ? `deploy → ${cfg.url}  ·  shard ${cfg.shard}`
+    : `evaluate → ${cfg.url}  ·  read-only, over finalized state`);
+
+  if (mode === "deploy") {
+    say(`  costs up to ${cfg.phloLimit} phlo at ${cfg.phloPrice} — charged whether or not it succeeds, and it lands in a block`);
+    if (cfg.key) {
+      say(`  signed with this browser's key, as ${revAddressOf(cfg.key)}`);
+      say(`  what the program sends to \`return\` is written to your registry slot at ${registryUriOf(cfg.key)}`);
+      say(`     (/rholang read fetches it back; the nonce advances on every write)`);
+    } else {
+      say("  ⚠ no signing key on this browser — Other ▸ If you use a chain ▸ Make a signing key");
+    }
+  } else {
+    say("  nothing is signed, nothing is stored, no block is made and nothing is charged");
+    say("  `deployId` and `deployerId` are unbound here — an exploratory deploy has no identity of its own");
+  }
+
+  const used = powerboxUsed(source, mode);
+  if (used.length) {
+    say(`reaches ${used.length} of rnode's powers:`);
+    for (const e of used) {
+      say(`  ${e.sig}`);
+      if (e.returns) say(`     → ${e.returns}`);
+    }
+  } else {
+    say("reaches none of rnode's powers — it is pure rholang");
+  }
+
+  // Call sites expand before anything is linted or signed, so what runs is not
+  // quite what is written. Naming them is the cue to press Show.
+  const sites = [...source.matchAll(/(?<![A-Za-z0-9_])([%$])([A-Za-z][\w-]*)\s*\(/g)];
+  if (sites.length) {
+    const names = [...new Set(sites.map((m) => m[1] + m[2]))];
+    say(`expands ${sites.length} macro call site${sites.length === 1 ? "" : "s"} before anything is signed: ${names.join(", ")}`);
+    say("     Show displays the result — that is what actually runs");
+  }
+
+  // A program that never answers `return` is the commonest way to get an empty
+  // result and think the node is broken.
+  if (!/(\breturn\s*!|\*return\b)/.test(source)) {
+    say("⚠ nothing is sent to `return`, so nothing comes back — the run will look empty");
+  }
+
+  addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`, "system");
+  for (const l of out) addMessage("", "  " + l, "system");
+
+  // Does the rnode it names actually answer? Every line above is about a node
+  // that may not be there, and "it did nothing" is the least useful way to find
+  // that out. Asked here rather than assumed, since the answer decides whether
+  // the next thing to do is write rholang or start a node.
+  try {
+    const st = await nodeStatus(cfg);
+    addMessage("", `  ✓ ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
+    if (st.shardId && cfg.shard && st.shardId !== cfg.shard) {
+      addMessage("", `  ⚠ it is shard ${st.shardId} and you are set to ${cfg.shard} — a deploy for the wrong shard is rejected (/rholang shard ${st.shardId})`, "system");
+    }
+  } catch {
+    addMessage("", `  ✗ ${cfg.url} does not answer — nothing will run until an rnode does`, "system");
+    if (cfg.url === DEFAULT_NODE_CONFIG.url) {
+      addMessage("", "     start the one that ships with this repo:  bash scripts/localnet/run-node.sh", "system");
+      addMessage("", "     or point at another:  /rholang rnode <url>   (Other ▸ If you use a chain)", "system");
+    } else {
+      addMessage("", `     try the local default:  /rholang rnode ${DEFAULT_NODE_CONFIG.url}  (bash scripts/localnet/run-node.sh starts it)`, "system");
+    }
+  }
+
+  // An AI in the room can read the program itself, which is the one thing this
+  // account cannot do. Offered rather than sent: asking posts the program to
+  // the room, and that is the user's call to make, not a side effect of
+  // pressing Explain.
+  const advisor = [...peers].find((p) => peerAgents.has(p));
+  if (advisor) {
+    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
+    addMessage("", `  🤖 ${peerLabel(advisor)} is here and can read the program itself — press Enter to ask (it posts the program to the room)`, "system");
+    msgInput.value = `/${peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor)} ask explain this rholang program, briefly: ${oneLine}`;
+    msgInput.focus();
+  }
+  addMessage("", "  nothing has been run — Show for what would be sent, or run it from the editor", "system");
 }
 
 /**
@@ -2640,7 +2750,7 @@ function handleCommand(raw: string): string[] {
         break;
       }
 
-      if (sub === "echo") {
+      if (sub === "echo" || sub === "show") {
         // Evidence, not explanation: what the expansion actually produced,
         // before anything runs and before anything is signed.
         const def = macroStore.get((parts[2] || "").toLowerCase().replace(/^[$+]/, ""));
@@ -4470,6 +4580,7 @@ function handleCommand(raw: string): string[] {
           break;
         }
 
+        case "show":
         case "echo": {
           // Show what would actually be sent, and run nothing. A program is
           // rewritten before it leaves the browser — wrapped so `return` and the
@@ -7484,7 +7595,13 @@ let attachments: Attachments;
 /** The command menu and quick-action toolbar. Built in initUx. */
 let palette: Palette;
 
+/** Injected by vite from package.json — see vite.config.ts. */
+declare const __APP_VERSION__: string;
+
 async function init(): Promise<void> {
+  // Which build you are looking at, in the corner where nothing else wants the
+  // space. A bug report that names a version is worth several that do not.
+  if (appVersionEl) appVersionEl.textContent = `version ${__APP_VERSION__}`;
   const roomId = getRoomId();
 
   // The URL-hash room is the first joined room and becomes the active one.

@@ -156,8 +156,27 @@ function ensureStyles(): void {
   document.head.appendChild(el);
 }
 
+export type RholangMode = "eval" | "deploy";
+
+/** Which button ended the editor. Two of the three send nothing. */
+export type RholangAction = "run" | "show" | "explain";
+
+/** What the editor was left with, and what to do with it. */
+export interface RholangEditorResult {
+  source: string;
+  /** Evaluate or deploy — for `run`, what to do; otherwise, what to describe. */
+  mode: RholangMode;
+  action: RholangAction;
+}
+
 export interface RholangEditorOptions {
-  mode: "eval" | "deploy";
+  /**
+   * Which action is primary — the blue button and Ctrl+Enter. Both are offered
+   * either way: the choice between running a program and paying to land it in a
+   * block belongs at the moment you have read the program, not before you have
+   * written it.
+   */
+  mode: RholangMode;
   /** Prefilled program text. */
   seed?: string;
   /** Names the wrapper declares, highlighted as free. */
@@ -193,7 +212,7 @@ function writeDraft(key: string | undefined, text: string): void {
  * Deliberately does not run anything itself — the caller owns lint-and-run, so
  * this stays a text editor and nothing more.
  */
-export function openRholangEditor(opts: RholangEditorOptions): Promise<string | null> {
+export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEditorResult | null> {
   ensureStyles();
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -203,14 +222,14 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     card.style.cssText = "background:#1b1d23;color:#e8e8ea;border:1px solid #3a3d46;border-radius:10px;max-width:760px;width:100%;padding:18px;box-shadow:0 8px 40px rgba(0,0,0,.5);font:14px/1.5 system-ui,sans-serif";
 
     const h = document.createElement("div");
-    h.textContent = opts.mode === "eval" ? "rholang — evaluate" : "rholang — deploy";
+    h.textContent = "rholang";
     h.style.cssText = "font-weight:600;font-size:15px;margin-bottom:2px";
     card.appendChild(h);
 
     const sub = document.createElement("div");
-    sub.textContent = opts.mode === "eval"
-      ? `runs read-only on ${opts.nodeUrl} — no block, no cost`
-      : `signed and submitted to ${opts.nodeUrl} — costs phlo, lands in a block`;
+    sub.textContent = `${opts.nodeUrl} — Explain says what it will do, Show displays what would be sent; `
+      + `neither sends anything. Evaluate runs it read-only: no block, no cost. `
+      + `Deploy signs and submits it: costs phlo, lands in a block.`;
     sub.style.cssText = "font-size:12px;opacity:.7;margin-bottom:10px";
     card.appendChild(sub);
 
@@ -261,20 +280,46 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     saveBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 12px;cursor:pointer";
 
     const hint = document.createElement("div");
-    hint.textContent = "Ctrl+Enter to run · Esc to cancel · drop a .rho at the cursor";
+    hint.textContent = "Ctrl+Enter to evaluate · Ctrl+Shift+Enter to deploy · Esc to cancel · drop a .rho at the cursor";
     hint.style.cssText = "margin-right:auto;font-size:12px;opacity:.6";
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "Cancel";
     cancelBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
-    const okBtn = document.createElement("button");
-    okBtn.textContent = opts.mode === "eval" ? "Evaluate" : "Sign and deploy";
-    okBtn.style.cssText = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
+    // Both actions, always. Which is blue follows how the editor was opened;
+    // a deploy is never the quiet default of a keystroke.
+    const primary = "background:#3b6ef5;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600";
+    const secondary = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
+    const evalBtn = document.createElement("button");
+    evalBtn.textContent = "Evaluate";
+    evalBtn.title = "run it read-only — no block, no cost";
+    evalBtn.style.cssText = opts.mode === "eval" ? primary : secondary;
+    // Show answers "should I sign this": the expanded program, in the form it
+    // would be sent, without sending it. It belongs next to the buttons that
+    // send, not behind a separate command you have to know to type. Named for
+    // what MacRhoLang called it, which is also what /macro show does.
+    // Explain answers "what will this do", Show answers "what exactly is sent".
+    // The pair is the whole of what you want before signing something.
+    const explainBtn = document.createElement("button");
+    explainBtn.textContent = "Explain";
+    explainBtn.title = "what this program will do, where, and what it costs — nothing run";
+    explainBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
+    const echoBtn = document.createElement("button");
+    echoBtn.textContent = "Show";
+    echoBtn.title = "show the program as it would be sent — macros expanded, nothing run";
+    echoBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
+    const deployBtn = document.createElement("button");
+    deployBtn.textContent = "Sign and deploy";
+    deployBtn.title = "sign with this browser's key and submit — costs phlo, lands in a block";
+    deployBtn.style.cssText = opts.mode === "deploy" ? primary : secondary;
     btnRow.appendChild(insertBtn);
     btnRow.appendChild(saveBtn);
     btnRow.appendChild(clearBtn);
     btnRow.appendChild(hint);
     btnRow.appendChild(cancelBtn);
-    btnRow.appendChild(okBtn);
+    btnRow.appendChild(explainBtn);
+    btnRow.appendChild(echoBtn);
+    btnRow.appendChild(opts.mode === "deploy" ? evalBtn : deployBtn);
+    btnRow.appendChild(opts.mode === "deploy" ? deployBtn : evalBtn);
     card.appendChild(btnRow);
 
     card.appendChild(fileInput);
@@ -407,7 +452,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
     setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
 
     let done = false;
-    const close = (result: string | null): void => {
+    const close = (result: RholangEditorResult | null): void => {
       if (done) return;
       done = true;
       clearTimeout(lintTimer);
@@ -415,9 +460,9 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
       overlay.remove();
       resolve(result);
     };
-    const submit = (): void => {
+    const submit = (mode: RholangMode, action: RholangAction = "run"): void => {
       const source = ta.value.trim();
-      close(source ? source : null);
+      close(source ? { source, mode, action } : null);
     };
 
     ta.addEventListener("keydown", (e) => {
@@ -434,11 +479,20 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<string | 
 
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") { e.preventDefault(); close(null); }
-      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        // Shift is what separates spending phlo from not.
+        e.preventDefault();
+        submit(e.shiftKey ? "deploy" : "eval");
+      }
     };
     document.addEventListener("keydown", onKey, true);
     cancelBtn.addEventListener("click", () => close(null));
-    okBtn.addEventListener("click", submit);
+    evalBtn.addEventListener("click", () => submit("eval"));
+    deployBtn.addEventListener("click", () => submit("deploy"));
+    // Both describe whichever action is primary: the deploy form and the eval
+    // form differ, and the one worth reading is the one about to happen.
+    echoBtn.addEventListener("click", () => submit(opts.mode, "show"));
+    explainBtn.addEventListener("click", () => submit(opts.mode, "explain"));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
   });
 }

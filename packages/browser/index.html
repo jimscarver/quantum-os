@@ -147,6 +147,11 @@
       .sidebar-overlay.open { display: block; }
     }
 
+    /* Which build this is, where nothing else wants the space. */
+    .app-version { margin-top: auto; padding-top: 0.6rem; font-size: 0.6rem; color: #3f3f3f; line-height: 1.5; }
+    .app-version a { color: #3f3f3f; text-decoration: none; }
+    .app-version a:hover { color: #7fdbca; }
+    .app-version span { display: block; }
     .sidebar h2 { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.1em; }
 
     .id-box {
@@ -526,6 +531,11 @@
       <div>
         <h2>Room Process</h2>
         <div class="id-box" id="room-process" style="white-space:pre;">—</div>
+      </div>
+
+      <div class="app-version">
+        <a href="https://github.com/rchain-community/quantum-os" target="_blank" rel="noopener"
+           >rchain-community/quantum-os</a><span id="app-version">—</span>
       </div>
     </div>
 

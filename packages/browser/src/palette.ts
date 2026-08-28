@@ -84,6 +84,7 @@ export const CMD_HELP: Record<string, string[]> = {
   rhoqu: ["/rhoqu <source> — RhoQu macro language: process / new / | parallel / if / on channel / call → /commands.", "/rhoqu list · clear — manage registered on-channel handlers."],
   rholang: [
     "/rholang eval — run a rholang program on rnode and read the result back. Nothing is signed, nothing stored, no block.",
+    "Both verbs open the same editor and it offers all three actions: Echo (shows what would be sent, sends nothing), Evaluate (Ctrl+Enter) or Sign and deploy (Ctrl+Shift+Enter). The verb you typed only decides which is the blue button.",
     "/rholang deploy — sign the program with your browser-held secp256k1 key and submit it. Costs phlo; lands in a block; outlives the room.",
     "/rholang status — rnode's version, network, shard, height and phlo floor. Warns when your shard does not match rnode's.",
     "eval and deploy open a syntax-highlighted editor (Ctrl+Enter runs, Esc cancels) that can load a .rho from disk, accept one dropped on it, and save the program back out. It keeps your last program so you can iterate on it, and Clear empties it. A program written inline — /rholang eval return!(42) — runs as typed.",
@@ -256,8 +257,9 @@ const QUICK_ACTIONS: QuickAction[] = [
   { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
   { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
-    hint: "write rholang and run it on an rnode — opens the editor (Ctrl+Enter runs, Esc cancels). "
-        + "Needs an rnode: Other ▸ If you use a chain. Nothing else in the room does" },
+    hint: "write rholang and run it on an rnode — the editor offers Echo, Evaluate and Sign-and-deploy, "
+        + "so the choice is made once you can see the program. Needs an rnode: Other ▸ If you use a chain. "
+        + "Nothing else in the room does" },
   { label: "Poll", ico: "🗳", kind: "command", cmd: "/poll new",
     args: [
       { prompt: "What are you deciding?", example: "Lunch — pizza, burgers or salad?" },
