@@ -30,6 +30,11 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
          MACRO_NAME_RE, MAX_BODY } from "./macro-lang.js";
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
+import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
+         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, AVAILABILITY_MARK, atRisk,
+         fmtSize as fmtFileSize,
+         type LibraryEntry, type Availability } from "./library.js";
+import { createLibraryFetch, FETCH_MAX, type LibraryFetch } from "./library-fetch.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
 import { createAttachments, renderMedia, type Attachments,
          type MediaAttachment, type MediaKind } from "./attachments.js";
@@ -125,6 +130,9 @@ const sendBtn         = document.getElementById("send-btn") as HTMLButtonElement
 const shareLink       = document.getElementById("share-link") as HTMLAnchorElement;
 const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
 const hideBtn         = document.getElementById("hide-btn") as HTMLButtonElement;
+const libraryListEl   = document.getElementById("library-list")!;
+const libraryCountEl  = document.getElementById("library-count")!;
+const libraryDropEl   = document.getElementById("library-drop");
 const lemmaListEl     = document.getElementById("lemma-list")!;
 const lemmaCountEl    = document.getElementById("lemma-count")!;
 const currencyListEl  = document.getElementById("currency-list")!;
@@ -223,6 +231,16 @@ interface RoomContext {
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Peers already reported as unreachable, so a full room says so once.
   unreachableWarned: Set<string>;
+  // What the room has: the index (public, gossiped) and what this peer is
+  // actually holding the bytes for (local — nobody else's business to be told
+  // until they ask).
+  libraryStore: Map<string, LibraryEntry>;
+  heldFiles: Set<string>;
+  /** hash → peers here who say they hold it. Live state: never persisted, and
+   *  emptied of a peer the moment it leaves. */
+  fileHolders: Map<string, Set<string>>;
+  /** hash → when a holder was last seen, so "offline" and "gone" differ. */
+  holderSeen: Map<string, number>;
   // Lemma + note stores (the public room knowledge)
   lemmaStore: Map<string, LemmaEntry>;
   currencyTokens: Map<string, string>;
@@ -290,6 +308,10 @@ function createRoom(roomId: string): RoomContext {
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
     unreachableWarned: new Set(),
+    libraryStore: new Map(),
+    heldFiles: new Set(),
+    fileHolders: new Map(),
+    holderSeen: new Map(),
     lemmaStore: new Map(),
     currencyTokens: new Map(),
     noteStore: new Map(),
@@ -358,6 +380,10 @@ let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let unreachableWarned: Set<string> = new Set();
+let libraryStore: Map<string, LibraryEntry> = new Map();
+let heldFiles: Set<string> = new Set();
+let fileHolders: Map<string, Set<string>> = new Map();
+let holderSeen: Map<string, number> = new Map();
 let lemmaStore: Map<string, LemmaEntry> = new Map();
 let currencyTokens: Map<string, string> = new Map();
 let noteStore: Map<string, NoteEntry> = new Map();
@@ -400,6 +426,10 @@ function setActiveRoom(ctx: RoomContext): void {
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
   unreachableWarned  = ctx.unreachableWarned;
+  libraryStore       = ctx.libraryStore;
+  heldFiles          = ctx.heldFiles;
+  fileHolders        = ctx.fileHolders;
+  holderSeen         = ctx.holderSeen;
   lemmaStore         = ctx.lemmaStore;
   currencyTokens     = ctx.currencyTokens;
   noteStore          = ctx.noteStore;
@@ -462,6 +492,117 @@ function loadLemmas(): void {
     for (const [name, entry] of Object.entries(data)) lemmaStore.set(name, entry);
     renderLemmas();
   } catch { /* ignore corrupt data */ }
+}
+
+function saveLibrary(): void {
+  localStorage.setItem(`qos-library-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(libraryStore.entries())));
+  // What we hold is per-room and per-browser: the entry is public, the bytes
+  // are not, and a peer that cleared its storage should say so rather than
+  // claim to still have them.
+  localStorage.setItem(`qos-library-held-${activeRoom.roomId}`, JSON.stringify([...heldFiles]));
+  // When a holder was last seen is what separates "offline" from "gone", and
+  // it only means anything across sessions.
+  localStorage.setItem(`qos-library-seen-${activeRoom.roomId}`,
+    JSON.stringify(Object.fromEntries(holderSeen)));
+}
+
+function loadLibrary(): void {
+  const raw = localStorage.getItem(`qos-library-${activeRoom.roomId}`);
+  if (raw) {
+    try {
+      for (const [hash, e] of Object.entries(JSON.parse(raw) as Record<string, LibraryEntry>)) {
+        const entry = entryFromWire(e);
+        if (entry && !isRetracted("library", hash)) libraryStore.set(hash, entry);
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+  const held = localStorage.getItem(`qos-library-held-${activeRoom.roomId}`);
+  if (held) {
+    try { for (const h of JSON.parse(held) as string[]) heldFiles.add(h); }
+    catch { /* ignore corrupt data */ }
+  }
+  const seen = localStorage.getItem(`qos-library-seen-${activeRoom.roomId}`);
+  if (seen) {
+    try {
+      for (const [h, t] of Object.entries(JSON.parse(seen) as Record<string, number>)) {
+        if (typeof t === "number") holderSeen.set(h, t);
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+  // What this browser holds is a claim about a disk, so ask the disk. Storage
+  // can be cleared without the room being told, and claiming to hold bytes we
+  // do not have is the one lie a library must not tell.
+  void (async () => {
+    const onDisk = new Set(await heldHashes());
+    let changed = false;
+    for (const h of [...heldFiles]) if (!onDisk.has(h)) { heldFiles.delete(h); changed = true; }
+    if (changed) saveLibrary();
+  })();
+}
+
+/**
+ * How many copies of an entry are reachable, this one included.
+ *
+ * The number durability actually depends on: with no server, a file exists for
+ * as long as somebody still has it.
+ */
+function copiesOf(hash: string): number {
+  const others = [...(fileHolders.get(hash) ?? [])].filter((p) => peers.has(p)).length;
+  return others + (heldFiles.has(hash) ? 1 : 0);
+}
+
+/** What can be had, for one entry, right now. */
+function availabilityFor(hash: string): Availability {
+  return availabilityOf(hash, heldFiles.has(hash),
+    fileHolders.get(hash)?.size ?? 0, holderSeen.get(hash));
+}
+
+/** Tell the room what we are holding — or tell one peer, when they arrive. */
+function announceHeld(to?: string): void {
+  if (heldFiles.size === 0 && !to) return;
+  const env = { kind: "library-have", hashes: [...heldFiles] };
+  if (to) signedSend(to, env); else signedBroadcast(env);
+}
+
+/** A peer said what it holds. Availability is live state — replace, never merge. */
+function noteHolder(peerId: string, hashes: unknown): void {
+  const list = Array.isArray(hashes) ? hashes.filter((h): h is string => typeof h === "string") : [];
+  for (const set of fileHolders.values()) set.delete(peerId);
+  const now = Date.now();
+  for (const hash of list.slice(0, 2000)) {
+    const h = hash.toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(h)) continue;
+    let set = fileHolders.get(h);
+    if (!set) { set = new Set(); fileHolders.set(h, set); }
+    set.add(peerId);
+    holderSeen.set(h, now);
+  }
+  saveLibrary();
+  renderLibrary();
+}
+
+/** A peer left: it is holding nothing here any more. */
+function forgetHolder(peerId: string): void {
+  for (const set of fileHolders.values()) set.delete(peerId);
+  renderLibrary();
+}
+
+/**
+ * Record an entry, from wherever it came.
+ *
+ * First writer wins by hash, which needs no arbitration: the hash IS the
+ * content, so two peers adding the same file agree by construction, and a
+ * second entry for one hash can only differ in what it is called.
+ */
+function addLibraryEntry(raw: unknown): LibraryEntry | null {
+  const entry = entryFromWire(raw);
+  if (!entry || isRetracted("library", entry.hash)) return null;
+  if (libraryStore.has(entry.hash)) return null;
+  libraryStore.set(entry.hash, entry);
+  saveLibrary();
+  renderLibrary();
+  return entry;
 }
 
 function savePolls(): void {
@@ -1088,6 +1229,7 @@ function applyActiveRoomToUI(): void {
   // Sidebar lists
   renderPeers();
   renderLemmas();
+  renderLibrary();
   renderNotes();
   renderPolls();
   renderMacros();
@@ -1149,6 +1291,8 @@ function loadRoomState(ctx: RoomContext): void {
   const previousActive = activeRoom;
   setActiveRoom(ctx);
   loadLemmas();
+  loadLibrary();
+  renderLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
@@ -1285,6 +1429,83 @@ function appendRemoveBtn(li: HTMLElement, title: string, onRemove: () => void): 
   x.addEventListener("click", (e) => { e.stopPropagation(); onRemove(); });
   li.appendChild(x);
 }
+
+/**
+ * The library, where a person can see it.
+ *
+ * A row is a click on the thing you want to happen: play it if we hold it,
+ * fetch it if somebody here does, and say why not if nobody does. The mark
+ * carries the availability, so a row that cannot be had looks different from
+ * one that can before it is clicked rather than after.
+ */
+function renderLibrary(): void {
+  if (!isUiActive()) return;
+  libraryCountEl.textContent = String(libraryStore.size);
+  libraryListEl.innerHTML = "";
+  for (const e of sortEntries(libraryStore.values())) {
+    const avail = availabilityFor(e.hash);
+    const holders = fileHolders.get(e.hash)?.size ?? 0;
+    const li = document.createElement("li");
+    li.className = `lib-row lib-${avail}`;
+
+    const mark = document.createElement("span");
+    mark.className = "lib-mark";
+    mark.textContent = AVAILABILITY_MARK[avail];
+    const name = document.createElement("span");
+    name.className = "lib-name";
+    name.textContent = e.name;
+    const size = document.createElement("span");
+    size.className = "lib-size";
+    size.textContent = fmtFileSize(e.size);
+
+    const copies = copiesOf(e.hash);
+    if (atRisk(copies)) li.classList.add("lib-thin");
+    li.title = avail === "held" ? `${e.name} — you hold it. Click to play or save.`
+      : avail === "here" ? `${e.name} — ${holders} holder${holders === 1 ? "" : "s"} here. Click to fetch.`
+      : avail === "known" ? `${e.name} — no holder is here right now.`
+      : `${e.name} — no holder has been seen in a week; the entry may be all that is left.`;
+    if (atRisk(copies)) {
+      li.title += "\nOnly one copy exists. Another peer running /file get is what makes it survive.";
+    }
+    li.append(mark, name, size);
+    li.addEventListener("click", () => openLibraryEntry(e));
+    appendRemoveBtn(li, "remove this entry", () => forgetLibraryEntry(e));
+    libraryListEl.appendChild(li);
+  }
+}
+
+/** Clicking an entry does the next thing that makes sense for it. */
+function openLibraryEntry(e: LibraryEntry): void {
+  if (heldFiles.has(e.hash)) { void playLibraryEntry(e); return; }
+  const holders = [...(fileHolders.get(e.hash) ?? [])].filter((p) => peers.has(p));
+  if (holders.length) { libraryFetch.want(e.hash, holders[0], e.name); return; }
+  addMessage("", `nobody here is holding ${e.name} — /file holders ${shortHash(e.hash)}`, "system");
+}
+
+/**
+ * Play what we hold, in the transcript.
+ *
+ * An object URL over the file on disk, not a data: url — the bytes are not
+ * copied into the page to be played, which is the difference between a 60 MB
+ * recording playing and a tab dying.
+ */
+async function playLibraryEntry(e: LibraryEntry): Promise<void> {
+  const file = await getBytes(e.hash);
+  if (!file) {
+    heldFiles.delete(e.hash);
+    saveLibrary(); announceHeld(); renderLibrary();
+    addMessage("", `⚠ the bytes for ${e.name} are gone from this browser's storage`, "system");
+    return;
+  }
+  addMedia("", {
+    mediaKind: mediaKindFor(e.mime), name: e.name, mime: e.mime, size: e.size,
+    url: URL.createObjectURL(file),
+  }, "self");
+}
+
+const mediaKindFor = (mime: string): MediaKind =>
+  mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio"
+  : mime.startsWith("video/") ? "video" : "file";
 
 function renderLemmas(): void {
   if (!isUiActive()) return;
@@ -1857,6 +2078,80 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
 }
 
 /**
+ * Pick files, hash them, keep the bytes, and tell the room what exists.
+ *
+ * Deliberately not a broadcast of the file: a library entry is a name for
+ * something, and the bytes move later, to whoever asks. Adding an entry the
+ * room already has is not an error — the hash is the content, so both peers
+ * are talking about the same thing, and the second one has simply become
+ * another holder of it.
+ */
+function addFilesToLibrary(dropped?: FileList | File[]): void {
+  if (dropped) { void ingestFiles([...dropped]); return; }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.addEventListener("change", () => { void ingestFiles([...(input.files ?? [])]); });
+  input.click();
+}
+
+function ingestFiles(files: File[]): Promise<void> {
+  return (async () => {
+      if (!files.length) return;
+      for (const file of files) {
+        const hash = await hashBlob(file);
+        const kept = await putBytes(hash, file);
+        if (!kept) {
+          addMessage("", `⚠ could not keep ${file.name} — this browser's storage refused it, so the entry would name bytes nobody has`, "system");
+          continue;
+        }
+        heldFiles.add(hash);
+        announceHeld();
+        const known = libraryStore.get(hash);
+        if (known) {
+          saveLibrary();
+          renderLibrary();
+          addMessage("", `● you are now holding ${known.name} (${shortHash(hash)}) — already in the library`, "system");
+          continue;
+        }
+        const entry: LibraryEntry = {
+          hash, name: file.name, mime: file.type || "application/octet-stream",
+          size: file.size, addedBy: myPeerId(), addedLabel: myName || shortId(myPeerId()),
+          at: Date.now(),
+        };
+        libraryStore.set(hash, entry);
+        saveLibrary();
+        signedBroadcast({ kind: "library-entry", entry });
+        addMessage("", `● added ${entry.name}  ${fmtFileSize(entry.size)}  ${shortHash(hash)}`, "system");
+      }
+      renderLibrary();
+  })();
+}
+
+/**
+ * Retract an entry — for everyone if it is yours, from this view otherwise.
+ *
+ * The same rule the rest of the room's state follows (`/forget`): an owner
+ * retracts, anyone else hides. Tombstoned either way, so a peer's next sync
+ * does not heal it back.
+ */
+function forgetLibraryEntry(entry: LibraryEntry): void {
+  const mine = entry.addedBy === myPeerId();
+  libraryStore.delete(entry.hash);
+  retracted.add(`library:${entry.hash}`);
+  saveRetracted();
+  if (heldFiles.has(entry.hash)) { heldFiles.delete(entry.hash); void dropBytes(entry.hash); }
+  saveLibrary();
+  renderLibrary();
+  if (mine) {
+    signedBroadcast({ kind: "retract", what: "library", id: entry.hash });
+    addMessage("", `retracted ${entry.name} — removed for everyone`, "system");
+  } else {
+    addMessage("", `hid ${entry.name} — it is ${entry.addedLabel}'s to retract for the room`, "system");
+  }
+}
+
+/**
  * Say what a program will do, before it does it.
  *
  * Not a summary of the rholang — nothing here reads the program's meaning, and
@@ -1922,37 +2217,41 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
   addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`, "system");
   for (const l of out) addMessage("", "  " + l, "system");
 
-  // Does the rnode it names actually answer? Every line above is about a node
-  // that may not be there, and "it did nothing" is the least useful way to find
-  // that out. Asked here rather than assumed, since the answer decides whether
-  // the next thing to do is write rholang or start a node.
+  // What explaining a program actually wants is somebody who can read it, and
+  // that is an AI in the room — not an rnode, which only says whether the thing
+  // would run. So the agent comes first and the node is a footnote.
+  //
+  // Offered rather than sent: asking posts the program to the room, and that is
+  // the user's call, not a side effect of pressing a button.
+  const advisor = [...peers].find((p) => peerAgents.has(p));
+  if (advisor) {
+    const cmd = peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor);
+    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
+    addMessage("", `  🤖 ${peerLabel(advisor)} can read the program itself — press Enter to ask `
+      + "(it posts the program to the room)", "system");
+    msgInput.value = `/${cmd} ask explain this rholang program, briefly: ${oneLine}`;
+    msgInput.focus();
+  } else {
+    addMessage("", "  🤖 no AI is in the room to read the program itself — an agent with --ai answers "
+      + "“what does this do”, which nothing here can", "system");
+  }
+
+  // And whether the node it names is even there — a footnote, because it is
+  // about running rather than understanding, and Explain is useful with no
+  // rnode at all.
   try {
     const st = await nodeStatus(cfg);
-    addMessage("", `  ✓ ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
+    addMessage("", `  · ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
     if (st.shardId && cfg.shard && st.shardId !== cfg.shard) {
       addMessage("", `  ⚠ it is shard ${st.shardId} and you are set to ${cfg.shard} — a deploy for the wrong shard is rejected (/rholang shard ${st.shardId})`, "system");
     }
   } catch {
-    addMessage("", `  ✗ ${cfg.url} does not answer — nothing will run until an rnode does`, "system");
-    if (cfg.url === DEFAULT_NODE_CONFIG.url) {
-      addMessage("", "     start the one that ships with this repo:  bash scripts/localnet/run-node.sh", "system");
-      addMessage("", "     or point at another:  /rholang rnode <url>   (Other ▸ If you use a chain)", "system");
-    } else {
-      addMessage("", `     try the local default:  /rholang rnode ${DEFAULT_NODE_CONFIG.url}  (bash scripts/localnet/run-node.sh starts it)`, "system");
-    }
+    addMessage("", `  · ${cfg.url} does not answer, so nothing would run yet`
+      + (cfg.url === DEFAULT_NODE_CONFIG.url
+        ? " — bash scripts/localnet/run-node.sh starts the one in this repo"
+        : `, and neither would ${DEFAULT_NODE_CONFIG.url}`), "system");
   }
 
-  // An AI in the room can read the program itself, which is the one thing this
-  // account cannot do. Offered rather than sent: asking posts the program to
-  // the room, and that is the user's call to make, not a side effect of
-  // pressing Explain.
-  const advisor = [...peers].find((p) => peerAgents.has(p));
-  if (advisor) {
-    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
-    addMessage("", `  🤖 ${peerLabel(advisor)} is here and can read the program itself — press Enter to ask (it posts the program to the room)`, "system");
-    msgInput.value = `/${peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor)} ask explain this rholang program, briefly: ${oneLine}`;
-    msgInput.focus();
-  }
   addMessage("", "  nothing has been run — Show for what would be sent, or run it from the editor", "system");
 }
 
@@ -4507,6 +4806,133 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "file":
+    case "files": {
+      // Verbs, not a feature. Each does one thing and answers in lines, so a
+      // room composes its own workflow in a macro body rather than waiting for
+      // the workflow it wants to be built. See Media_Libraries.md.
+      const fParts = arg.trim().split(/\s+/);
+      const fsub = (fParts[0] || "list").toLowerCase();
+      const frest = fParts.slice(1).join(" ").trim();
+
+      if (fsub === "list" || fsub === "") {
+        const mine = /^--?mine$/i.test(frest);
+        const here = /^--?here$/i.test(frest);
+        const all = sortEntries(libraryStore.values()).filter((e) => {
+          const a = availabilityFor(e.hash);
+          if (mine) return a === "held";
+          if (here) return a === "held" || a === "here";      // what can be had now
+          return true;
+        });
+        if (all.length === 0) {
+          sys(mine ? "you are holding nothing in this room"
+            : here ? "nothing in the library can be had right now — no holder is present"
+            : "the room's library is empty — /file add");
+          break;
+        }
+        const reachable = all.filter((e) => availabilityFor(e.hash) !== "known"
+                                         && availabilityFor(e.hash) !== "gone").length;
+        sys(`library — ${all.length} entr${all.length === 1 ? "y" : "ies"}, ${reachable} available now`
+          + "  (● you hold · ◉ a peer here holds · ○ no holder present · ⚠ none seen in a week)");
+        const thin: LibraryEntry[] = [];
+        for (const e of all) {
+          const copies = copiesOf(e.hash);
+          if (atRisk(copies)) thin.push(e);
+          sys("  " + describeEntry(e, availabilityFor(e.hash), fileHolders.get(e.hash)?.size ?? 0)
+            + (atRisk(copies) ? "  · only copy" : ""));
+        }
+        // Nothing here is backed up by anything but other people, so the count
+        // of copies is the thing worth saying out loud.
+        if (thin.length) {
+          const mine = thin.filter((e) => heldFiles.has(e.hash)).length;
+          sys(`⚠ ${thin.length} entr${thin.length === 1 ? "y has" : "ies have"} a single copy`
+            + (mine ? ` — ${mine} of them only here, so nobody else has it` : "")
+            + ". A second copy is somebody running /file get while the first is still reachable.");
+        }
+        break;
+      }
+
+      if (fsub === "get") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file get <hash|name>"); break; }
+        if (heldFiles.has(target.hash)) { sys(`you already hold ${target.name}`); break; }
+        if (target.size > FETCH_MAX) {
+          sys(`${target.name} is ${fmtFileSize(target.size)} — over the ${fmtFileSize(FETCH_MAX)} a fetch will carry today`);
+          break;
+        }
+        // Ask one holder rather than the room: a fetch is between two peers,
+        // and asking everyone would be the broadcast this is not.
+        const holders = [...(fileHolders.get(target.hash) ?? [])].filter((p) => peers.has(p));
+        if (!holders.length) {
+          sys(`nobody here is holding ${target.name} — /file holders ${shortHash(target.hash)}`);
+          break;
+        }
+        libraryFetch.want(target.hash, holders[0], target.name);
+        break;
+      }
+
+      if (fsub === "cancel") {
+        const target = frest ? findEntry(libraryStore.values(), frest) : null;
+        libraryFetch.cancel(target?.hash);
+        if (!frest) sys("cancelled every fetch in flight");
+        break;
+      }
+
+      if (fsub === "holders") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file holders <hash|name>"); break; }
+        const who = [...(fileHolders.get(target.hash) ?? [])];
+        sys(`${target.name}  ${shortHash(target.hash)}`);
+        if (heldFiles.has(target.hash)) sys("  ● you");
+        for (const p of who) sys(`  ◉ ${peerLabel(p)}`);
+        if (!who.length && !heldFiles.has(target.hash)) {
+          const seen = holderSeen.get(target.hash);
+          sys(seen ? `  ○ nobody here now — last seen with a holder ${new Date(seen).toLocaleString()}`
+                   : "  ⚠ no holder has ever been seen from this browser");
+        }
+        break;
+      }
+
+      if (fsub === "add") {
+        // Pick, hash, keep the bytes, announce the entry. The hash is the name,
+        // so adding the same file twice is one entry and needs no arbitration.
+        void addFilesToLibrary();
+        break;
+      }
+
+      if (fsub === "forget") {
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file forget <hash|name>"); break; }
+        forgetLibraryEntry(target);
+        break;
+      }
+
+      if (fsub === "drop") {
+        // Stop holding the bytes; the entry stays, because what the room has is
+        // a different fact from what this browser is keeping.
+        const target = findEntry(libraryStore.values(), frest);
+        if (!target) { sys(frest ? `no single entry matches "${frest}"` : "usage: /file drop <hash|name>"); break; }
+        if (!heldFiles.has(target.hash)) { sys(`you are not holding ${target.name}`); break; }
+        heldFiles.delete(target.hash);
+        saveLibrary();
+        announceHeld();
+        renderLibrary();
+        void dropBytes(target.hash);
+        sys(`dropped the bytes for ${target.name} — the entry stays (${shortHash(target.hash)})`);
+        break;
+      }
+
+      sys(`unknown subcommand: /file ${fsub}`);
+      sys("  /file add                  — pick files to hash, hold and index");
+      sys("  /file list [--mine|--here] — what the room has; only yours, or only what can be had now");
+      sys("  /file get <hash|name>      — fetch it from a holder, verified against its hash");
+      sys("  /file holders <hash|name>  — who has these bytes right now");
+      sys("  /file cancel [hash|name]   — give up on a fetch");
+      sys("  /file drop <hash|name>     — stop holding the bytes, keep the entry");
+      sys("  /file forget <hash|name>   — retract the entry (yours to retract for everyone)");
+      break;
+    }
+
     case "record": {
       // Local, and deliberately not a broadcast of its own output: the recorder
       // tells the room itself, on start and on stop.
@@ -5624,6 +6050,19 @@ function connect(): void {
           const what = String(d.what ?? "");
           const id = String(d.id ?? "");
           if (!id) return;
+          if (what === "library") {
+            // Only whoever added it, as with a poll's creator: an entry names
+            // content by its hash, so a retract from anyone else would be one
+            // peer deciding what a room may remember.
+            const entry = libraryStore.get(id.toLowerCase());
+            if (!entry || entry.addedBy !== from) return;
+            markRetracted("library", entry.hash);
+            libraryStore.delete(entry.hash);
+            if (heldFiles.has(entry.hash)) { heldFiles.delete(entry.hash); void dropBytes(entry.hash); }
+            saveLibrary();
+            addMessage("", `${peerLabel(from)} retracted ${entry.name} from the library`, "system");
+            return;
+          }
           if (what === "poll") {
             const poll = pollStore.get(id);
             if (!poll || from !== poll.creator) return;   // only the creator can retract a poll for everyone
@@ -5895,6 +6334,35 @@ function connect(): void {
           addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
           return;
         }
+        if (d.kind === "library-entry") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const entry = addLibraryEntry(d.entry);
+          if (entry) {
+            addMessage("", `○ ${peerLabel(from)} added ${entry.name}  ${fmtFileSize(entry.size)}  `
+              + `${shortHash(entry.hash)}  — /file list`, "system");
+          }
+          return;
+        }
+        // The lib-* transfer envelopes are the fetch module's, and are not
+        // dyncap-signed: the hash is what makes an arrival trustworthy, so a
+        // signature would prove only who sent bytes that are checked anyway.
+        if (String(d.kind ?? "").startsWith("lib-")) { libraryFetch.inbound(from, d); return; }
+        if (d.kind === "library-have") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          noteHolder(from, d.hashes);
+          return;
+        }
+        if (d.kind === "sync-library") {
+          const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
+          if (status.startsWith("  · refused")) return;
+          const list = Array.isArray(d.entries) ? d.entries : [];
+          let added = 0;
+          for (const raw of list.slice(0, 500)) if (addLibraryEntry(raw)) added++;
+          if (added) addMessage("", `+${added} librar${added === 1 ? "y entry" : "y entries"} via sync`, "system");
+          return;
+        }
         if (d.kind === "record") {
           addMessage("", `${d.on ? "⏺" : "⏹"} ${peerLabel(from)} ${d.on ? "is recording their screen" : "stopped recording"}`, "system");
           return;
@@ -5939,6 +6407,14 @@ function connect(): void {
           const polls = Array.from(pollStore.values());
           signedSend(peerId, { kind: "sync-polls", polls });
         }
+        if (libraryStore.size > 0) {
+          // The index, never the bytes: a joiner learns what the room has and
+          // asks for what it wants.
+          signedSend(peerId, { kind: "sync-library", entries: Array.from(libraryStore.values()) });
+        }
+        // And what we are holding, so their list says what can be had rather
+        // than only what once existed.
+        announceHeld(peerId);
         if (groupStore.size > 0) {
           const groups = Array.from(groupStore.values());
           signedSend(peerId, { kind: "sync-gov", groups });
@@ -5992,6 +6468,10 @@ function connect(): void {
         try {
           pendingLeaves.delete(id);
           peers.delete(id);
+          // Their bytes left with them: availability is about who is here, and
+          // a departed holder listed as one is the broken link this design is
+          // built to avoid.
+          forgetHolder(id);
           renderPeers();
           // If their join was never announced (no name arrived / a quick refresh),
           // stay silent on the leave too — no "<id> joined"/"left" noise.
@@ -6345,6 +6825,24 @@ function initUx(): void {
     dropTarget.classList.remove("dragover");
     if (e.dataTransfer?.files?.length) attachments.send(e.dataTransfer.files);
   });
+  // Dropping on the library adds to the library; dropping on the chat sends an
+  // attachment. Two drop targets because they are two different intentions —
+  // one is "keep this and tell the room it exists", the other is "look at this".
+  if (libraryDropEl) {
+    const over = (on: boolean) => libraryDropEl.classList.toggle("over", on);
+    libraryDropEl.addEventListener("dragover", (e) => { e.preventDefault(); over(true); });
+    libraryDropEl.addEventListener("dragleave", () => over(false));
+    libraryDropEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      // Stop it reaching the chat's drop target underneath, or one drop would
+      // both index the file and broadcast it.
+      e.stopPropagation();
+      over(false);
+      if (e.dataTransfer?.files?.length) addFilesToLibrary(e.dataTransfer.files);
+    });
+    libraryDropEl.addEventListener("click", () => addFilesToLibrary());
+  }
+
   msgInput.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -6404,6 +6902,31 @@ function initUx(): void {
     },
     document.querySelector('#actions-row [data-action="record"]'),
   );
+  libraryFetch = createLibraryFetch({
+    peer: () => qpeer,
+    say: (t) => addMessage("", t, "system"),
+    label: (id) => peerLabel(id),
+    // Serving only what we actually hold — the index is public, the bytes are
+    // not, and a hash we never kept is not ours to answer for.
+    bytesFor: (hash) => (heldFiles.has(hash) ? getBytes(hash) : Promise.resolve(null)),
+    received: async (hash, file, name, mime) => {
+      await putBytes(hash, file);
+      heldFiles.add(hash);
+      // An entry for something fetched from a peer who had it but never
+      // indexed it: keep the name it arrived under.
+      if (!libraryStore.has(hash) && !isRetracted("library", hash)) {
+        const entry: LibraryEntry = {
+          hash, name, mime, size: file.size,
+          addedBy: myPeerId(), addedLabel: myName || shortId(myPeerId()), at: Date.now(),
+        };
+        libraryStore.set(hash, entry);
+        signedBroadcast({ kind: "library-entry", entry });
+      }
+      saveLibrary();
+      announceHeld();
+      renderLibrary();
+    },
+  });
   attachments = createAttachments({
     peer: () => qpeer,
     say: (t) => addMessage("", t, "system"),
@@ -7589,6 +8112,9 @@ let calls: Calls;
 /** Screen recording. Built in init, once the toolbar button exists. */
 let recorder: Recorder;
 
+/** Fetching a library file from whoever holds it. */
+let libraryFetch: LibraryFetch;
+
 /** Attachments over the data channel. Built in init alongside calls. */
 let attachments: Attachments;
 
@@ -7645,6 +8171,8 @@ async function init(): Promise<void> {
   await loadZfa();
   await loadDyncap();
   loadLemmas();
+  loadLibrary();
+  renderLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
@@ -7667,6 +8195,7 @@ async function init(): Promise<void> {
   renderTabs();
   renderPeers();
   renderLemmas();
+  renderLibrary();
   renderNotes();
 
   // The tab-add button prompts for a cap:room:… URL or token.
