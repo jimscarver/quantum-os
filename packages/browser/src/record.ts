@@ -24,8 +24,6 @@
 // Screen content is mostly static frames, so a low frame rate and a modest
 // bitrate cost it very little and save a great deal.
 
-import { preferredSurface, rememberSurface } from "./display.js";
-
 /** What recording needs from the app. */
 export interface RecordHost {
   /** Put a line in the transcript. */
@@ -155,7 +153,10 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
   async function start(): Promise<void> {
     if (rec) return;
     if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === "undefined") {
-      host.say("⚠ this browser cannot record (getDisplayMedia or MediaRecorder is unavailable)");
+      // Chrome on Android does not implement getDisplayMedia at all — capturing
+      // a screen from a web page is desktop-only, and no permission or flag
+      // changes that. Say which it is rather than reading as a bug.
+      host.say(noScreenCapture("record"));
       return;
     }
     const mimeType = FORMATS.find((m) => MediaRecorder.isTypeSupported(m));
@@ -171,8 +172,13 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
       // is where people are going: Chrome opens on the tab list otherwise, so
       // every recording of an application costs an extra click. Switching pane
       // is still one click, and `surfaceSwitching` lets it change mid-recording.
+      // No `displaySurface` here, deliberately. Chrome treats it as a filter on
+      // what the picker will hand back, not as a hint about which pane to open
+      // — so asking for a window is asking to be given a window whatever the
+      // person clicked, and a recording of the wrong thing is worth far more
+      // than the click it saves.
       display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: FPS, displaySurface: preferredSurface() },
+        video: { frameRate: FPS },
         audio: true,
         surfaceSwitching: "include",
         // Everything the device is playing — a video, another app — can only
@@ -192,7 +198,6 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     }
     const video = display.getVideoTracks()[0];
     if (!video) { display.getTracks().forEach((t) => t.stop()); return; }
-    rememberSurface(video);
     sources = display.getTracks();
 
     // A recording with no mic is worth having; one that refuses to start
@@ -239,10 +244,13 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     ticker = setInterval(paint, 1000);
     paint();
     host.announce(true);
+    // Say what was actually captured, at the moment it can still be redone.
+    // A wrong pick is otherwise invisible until playback.
+    const what = surfaceName(video);
     const on = ["your mic"];
     if (voices.length) on.push(`${voices.length} voice${voices.length === 1 ? "" : "s"} from the call`);
     if (shared.length) on.push("the captured audio");
-    host.say(`⏺ recording your screen — ${on.join(" + ")} on it. Click ⏹ to stop and save.`);
+    host.say(`⏺ recording ${what} — ${on.join(" + ")} on it. Click ⏹ to stop and save.`);
     // The room is on it either way; anything else the device is playing is not,
     // and the checkbox is the only way in. Say so at the one moment it is
     // actionable rather than leaving it to be discovered on playback.
@@ -315,4 +323,25 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     addAudio(stream) { if (rec) stream.getAudioTracks().forEach(addToMix); },
     recording: () => !!rec,
   };
+}
+
+/**
+ * Why there is no screen to capture. Phones are the common case and are not a
+ * failure: Chrome on Android has no getDisplayMedia, so this is a desktop
+ * feature, full stop.
+ */
+export function noScreenCapture(verb: string): string {
+  const phone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || "");
+  return phone
+    ? `⚠ a phone or tablet cannot ${verb} a screen — browsers only allow screen capture on a desktop. Use a laptop or desktop for this.`
+    : `⚠ this browser cannot ${verb} a screen (getDisplayMedia is unavailable — it needs a secure context and a desktop browser)`;
+}
+
+/** What the picker actually handed over, in the words the picker used. */
+function surfaceName(track: MediaStreamTrack): string {
+  const s = (track.getSettings?.() as { displaySurface?: string } | undefined)?.displaySurface;
+  return s === "monitor" ? "your entire screen"
+       : s === "window"  ? "one window"
+       : s === "browser" ? "one browser tab"
+       : "your screen";
 }
