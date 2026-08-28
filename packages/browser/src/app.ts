@@ -31,7 +31,8 @@ import { parseDefinition, parseInvocation, expandCommand, expandCallSites,
 import { createCalls, type Calls } from "./calls.js";
 import { createRecorder, type Recorder } from "./record.js";
 import { hashBlob, entryFromWire, sortEntries, findEntry, describeEntry, shortHash,
-         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, fmtSize as fmtFileSize,
+         putBytes, getBytes, dropBytes, heldHashes, availabilityOf, AVAILABILITY_MARK,
+         fmtSize as fmtFileSize,
          type LibraryEntry, type Availability } from "./library.js";
 import { createLibraryFetch, FETCH_MAX, type LibraryFetch } from "./library-fetch.js";
 import { createPalette, CMD_HELP, type Palette } from "./palette.js";
@@ -129,6 +130,9 @@ const sendBtn         = document.getElementById("send-btn") as HTMLButtonElement
 const shareLink       = document.getElementById("share-link") as HTMLAnchorElement;
 const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
 const hideBtn         = document.getElementById("hide-btn") as HTMLButtonElement;
+const libraryListEl   = document.getElementById("library-list")!;
+const libraryCountEl  = document.getElementById("library-count")!;
+const libraryDropEl   = document.getElementById("library-drop");
 const lemmaListEl     = document.getElementById("lemma-list")!;
 const lemmaCountEl    = document.getElementById("lemma-count")!;
 const currencyListEl  = document.getElementById("currency-list")!;
@@ -564,11 +568,13 @@ function noteHolder(peerId: string, hashes: unknown): void {
     holderSeen.set(h, now);
   }
   saveLibrary();
+  renderLibrary();
 }
 
 /** A peer left: it is holding nothing here any more. */
 function forgetHolder(peerId: string): void {
   for (const set of fileHolders.values()) set.delete(peerId);
+  renderLibrary();
 }
 
 /**
@@ -584,6 +590,7 @@ function addLibraryEntry(raw: unknown): LibraryEntry | null {
   if (libraryStore.has(entry.hash)) return null;
   libraryStore.set(entry.hash, entry);
   saveLibrary();
+  renderLibrary();
   return entry;
 }
 
@@ -1211,6 +1218,7 @@ function applyActiveRoomToUI(): void {
   // Sidebar lists
   renderPeers();
   renderLemmas();
+  renderLibrary();
   renderNotes();
   renderPolls();
   renderMacros();
@@ -1273,6 +1281,7 @@ function loadRoomState(ctx: RoomContext): void {
   setActiveRoom(ctx);
   loadLemmas();
   loadLibrary();
+  renderLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
@@ -1409,6 +1418,78 @@ function appendRemoveBtn(li: HTMLElement, title: string, onRemove: () => void): 
   x.addEventListener("click", (e) => { e.stopPropagation(); onRemove(); });
   li.appendChild(x);
 }
+
+/**
+ * The library, where a person can see it.
+ *
+ * A row is a click on the thing you want to happen: play it if we hold it,
+ * fetch it if somebody here does, and say why not if nobody does. The mark
+ * carries the availability, so a row that cannot be had looks different from
+ * one that can before it is clicked rather than after.
+ */
+function renderLibrary(): void {
+  if (!isUiActive()) return;
+  libraryCountEl.textContent = String(libraryStore.size);
+  libraryListEl.innerHTML = "";
+  for (const e of sortEntries(libraryStore.values())) {
+    const avail = availabilityFor(e.hash);
+    const holders = fileHolders.get(e.hash)?.size ?? 0;
+    const li = document.createElement("li");
+    li.className = `lib-row lib-${avail}`;
+
+    const mark = document.createElement("span");
+    mark.className = "lib-mark";
+    mark.textContent = AVAILABILITY_MARK[avail];
+    const name = document.createElement("span");
+    name.className = "lib-name";
+    name.textContent = e.name;
+    const size = document.createElement("span");
+    size.className = "lib-size";
+    size.textContent = fmtFileSize(e.size);
+
+    li.title = avail === "held" ? `${e.name} — you hold it. Click to play or save.`
+      : avail === "here" ? `${e.name} — ${holders} holder${holders === 1 ? "" : "s"} here. Click to fetch.`
+      : avail === "known" ? `${e.name} — no holder is here right now.`
+      : `${e.name} — no holder has been seen in a week; the entry may be all that is left.`;
+    li.append(mark, name, size);
+    li.addEventListener("click", () => openLibraryEntry(e));
+    appendRemoveBtn(li, "remove this entry", () => forgetLibraryEntry(e));
+    libraryListEl.appendChild(li);
+  }
+}
+
+/** Clicking an entry does the next thing that makes sense for it. */
+function openLibraryEntry(e: LibraryEntry): void {
+  if (heldFiles.has(e.hash)) { void playLibraryEntry(e); return; }
+  const holders = [...(fileHolders.get(e.hash) ?? [])].filter((p) => peers.has(p));
+  if (holders.length) { libraryFetch.want(e.hash, holders[0], e.name); return; }
+  addMessage("", `nobody here is holding ${e.name} — /file holders ${shortHash(e.hash)}`, "system");
+}
+
+/**
+ * Play what we hold, in the transcript.
+ *
+ * An object URL over the file on disk, not a data: url — the bytes are not
+ * copied into the page to be played, which is the difference between a 60 MB
+ * recording playing and a tab dying.
+ */
+async function playLibraryEntry(e: LibraryEntry): Promise<void> {
+  const file = await getBytes(e.hash);
+  if (!file) {
+    heldFiles.delete(e.hash);
+    saveLibrary(); announceHeld(); renderLibrary();
+    addMessage("", `⚠ the bytes for ${e.name} are gone from this browser's storage`, "system");
+    return;
+  }
+  addMedia("", {
+    mediaKind: mediaKindFor(e.mime), name: e.name, mime: e.mime, size: e.size,
+    url: URL.createObjectURL(file),
+  }, "self");
+}
+
+const mediaKindFor = (mime: string): MediaKind =>
+  mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio"
+  : mime.startsWith("video/") ? "video" : "file";
 
 function renderLemmas(): void {
   if (!isUiActive()) return;
@@ -1989,13 +2070,17 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
  * are talking about the same thing, and the second one has simply become
  * another holder of it.
  */
-function addFilesToLibrary(): void {
+function addFilesToLibrary(dropped?: FileList | File[]): void {
+  if (dropped) { void ingestFiles([...dropped]); return; }
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
-  input.addEventListener("change", () => {
-    void (async () => {
-      const files = [...(input.files ?? [])];
+  input.addEventListener("change", () => { void ingestFiles([...(input.files ?? [])]); });
+  input.click();
+}
+
+function ingestFiles(files: File[]): Promise<void> {
+  return (async () => {
       if (!files.length) return;
       for (const file of files) {
         const hash = await hashBlob(file);
@@ -2009,6 +2094,7 @@ function addFilesToLibrary(): void {
         const known = libraryStore.get(hash);
         if (known) {
           saveLibrary();
+          renderLibrary();
           addMessage("", `● you are now holding ${known.name} (${shortHash(hash)}) — already in the library`, "system");
           continue;
         }
@@ -2022,9 +2108,8 @@ function addFilesToLibrary(): void {
         signedBroadcast({ kind: "library-entry", entry });
         addMessage("", `● added ${entry.name}  ${fmtFileSize(entry.size)}  ${shortHash(hash)}`, "system");
       }
-    })();
-  });
-  input.click();
+      renderLibrary();
+  })();
 }
 
 /**
@@ -2041,6 +2126,7 @@ function forgetLibraryEntry(entry: LibraryEntry): void {
   saveRetracted();
   if (heldFiles.has(entry.hash)) { heldFiles.delete(entry.hash); void dropBytes(entry.hash); }
   saveLibrary();
+  renderLibrary();
   if (mine) {
     signedBroadcast({ kind: "retract", what: "library", id: entry.hash });
     addMessage("", `retracted ${entry.name} — removed for everyone`, "system");
@@ -4798,6 +4884,7 @@ function handleCommand(raw: string): string[] {
         heldFiles.delete(target.hash);
         saveLibrary();
         announceHeld();
+        renderLibrary();
         void dropBytes(target.hash);
         sys(`dropped the bytes for ${target.name} — the entry stays (${shortHash(target.hash)})`);
         break;
@@ -6706,6 +6793,24 @@ function initUx(): void {
     dropTarget.classList.remove("dragover");
     if (e.dataTransfer?.files?.length) attachments.send(e.dataTransfer.files);
   });
+  // Dropping on the library adds to the library; dropping on the chat sends an
+  // attachment. Two drop targets because they are two different intentions —
+  // one is "keep this and tell the room it exists", the other is "look at this".
+  if (libraryDropEl) {
+    const over = (on: boolean) => libraryDropEl.classList.toggle("over", on);
+    libraryDropEl.addEventListener("dragover", (e) => { e.preventDefault(); over(true); });
+    libraryDropEl.addEventListener("dragleave", () => over(false));
+    libraryDropEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      // Stop it reaching the chat's drop target underneath, or one drop would
+      // both index the file and broadcast it.
+      e.stopPropagation();
+      over(false);
+      if (e.dataTransfer?.files?.length) addFilesToLibrary(e.dataTransfer.files);
+    });
+    libraryDropEl.addEventListener("click", () => addFilesToLibrary());
+  }
+
   msgInput.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -6787,6 +6892,7 @@ function initUx(): void {
       }
       saveLibrary();
       announceHeld();
+      renderLibrary();
     },
   });
   attachments = createAttachments({
@@ -8034,6 +8140,7 @@ async function init(): Promise<void> {
   await loadDyncap();
   loadLemmas();
   loadLibrary();
+  renderLibrary();
   loadNotes();
   loadPolls();
   loadGroups();
@@ -8056,6 +8163,7 @@ async function init(): Promise<void> {
   renderTabs();
   renderPeers();
   renderLemmas();
+  renderLibrary();
   renderNotes();
 
   // The tab-add button prompts for a cap:room:… URL or token.

@@ -148,6 +148,17 @@
     }
 
     /* Which build this is, where nothing else wants the space. */
+    /* The library: what the room has, and whether it can be had. */
+    .lib-row { display:flex; align-items:center; gap:0.3rem; padding:0.15rem 0; cursor:pointer; }
+    .lib-row:hover .lib-name { color:#7fdbca; }
+    .lib-mark { width:0.8rem; flex:none; text-align:center; }
+    .lib-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .lib-size { color:#4a4a4a; font-size:0.6rem; flex:none; }
+    /* Not here, and not coming: worth seeing without shouting. */
+    .lib-row.lib-gone .lib-name, .lib-row.lib-known .lib-name { color:#6a6a6a; }
+    .lib-drop { margin-top:0.3rem; padding:0.35rem; border:1px dashed #2a2a2a; border-radius:4px;
+                color:#3f3f3f; font-size:0.6rem; text-align:center; }
+    .lib-drop.over { border-color:#2a6b5e; color:#7fdbca; background:#0f1a18; }
     .app-version { margin-top: auto; padding-top: 0.6rem; font-size: 0.6rem; color: #3f3f3f; line-height: 1.5; }
     .app-version a { color: #3f3f3f; text-decoration: none; }
     .app-version a:hover { color: #7fdbca; }
@@ -496,6 +507,12 @@
       <div>
         <h2>Peers (<span id="peer-count">0</span>)</h2>
         <ul id="peer-list"></ul>
+      </div>
+
+      <div id="library-block">
+        <h2>Library (<span id="library-count">0</span>)</h2>
+        <ul id="library-list" style="list-style:none; max-height:10rem; overflow-y:auto;"></ul>
+        <div class="lib-drop" id="library-drop">drop files here to add them</div>
       </div>
 
       <div>
