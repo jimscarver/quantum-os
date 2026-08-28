@@ -42,8 +42,6 @@ export interface Calls {
   toggleScreen(): void;
   /** A peer's media arrived. */
   remoteStream(peerId: string, stream: MediaStream): void;
-  /** A peer said they started or stopped sharing their screen. */
-  peerScreen(peerId: string, on: boolean): void;
   /** A peer left, or ended their call: drop their tile. */
   peerGone(peerId: string): void;
   inCall(): boolean;
@@ -63,7 +61,7 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   let screenStream: MediaStream | null = null;
   let inCall = false;
   const tiles = new Map<string, HTMLVideoElement>();   // "__local__" | peerId → video
-  /** Tiles whose video is a shared screen rather than a face. */
+  /** Whether our own tile is carrying the screen rather than the camera. */
   const screens = new Set<string>();
   /** The one tile currently shown big, if any. */
   let expanded: string | null = null;
@@ -85,8 +83,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     v.autoplay = true; v.playsInline = true;
     const cap = document.createElement("span");
     cap.className = "call-name"; cap.textContent = label;
-    // A 160×120 thumbnail is unreadable for a shared screen, so any tile can be
-    // shown big. The button is for discovery; the whole tile is the target.
+    // The thumbnail row is the right default — it shows everyone at once and
+    // stays out of the way. What it needed was a way out of: any tile can be
+    // clicked to fill the window. The button is for discovery; the whole tile
+    // is the target.
     const zoom = document.createElement("button");
     zoom.className = "call-zoom"; zoom.textContent = "⛶";
     zoom.title = "Show this big";
@@ -289,10 +289,7 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     track.addEventListener("ended", () => { void stopScreen(); });
     const local = tiles.get("__local__");
     if (local && localStream) local.srcObject = localStream;
-    // Say so on the wire: a receiver cannot tell a screen from a camera by
-    // looking at the track, and a screen wants the big tile, not a thumbnail.
     markScreen("__local__", true);
-    host.peer()?.broadcast({ kind: "call-screen", on: true });
     host.say("🖥 you are sharing your screen");
     updateControls();
   }
@@ -314,7 +311,6 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     if (local && localStream) local.srcObject = localStream;
     markScreen("__local__", false);
     if (expanded === "__local__") setExpanded(null);
-    host.peer()?.broadcast({ kind: "call-screen", on: false });
     if (inCall) host.say("🖥 you stopped sharing your screen");
     updateControls();
   }
@@ -339,21 +335,9 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       // are "alone" in a call and spuriously raises the call bar. Humans only.
       if (host.isAgent(peerId)) return;
       let v = tiles.get(peerId);
-      const isNew = !v;
       if (!v) v = makeTile(peerId, host.label(peerId));
       if (v.srcObject !== stream) v.srcObject = stream;
       showBar();
-      // The share was announced before the track arrived: pop it up now that
-      // there is something to show.
-      if (isNew && screens.has(peerId)) setExpanded(peerId);
-    },
-    peerScreen(peerId, on) {
-      if (host.isAgent(peerId)) return;
-      markScreen(peerId, on);
-      // Show a screen big without being asked — that is the whole point of
-      // someone sharing one. `setExpanded` no-ops until their tile exists.
-      if (on) setExpanded(peerId);
-      else if (expanded === peerId) setExpanded(null);
     },
     peerGone(peerId) { removeTile(peerId); hideBarIfIdle(); },
     inCall: () => inCall,

@@ -5642,13 +5642,6 @@ function connect(): void {
           addMessage("", `📵 ${peerLabel(from)} left the call`, "system");
           return;
         }
-        if (d.kind === "call-screen") {
-          // Only the tab being looked at: a background room must not throw a
-          // full-window screen over what the user is doing here.
-          if (isUiActive()) calls.peerScreen(from, !!d.on);
-          addMessage("", `🖥 ${peerLabel(from)} ${d.on ? "is sharing their screen — click it to shrink, double-click for full screen" : "stopped sharing their screen"}`, "system");
-          return;
-        }
         if (d.kind === "chat" || "text" in d) {
           const text = "text" in d ? String(d.text) : String(d.message ?? JSON.stringify(d));
           addMessage(from, text, "peer", peerLabel(from));
