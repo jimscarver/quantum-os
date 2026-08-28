@@ -43,16 +43,59 @@ import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeCon
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
+//
+// A room cap is a bearer capability: reading it IS joining. The address bar is
+// therefore the leakiest surface in the app — it is in every screen share,
+// every screenshot and every recording, and none of those look like handing the
+// room away at the time. So the cap is taken back out of the address bar once
+// the app has read it, and leaves this browser through the copy button instead.
+//
+// The room is not lost by hiding it: joined rooms are persisted under
+// `qos-joined-rooms` and come back as tabs, and `/room ref` prints the URL.
 // ---------------------------------------------------------------------------
+
+const HIDE_ROOM_KEY = "qos-hide-room";
+const ACTIVE_ROOM_KEY = "qos-active-room";
+/** Keep the room cap out of the address bar. On unless explicitly turned off. */
+let hideRoom = localStorage.getItem(HIDE_ROOM_KEY) !== "no";
 
 function getRoomId(): string {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const existing = params.get("room");
   if (existing) return existing;
+  // No room in the URL is the ordinary case once the cap is hidden, so the
+  // room you were last in has to be remembered somewhere else — otherwise a
+  // reload would mint a fresh room and leave the real one as a stray tab.
+  const last = localStorage.getItem(ACTIVE_ROOM_KEY);
+  if (last && loadJoinedRooms().includes(last)) return last;
   const id = generateCapability("room");
   params.set("room", id);
-  window.location.hash = params.toString();
+  if (!hideRoom) window.location.hash = params.toString();
   return id;
+}
+
+/**
+ * The address bar follows the active room — or carries nothing, in which case
+ * this is also the only record of which room that was.
+ */
+function syncRoomHash(): void {
+  localStorage.setItem(ACTIVE_ROOM_KEY, activeRoom.roomId);
+  if (hideRoom) {
+    if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    return;
+  }
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  params.set("room", activeRoom.roomId);
+  history.replaceState(null, "", `#${params.toString()}`);
+}
+
+function setHideRoom(on: boolean): void {
+  hideRoom = on;
+  localStorage.setItem(HIDE_ROOM_KEY, on ? "yes" : "no");
+  syncRoomHash();
+  updateShareLink();
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +122,7 @@ const msgInput        = document.getElementById("msg-input") as HTMLInputElement
 const sendBtn         = document.getElementById("send-btn") as HTMLButtonElement;
 const shareLink       = document.getElementById("share-link") as HTMLAnchorElement;
 const copyBtn         = document.getElementById("copy-btn") as HTMLButtonElement;
+const hideBtn         = document.getElementById("hide-btn") as HTMLButtonElement;
 const lemmaListEl     = document.getElementById("lemma-list")!;
 const lemmaCountEl    = document.getElementById("lemma-count")!;
 const currencyListEl  = document.getElementById("currency-list")!;
@@ -965,7 +1009,6 @@ function switchToRoom(roomId: string): void {
 
 function applyActiveRoomToUI(): void {
   // Sidebar identity / room display
-  roomIdEl.textContent = activeRoom.roomId;
   // Signaling URL field reflects this room's last-used URL.
   signalUrlEl.value = activeRoom.signalingUrl;
   // Connect button reflects this room's qpeer state.
@@ -993,10 +1036,8 @@ function applyActiveRoomToUI(): void {
   // Share link + tab highlight
   updateShareLink();
   renderTabs();
-  // Update URL hash to the new active room
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  params.set("room", activeRoom.roomId);
-  history.replaceState(null, "", `#${params.toString()}`);
+  // Update the URL to the new active room, or keep it out of the address bar
+  syncRoomHash();
 }
 
 function openRoomTab(roomId: string): void {
@@ -4114,7 +4155,9 @@ function handleCommand(raw: string): string[] {
       if (sub === "list" || sub === "") {
         const room = activeRoom.roomId;
         const tw = tokenTwists(room);
-        sys(`active room: ${room}`);
+        // The transcript is on screen and in any recording of it, so a hidden
+        // cap stays hidden here too. `/room ref` is the deliberate way to say it.
+        sys(`active room: ${hideRoom ? shortId(room) + "   (hidden — /room ref to print it)" : room}`);
         if (tw) {
           const { pos, neg, gap, balanced } = twistStats(tw);
           sys(`  twists: ${tw.length}  (${pos} pos, ${neg} neg)  gap: ${gap}  ZFA: ${balanced ? "✓" : "✗"}`);
@@ -4123,7 +4166,8 @@ function handleCommand(raw: string): string[] {
         for (const ctx of rooms.values()) {
           const active = ctx.roomId === activeRoom.roomId ? " ←" : "";
           const connected = ctx.qpeer ? "  ●" : "";
-          sys(`  ${shortId(ctx.roomId)}  ${ctx.roomId}${connected}${active}`);
+          const full = hideRoom ? "" : `  ${ctx.roomId}`;
+          sys(`  ${shortId(ctx.roomId)}${full}${connected}${active}`);
         }
       } else if (sub === "join") {
         const target = rParts.slice(1).join(" ").trim();
@@ -4137,6 +4181,12 @@ function handleCommand(raw: string): string[] {
         const leavingId = activeRoom.roomId;
         closeRoomTab(leavingId);
         sys(`left room ${shortId(leavingId)}`);
+      } else if (sub === "hide" || sub === "show") {
+        setHideRoom(sub === "hide");
+        sys(hideRoom
+          ? "room capability hidden — out of the address bar, the share row and the sidebar. "
+            + "Anyone watching your screen can no longer read it; copy (or /room ref) still shares it."
+          : `room capability visible — ${activeRoom.roomId}`);
       } else if (sub === "ref") {
         const target = rParts.slice(1).join(" ").trim();
         const roomId = extractRoomCap(target) || activeRoom.roomId;
@@ -4148,6 +4198,7 @@ function handleCommand(raw: string): string[] {
         sys("  /room join <cap:room:…|url>      — open a new tab for the named room");
         sys("  /room leave                      — close the active tab");
         sys("  /room ref [cap:room:…]           — print a shareable URL for a room");
+        sys("  /room hide | show                — keep the room capability off screen, or put it back");
       }
       break;
     }
@@ -5872,18 +5923,46 @@ function send(): void {
 // Share link
 // ---------------------------------------------------------------------------
 
+/**
+ * The URL that lets someone else in. Built from the active room rather than
+ * read off the address bar, which may deliberately no longer carry it.
+ */
+function roomUrl(): string {
+  return `${window.location.origin}${window.location.pathname}#room=${activeRoom.roomId}`;
+}
+
 function updateShareLink(): void {
-  const url = window.location.href;
-  shareLink.href = url;
-  shareLink.textContent = url;
+  const url = roomUrl();
+  // The sidebar's room line is on screen the whole time, so it is the same
+  // surface as the address bar and is masked with it.
+  roomIdEl.textContent = hideRoom ? shortId(activeRoom.roomId) : activeRoom.roomId;
+  if (hideRoom) {
+    // No href either: the real URL shows in the status bar on hover, which is
+    // the same screen the point of hiding it was to keep it off.
+    shareLink.removeAttribute("href");
+    shareLink.className = "hidden-cap";
+    shareLink.textContent = "hidden — copy to share it";
+    shareLink.title = "The room capability is hidden. Copy puts it on your clipboard; 👁 reveals it.";
+  } else {
+    shareLink.href = url;
+    shareLink.className = "";
+    shareLink.textContent = url;
+    shareLink.title = url;
+  }
+  hideBtn.textContent = hideRoom ? "👁" : "🙈";
+  hideBtn.title = hideRoom
+    ? "Reveal the room capability (it goes back into the address bar)"
+    : "Hide the room capability — keep it off screen shares and recordings";
 }
 
 copyBtn.addEventListener("click", () => {
-  navigator.clipboard.writeText(window.location.href).then(() => {
+  navigator.clipboard.writeText(roomUrl()).then(() => {
     copyBtn.textContent = "copied!";
     setTimeout(() => { copyBtn.textContent = "copy"; }, 1500);
   });
 });
+
+hideBtn.addEventListener("click", () => setHideRoom(!hideRoom));
 
 function toggleSidebar(open?: boolean): void {
   const isOpen = open ?? !sidebarEl.classList.contains("open");
@@ -7282,13 +7361,15 @@ let palette: Palette;
 
 async function init(): Promise<void> {
   const roomId = getRoomId();
-  roomIdEl.textContent = roomId;
-  updateShareLink();
 
   // The URL-hash room is the first joined room and becomes the active one.
   const firstRoom = createRoom(roomId);
   rooms.set(roomId, firstRoom);
   setActiveRoom(firstRoom);
+  // A share link has just been read: take the cap back out of the address bar
+  // before anything else can be looking at the screen.
+  syncRoomHash();
+  updateShareLink();
   uiActiveRoom = firstRoom;
 
   // Background tabs get throttled/frozen by the browser, which starves WebRTC's
