@@ -50,10 +50,18 @@ function isWellFormed(msg: SignalMsg): boolean {
 // completing while every peer still appears in the room — indistinguishable,
 // from a browser, from the other peers never having started.
 //
-// Env-overridable, and the public deployment sets SIGNAL_RATE_LIMIT=200 in
-// render.yaml, which comfortably holds a full cast. The code default stays
-// tight for anyone running this unconfigured.
-const RATE_LIMIT = parseInt(process.env.SIGNAL_RATE_LIMIT ?? "20", 10);
+// The default is 200 because a default that breaks a four-peer room is not
+// protecting anything. It was 20, chosen to be tight, and what it actually did
+// was stop handshakes completing while every peer still appeared in the room —
+// the failure this file's comments describe. What guards this server is the
+// 64 KB payload cap and the wsIndex relay auth; a low message rate adds
+// nothing to either, and an abuser would open more connections rather than
+// send faster on one.
+//
+// Still env-overridable, and render.yaml sets it explicitly — but only a
+// blueprint-managed service reads that file, so the default is what a
+// hand-created service actually runs.
+const RATE_LIMIT = parseInt(process.env.SIGNAL_RATE_LIMIT ?? "200", 10);
 const RATE_WINDOW_MS = parseInt(process.env.SIGNAL_RATE_WINDOW_MS ?? "1000", 10);
 // Joining is bursty and then quiet: offers and their ICE candidates arrive in a
 // clump and nothing follows. A fixed window punishes exactly that shape, so the
@@ -64,7 +72,7 @@ const RATE_BURST = parseInt(process.env.SIGNAL_RATE_BURST ?? String(RATE_LIMIT *
 
 // Build marker — surfaced at GET / so a deploy can be confirmed from outside
 // (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
-const BUILD = "2026-08-28-rate-limit-200";
+const BUILD = "2026-08-28-default-200";
 
 export class SignalingServer {
   private wss: WebSocketServer;
