@@ -131,6 +131,14 @@ export class QOSPeer {
   /// Whether the signaling WebSocket is currently open (used to label connection status).
   isSignalingUp(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
 
+  /// Whether a data channel to this peer is open — whether anything we send
+  /// them can actually arrive. Being in the room is NOT the same thing: the
+  /// signaling server can list a peer whose WebRTC handshake never completed,
+  /// and to that peer everything typed here is silence.
+  hasChannel(peerId: string): boolean {
+    return this.channels.get(peerId)?.readyState === "open";
+  }
+
   /// Send data to a specific peer via their data channel.
   send(targetPeerId: string, data: unknown): boolean {
     const ch = this.channels.get(targetPeerId);

@@ -857,7 +857,21 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
 // (e.g. after a tab switch) instead of a static "connected".
 function connectedLabel(): string {
   const n = peers.size;
-  return `connected · ${n} peer${n === 1 ? "" : "s"}`;
+  const out = unreachablePeers().length;
+  return `connected · ${n} peer${n === 1 ? "" : "s"}`
+       + (out ? ` · ${out} unreachable` : "");
+}
+
+/**
+ * Peers in the room we have no data channel to. They are not a rare edge: the
+ * public signaling server rate-limits the offer/answer/ICE exchange itself, so
+ * past a handful of peers a handshake simply never completes — everyone still
+ * appears in the room, and nothing typed reaches them. Unmarked, that is
+ * indistinguishable from chat being broken, which is how it gets reported.
+ */
+function unreachablePeers(): string[] {
+  if (!qpeer) return [];
+  return [...peers].filter((id) => !qpeer!.hasChannel(id));
 }
 
 function renderChatLine(line: ChatLine): void {
@@ -1192,6 +1206,15 @@ function renderPeers(): void {
   for (const id of peers) {
     const li = document.createElement("li");
     li.textContent = peerLabel(id);
+    if (qpeer && !qpeer.hasChannel(id)) {
+      li.classList.add("unreachable");
+      const warn = document.createElement("span");
+      warn.textContent = " ⚠";
+      warn.title = "No data channel — they cannot see what you type, and you cannot see theirs. "
+        + "The WebRTC handshake never completed; the public signaling server rate-limits it "
+        + "past a few peers in one room. Reload, drop a peer, or run your own signaling server.";
+      li.appendChild(warn);
+    }
     const role = peerAgents.get(id);
     if (role) {
       const badge = document.createElement("span");
@@ -5721,7 +5744,10 @@ function connect(): void {
         // initiated the offer. onPeerJoined only fires for signaling-driven joins,
         // so a remote-initiated peer (e.g. an agent that offered to us) would never
         // land in the roster. Add it here so the peer list reflects real channels.
-        if (!peers.has(peerId)) { peers.add(peerId); renderPeers(); }
+        // Always repaint, not only for a peer new to the roster: a peer already
+        // listed from signaling was being shown as unreachable until now.
+        peers.add(peerId);
+        renderPeers();
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
           const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
