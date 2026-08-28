@@ -158,12 +158,15 @@ function ensureStyles(): void {
 
 export type RholangMode = "eval" | "deploy";
 
-/** What the editor was left with, and which button ended it. */
+/** Which button ended the editor. Two of the three send nothing. */
+export type RholangAction = "run" | "show" | "explain";
+
+/** What the editor was left with, and what to do with it. */
 export interface RholangEditorResult {
   source: string;
+  /** Evaluate or deploy — for `run`, what to do; otherwise, what to describe. */
   mode: RholangMode;
-  /** Show what would be sent, and send nothing. */
-  echo?: boolean;
+  action: RholangAction;
 }
 
 export interface RholangEditorOptions {
@@ -224,8 +227,8 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     card.appendChild(h);
 
     const sub = document.createElement("div");
-    sub.textContent = `${opts.nodeUrl} — Show displays what would be sent and sends nothing. `
-      + `Evaluate runs it read-only: no block, no cost. `
+    sub.textContent = `${opts.nodeUrl} — Explain says what it will do, Show displays what would be sent; `
+      + `neither sends anything. Evaluate runs it read-only: no block, no cost. `
       + `Deploy signs and submits it: costs phlo, lands in a block.`;
     sub.style.cssText = "font-size:12px;opacity:.7;margin-bottom:10px";
     card.appendChild(sub);
@@ -294,6 +297,12 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     // would be sent, without sending it. It belongs next to the buttons that
     // send, not behind a separate command you have to know to type. Named for
     // what MacRhoLang called it, which is also what /macro show does.
+    // Explain answers "what will this do", Show answers "what exactly is sent".
+    // The pair is the whole of what you want before signing something.
+    const explainBtn = document.createElement("button");
+    explainBtn.textContent = "Explain";
+    explainBtn.title = "what this program will do, where, and what it costs — nothing run";
+    explainBtn.style.cssText = "background:#2a2d35;color:#e8e8ea;border:1px solid #3a3d46;border-radius:6px;padding:7px 14px;cursor:pointer";
     const echoBtn = document.createElement("button");
     echoBtn.textContent = "Show";
     echoBtn.title = "show the program as it would be sent — macros expanded, nothing run";
@@ -307,6 +316,7 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     btnRow.appendChild(clearBtn);
     btnRow.appendChild(hint);
     btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(explainBtn);
     btnRow.appendChild(echoBtn);
     btnRow.appendChild(opts.mode === "deploy" ? evalBtn : deployBtn);
     btnRow.appendChild(opts.mode === "deploy" ? deployBtn : evalBtn);
@@ -450,9 +460,9 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
       overlay.remove();
       resolve(result);
     };
-    const submit = (mode: RholangMode, echo = false): void => {
+    const submit = (mode: RholangMode, action: RholangAction = "run"): void => {
       const source = ta.value.trim();
-      close(source ? { source, mode, ...(echo ? { echo } : {}) } : null);
+      close(source ? { source, mode, action } : null);
     };
 
     ta.addEventListener("keydown", (e) => {
@@ -479,9 +489,10 @@ export function openRholangEditor(opts: RholangEditorOptions): Promise<RholangEd
     cancelBtn.addEventListener("click", () => close(null));
     evalBtn.addEventListener("click", () => submit("eval"));
     deployBtn.addEventListener("click", () => submit("deploy"));
-    // Echoed in the form of whichever action is primary — the deploy form and
-    // the eval form differ, and the one worth reading is the one about to run.
-    echoBtn.addEventListener("click", () => submit(opts.mode, true));
+    // Both describe whichever action is primary: the deploy form and the eval
+    // form differ, and the one worth reading is the one about to happen.
+    echoBtn.addEventListener("click", () => submit(opts.mode, "show"));
+    explainBtn.addEventListener("click", () => submit(opts.mode, "explain"));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
   });
 }

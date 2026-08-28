@@ -39,7 +39,8 @@ import { expandBareMacro, expandMacroProgram, lintRholang,
 import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeConfig as describeNodeConfig,
          generateKey as generateDeployKey, revAddressOf, nodeStatus, evalTerm, deployTerm,
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
-         registryUriOf, readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
+         registryUriOf, powerboxUsed,
+         readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -1847,10 +1848,75 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
     if (written === null) { addMessage("", "cancelled — nothing run", "system"); return; }
     // The editor says which button ended it, so the verb that opened it is only
     // a default: a program written to be evaluated can be deployed on the spot.
-    const { source, mode: chosen } = written;
-    if (echoOnly || written.echo) { echoRholang(chosen, source); return; }
+    const { source, mode: chosen, action } = written;
+    if (action === "explain") { explainRholang(chosen, source); return; }
+    if (action === "show" || echoOnly) { echoRholang(chosen, source); return; }
     runRholangProgram(chosen, source);
   })();
+}
+
+/**
+ * Say what a program will do, before it does it.
+ *
+ * Not a summary of the rholang — nothing here reads the program's meaning, and
+ * a tool that guessed at it would be worse than nothing. It is the account the
+ * app can give truthfully: where this goes, what it costs, which of rnode's
+ * powers it reaches and what each answers, whether anything comes back, and
+ * what a deploy does that an evaluation does not. Show answers "what exactly
+ * is sent"; this answers "what will happen if I do".
+ */
+function explainRholang(mode: "eval" | "deploy", source: string): void {
+  const cfg = loadNodeConfig();
+  const out: string[] = [];
+  const say = (l: string) => out.push(l);
+
+  say(mode === "deploy"
+    ? `deploy → ${cfg.url}  ·  shard ${cfg.shard}`
+    : `evaluate → ${cfg.url}  ·  read-only, over finalized state`);
+
+  if (mode === "deploy") {
+    say(`  costs up to ${cfg.phloLimit} phlo at ${cfg.phloPrice} — charged whether or not it succeeds, and it lands in a block`);
+    if (cfg.key) {
+      say(`  signed with this browser's key, as ${revAddressOf(cfg.key)}`);
+      say(`  what the program sends to \`return\` is written to your registry slot at ${registryUriOf(cfg.key)}`);
+      say(`     (/rholang read fetches it back; the nonce advances on every write)`);
+    } else {
+      say("  ⚠ no signing key on this browser — Other ▸ If you use a chain ▸ Make a signing key");
+    }
+  } else {
+    say("  nothing is signed, nothing is stored, no block is made and nothing is charged");
+    say("  `deployId` and `deployerId` are unbound here — an exploratory deploy has no identity of its own");
+  }
+
+  const used = powerboxUsed(source, mode);
+  if (used.length) {
+    say(`reaches ${used.length} of rnode's powers:`);
+    for (const e of used) {
+      say(`  ${e.sig}`);
+      if (e.returns) say(`     → ${e.returns}`);
+    }
+  } else {
+    say("reaches none of rnode's powers — it is pure rholang");
+  }
+
+  // Call sites expand before anything is linted or signed, so what runs is not
+  // quite what is written. Naming them is the cue to press Show.
+  const sites = [...source.matchAll(/(?<![A-Za-z0-9_])([%$])([A-Za-z][\w-]*)\s*\(/g)];
+  if (sites.length) {
+    const names = [...new Set(sites.map((m) => m[1] + m[2]))];
+    say(`expands ${sites.length} macro call site${sites.length === 1 ? "" : "s"} before anything is signed: ${names.join(", ")}`);
+    say("     Show displays the result — that is what actually runs");
+  }
+
+  // A program that never answers `return` is the commonest way to get an empty
+  // result and think the node is broken.
+  if (!/(\breturn\s*!|\*return\b)/.test(source)) {
+    say("⚠ nothing is sent to `return`, so nothing comes back — the run will look empty");
+  }
+
+  addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`, "system");
+  for (const l of out) addMessage("", "  " + l, "system");
+  addMessage("", "  nothing has been run — Show for what would be sent, or run it from the editor", "system");
 }
 
 /**

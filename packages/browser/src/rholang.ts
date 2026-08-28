@@ -299,8 +299,18 @@ const POWERBOX: PowerboxEntry[] = [
 ];
 
 /** The names a program can use without declaring them. */
+export type { PowerboxEntry };
+
 export function powerboxNames(mode: "eval" | "deploy"): string[] {
   return POWERBOX.filter((e) => mode === "deploy" || !e.deployOnly).map((e) => e.name);
+}
+
+/** The powerbox names a program actually mentions, with what each one is. */
+export function powerboxUsed(source: string, mode: "eval" | "deploy"): PowerboxEntry[] {
+  return POWERBOX.filter((e) => {
+    if (e.deployOnly && mode !== "deploy") return false;
+    return new RegExp(`\\b${e.name}\\b`).test(source);
+  });
 }
 
 /** The full spec, as display lines: how to call each name and what comes back. */
