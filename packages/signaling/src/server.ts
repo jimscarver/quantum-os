@@ -50,15 +50,21 @@ function isWellFormed(msg: SignalMsg): boolean {
 // completing while every peer still appears in the room — indistinguishable,
 // from a browser, from the other peers never having started.
 //
-// Env-overridable so a local or self-hosted server can lift it (SIGNAL_RATE_LIMIT
-// =200 comfortably holds a full cast). Defaults unchanged, so the public
-// deployment behaves exactly as before.
+// Env-overridable, and the public deployment sets SIGNAL_RATE_LIMIT=200 in
+// render.yaml, which comfortably holds a full cast. The code default stays
+// tight for anyone running this unconfigured.
 const RATE_LIMIT = parseInt(process.env.SIGNAL_RATE_LIMIT ?? "20", 10);
 const RATE_WINDOW_MS = parseInt(process.env.SIGNAL_RATE_WINDOW_MS ?? "1000", 10);
+// Joining is bursty and then quiet: offers and their ICE candidates arrive in a
+// clump and nothing follows. A fixed window punishes exactly that shape, so the
+// limit is a token bucket — RATE_LIMIT per window sustained, with a bucket deep
+// enough to absorb one join. The sustained rate is what protects the server;
+// the burst is what makes a legitimate join land.
+const RATE_BURST = parseInt(process.env.SIGNAL_RATE_BURST ?? String(RATE_LIMIT * 4), 10);
 
 // Build marker — surfaced at GET / so a deploy can be confirmed from outside
 // (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
-const BUILD = "2026-06-23-heartbeat-2miss";
+const BUILD = "2026-08-28-rate-limit-200";
 
 export class SignalingServer {
   private wss: WebSocketServer;
@@ -68,7 +74,7 @@ export class SignalingServer {
   // ws → peerId for relay authentication
   private wsIndex = new Map<WebSocket, string>();
   // ws → rate-limit state
-  private rateMap = new Map<WebSocket, { count: number; windowStart: number }>();
+  private rateMap = new Map<WebSocket, { tokens: number; last: number }>();
 
   constructor(private port: number) {
     // HTTP server handles both health checks (GET /) and WS upgrades.
@@ -111,7 +117,7 @@ export class SignalingServer {
     w._missed = 0;
     w.on("pong", () => { w._missed = 0; });
 
-    this.rateMap.set(ws, { count: 0, windowStart: Date.now() });
+    this.rateMap.set(ws, { tokens: RATE_BURST, last: Date.now() });
 
     ws.on("message", (data) => {
       if (!this.checkRate(ws)) {
@@ -141,12 +147,13 @@ export class SignalingServer {
     const now = Date.now();
     const state = this.rateMap.get(ws);
     if (!state) return false;
-    if (now - state.windowStart >= RATE_WINDOW_MS) {
-      state.count = 1;
-      state.windowStart = now;
-      return true;
-    }
-    return ++state.count <= RATE_LIMIT;
+    // Refill by however long it has been, cap at the bucket depth, spend one.
+    const refill = ((now - state.last) / RATE_WINDOW_MS) * RATE_LIMIT;
+    state.tokens = Math.min(RATE_BURST, state.tokens + refill);
+    state.last = now;
+    if (state.tokens < 1) return false;
+    state.tokens -= 1;
+    return true;
   }
 
   private handle(ws: WebSocket, msg: SignalMsg): void {

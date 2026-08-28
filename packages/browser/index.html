@@ -181,6 +181,8 @@
     #peer-list li:last-child { border-bottom: none; }
     #peer-list li:not(.you):hover { color: #7fdbca; }
     #peer-list .you { color: #7fdbca; }
+    /* In the room, but nothing we send reaches them. */
+    #peer-list li.unreachable { color: #8a7550; }
 
     .signal-row {
       display: flex;
