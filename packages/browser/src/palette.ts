@@ -183,8 +183,19 @@ interface QuickAction {
   hint?: string;
 }
 
-/** The getting-started sequence behind `Next step`, in the order it is done. */
-const NEXT_STEPS: QuickAction[] = [
+/**
+ * `Other` — what does not earn a button but should not need /help to find.
+ * An action people do, then getting set up in the order it is done.
+ */
+const OTHER_ACTIONS: QuickAction[] = [
+  { label: "Mint a note", ico: "$", kind: "command", cmd: "/note grant",
+    args: [
+      { prompt: "Which currency?", example: "USD" },
+      { prompt: "How much?", example: "10" },
+      { prompt: "Terms & conditions, or blank for none", example: "redeemable until Friday",
+        optional: true, join: " | " },
+    ],
+    hint: "a bearer note in a currency you issue — terms make it its own series" },
   { label: "Say who you are", ico: "🙂", kind: "command", cmd: "/name",
     args: [{ prompt: "What should the room call you?", example: "Jim" }],
     hint: "your display name, so peers see a person and not a hex id" },
@@ -210,6 +221,8 @@ const NEXT_STEPS: QuickAction[] = [
 ];
 
 const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
+  { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
     hint: "write rholang and run it on a node — opens the editor (Ctrl+Enter runs, Esc cancels)" },
   { label: "Poll", ico: "🗳", kind: "command", cmd: "/poll new",
@@ -222,10 +235,8 @@ const QUICK_ACTIONS: QuickAction[] = [
   { label: "Estimate", ico: "📊", kind: "command", cmd: "/estimate new",
     args: [{ prompt: "What are you estimating?", example: "How many hours to finish the deploy?" }],
     hint: "a group number — median and spread, so one confident outlier cannot swing it" },
-  { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
-  { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Commands", ico: "⌘", kind: "commands", hint: "every command there is" },
-  { label: "Next step", ico: "▾", kind: "next", hint: "getting set up, in order" },
+  { label: "Other", ico: "▾", kind: "next", hint: "notes, and getting set up" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -425,9 +436,9 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
     menu.innerHTML = "";
     const head = document.createElement("div");
     head.className = "guide-head next-head";
-    head.textContent = "▾  Next step — setting up, in order";
+    head.textContent = "▾  Other — and getting set up, in order";
     menu.appendChild(head);
-    for (const step of NEXT_STEPS) {
+    for (const step of OTHER_ACTIONS) {
       const item = document.createElement("div");
       item.className = "cmd-item";
       const n = document.createElement("span");

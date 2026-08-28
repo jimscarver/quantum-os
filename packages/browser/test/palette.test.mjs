@@ -62,8 +62,9 @@ const button = (label) => row.children.find((b) => b.dataset.action === label);
 
 // --- the toolbar itself ------------------------------------------------------
 const labels = row.children.map((b) => b.dataset.action);
-check("rholang leads and next step closes",
-      labels[0] === "rholang" && labels[labels.length - 1] === "next step", labels.join(","));
+check("the room comes first and the catch-all closes",
+      labels.slice(0, 3).join(",") === "call,record,rholang"
+      && labels[labels.length - 1] === "other", labels.join(","));
 check("it is a short toolbar", labels.length <= 7, `${labels.length} buttons`);
 
 // --- an action with no arguments just runs -----------------------------------
@@ -126,12 +127,22 @@ check("ordinary chat shows nothing", !palette.isOpen(), "menu left open");
 
 // --- the getting-started list ------------------------------------------------
 ran.length = 0;
-button("next step").fire("click");
-check("next step lists the setup sequence", menu.children.length > 5, `${menu.children.length}`);
+button("other").fire("click");
+check("other lists what has no button", menu.children.length > 5, `${menu.children.length}`);
 const first = menu.children.find((c) => c.className === "cmd-item");
 first.fire("mousedown");
 check("and its entries start their own action", palette.guiding() || ran.length > 0,
       JSON.stringify(ran));
+
+// A note is three answers, the last of them optional.
+palette.cancel();
+ran.length = 0;
+button("other").fire("click");
+menu.children.filter((c) => c.className === "cmd-item")[0].fire("mousedown");
+input.value = "USD"; palette.submitArg();
+input.value = "10";  palette.submitArg();
+input.value = "";    palette.submitArg();
+check("a note is minted from its answers", ran[0] === "/note grant USD 10", JSON.stringify(ran));
 
 console.log(failed === 0 ? "\npalette: all passed" : `\npalette: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);
