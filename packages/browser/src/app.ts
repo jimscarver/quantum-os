@@ -2000,6 +2000,7 @@ const RHOLANG_HELP = [
   "  /rholang deploy        — sign a program and submit it. Costs phlo, lands in a block.",
   "  /rholang echo [deploy] — show the program that would be sent, and send nothing.",
   "                           Every program is wrapped before it leaves the browser; this is that.",
+  "  /rholang explain [program] — what it will do, where, what it costs; and asks an AI in the room to read it.",
   "  /rholang read [name]   — read what is on a name now; no name means the last deploy's.",
   "                           A deploy waits on consensus, which can take minutes. The value sits",
   "                           on its name until read, so nothing is lost by collecting it later.",
@@ -2050,7 +2051,7 @@ const RHOLANG_HELP = [
  * A program is not one line of chat: it needs room, indentation, and a way to
  * see its own shape. The editor owns the text; this owns lint-and-run.
  */
-function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): void {
+function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false, explainOnly = false): void {
   const cfg = loadNodeConfig();
   void (async () => {
     const written = await openRholangEditor({
@@ -2071,7 +2072,10 @@ function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): v
     // The editor says which button ended it, so the verb that opened it is only
     // a default: a program written to be evaluated can be deployed on the spot.
     const { source, mode: chosen, action } = written;
-    if (action === "explain") { explainRholang(chosen, source); return; }
+    // The button explains without asking the room; `/rholang explain` asks. The
+    // difference is who decided to publish the program, and it should stay the
+    // person rather than the button.
+    if (action === "explain" || explainOnly) { explainRholang(chosen, source); return; }
     if (action === "show" || echoOnly) { echoRholang(chosen, source); return; }
     runRholangProgram(chosen, source);
   })();
@@ -2161,12 +2165,15 @@ function forgetLibraryEntry(entry: LibraryEntry): void {
  * what a deploy does that an evaluation does not. Show answers "what exactly
  * is sent"; this answers "what will happen if I do".
  */
-function explainRholang(mode: "eval" | "deploy", source: string): void {
+function explainRholang(mode: "eval" | "deploy", source: string, ask = false): void {
   const cfg = loadNodeConfig();
-  void explainRholangAsync(mode, source, cfg);
+  void explainRholangAsync(mode, source, cfg, ask);
 }
 
-async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg: NodeConfig): Promise<void> {
+/** The question put to an AI that can read the program, in one place. */
+const EXPLAIN_ASK = "explain this rholang program and any security concerns, briefly:";
+
+async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg: NodeConfig, ask: boolean): Promise<void> {
   const out: string[] = [];
   const say = (l: string) => out.push(l);
 
@@ -2224,16 +2231,21 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
   // Offered rather than sent: asking posts the program to the room, and that is
   // the user's call, not a side effect of pressing a button.
   const advisor = [...peers].find((p) => peerAgents.has(p));
-  if (advisor) {
+  const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
+  if (advisor && ask) {
+    // Typing the command IS the consent: the program goes to the room, where
+    // the agent reads it and answers where everyone can see the answer.
     const cmd = peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor);
-    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
+    qpeer?.broadcast({ kind: "chat", text: `/${cmd} ask ${EXPLAIN_ASK} ${oneLine}` });
+    addMessage("", `  🤖 asked ${peerLabel(advisor)} to read it — the program went to the room with the question`, "system");
+  } else if (advisor) {
     addMessage("", `  🤖 ${peerLabel(advisor)} can read the program itself — press Enter to ask `
       + "(it posts the program to the room)", "system");
-    msgInput.value = `/${cmd} ask explain this rholang program, briefly: ${oneLine}`;
+    msgInput.value = `/rholang explain ${oneLine}`;
     msgInput.focus();
   } else {
     addMessage("", "  🤖 no AI is in the room to read the program itself — an agent with --ai answers "
-      + "“what does this do”, which nothing here can", "system");
+      + "“what does this do, and what should worry me”, which nothing here can", "system");
   }
 
   // And whether the node it names is even there — a footnote, because it is
@@ -5003,6 +5015,17 @@ function handleCommand(raw: string): string[] {
               sys("  is rnode running, and is --api-host set so it listens for the browser?");
             }
           })();
+          break;
+        }
+
+        case "explain": {
+          // One verb for the question, wherever it is asked from: the button and
+          // the command reach the same place, and the phrasing of the question
+          // lives in one spot rather than in a prefill.
+          const body = rest.trim().replace(/^(eval|deploy)\b\s*/, "");
+          const mode2: "eval" | "deploy" = /^deploy\b/.test(rest.trim()) ? "deploy" : "eval";
+          if (body) explainRholang(mode2, body, true);
+          else editRholang(mode2, "", false, true);
           break;
         }
 
