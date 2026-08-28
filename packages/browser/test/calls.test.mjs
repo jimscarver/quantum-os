@@ -44,11 +44,41 @@ class Stream {
   addTrack(t) { this.tracks.push(t); }
   removeTrack(t) { this.tracks = this.tracks.filter((x) => x !== t); }
 }
-const el = () => ({
-  hidden: true, className: "", dataset: {}, style: {}, textContent: "", title: "",
-  disabled: false, muted: false, srcObject: null, autoplay: false, playsInline: false,
-  children: [], appendChild() {}, addEventListener() {}, closest: () => ({ remove() {} }),
-});
+// Enough of an element to hold a tree: the tiles are looked up through it
+// (`video.closest(".call-tile")`, `wrap.querySelector(".call-name")`), so a
+// stub that answers those with throwaways would assert nothing.
+const docHandlers = {};
+const el = () => {
+  const classes = new Set();
+  const node = {
+    hidden: true, dataset: {}, style: {}, textContent: "", title: "",
+    disabled: false, muted: false, srcObject: null, autoplay: false, playsInline: false,
+    children: [], parent: null, handlers: {},
+    get className() { return [...classes].join(" "); },
+    set className(v) { classes.clear(); for (const c of String(v).split(/\s+/).filter(Boolean)) classes.add(c); },
+    classList: {
+      add: (...c) => c.forEach((x) => classes.add(x)),
+      remove: (...c) => c.forEach((x) => classes.delete(x)),
+      contains: (c) => classes.has(c),
+    },
+    appendChild(kid) { kid.parent = node; node.children.push(kid); return kid; },
+    append(...kids) { kids.forEach((k) => node.appendChild(k)); },
+    remove() { node.parent = null; },
+    addEventListener(n, f) { node.handlers[n] = f; },
+    fire(n, ev = {}) { node.handlers[n]?.({ stopPropagation() {}, preventDefault() {}, ...ev }); },
+    querySelector(sel) {
+      const want = sel.replace(".", "");
+      const hit = node.children.find((k) => k.classList.contains(want));
+      return hit ?? node.children.map((k) => k.querySelector(sel)).find(Boolean) ?? null;
+    },
+    closest(sel) {
+      const want = sel.replace(".", "");
+      for (let n = node; n; n = n.parent) if (n.classList.contains(want)) return n;
+      return null;
+    },
+  };
+  return node;
+};
 
 // defineProperty, not assignment: node 22 defines `navigator` itself as a
 // getter-only property, so `globalThis.navigator = …` throws there while
@@ -56,7 +86,7 @@ const el = () => ({
 const provide = (name, value) =>
   Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
 
-provide("document", { createElement: () => el() });
+provide("document", { createElement: () => el(), addEventListener(n, f) { docHandlers[n] = f; } });
 provide("window", { isSecureContext: true });
 
 const camera = new Track("video", "camera");
@@ -70,18 +100,21 @@ provide("navigator", { mediaDevices: {
 // --- the room: one person, nobody connected ---------------------------------
 
 const sentToJoiners = [];      // what addLocalMedia was handed, by track label
+const sentEnvelopes = [];      // what went out on the wire
 let senders = [];              // what the connections carry, when there are any
 const peer = {
   peerId: "abc123",
   addLocalMedia(s) { sentToJoiners.push(s.getVideoTracks().map((t) => t.label)); },
-  removeLocalMedia() {}, broadcast() {},
+  removeLocalMedia() {}, broadcast(env) { sentEnvelopes.push(env); },
   videoSenders() { return senders; },
 };
 const said = [];
+const tilesEl = el();
 const calls = mod.createCalls(
   { peer: () => peer, say: (t) => said.push(t), label: () => "peer", isAgent: () => false },
-  { bar: el(), tiles: el(), mute: el(), cam: el(), share: el() },
+  { bar: el(), tiles: tilesEl, mute: el(), cam: el(), share: el() },
 );
+const tileFor = (key) => tilesEl.children.find((c) => c.dataset.key === key);
 
 let failed = 0;
 const settle = () => new Promise((r) => setTimeout(r, 20));
@@ -122,6 +155,56 @@ screen.fire("ended");          // the browser's own "stop sharing" control
 await settle();
 check("the browser's stop-sharing restores the camera",
       replaced.includes("camera"), JSON.stringify(replaced));
+
+// --- a screen is not a thumbnail --------------------------------------------
+// 160×120 is unreadable for a shared screen, so the tile says what it is (the
+// caption, and `contain` instead of `cover` via the data attribute) and the
+// far side is told, since a receiver cannot tell a screen from a face by
+// looking at the track.
+const localTile = () => tileFor("__local__");
+
+calls.toggleScreen();          // share once more
+await settle();
+check("the local tile knows it is a screen", localTile()?.dataset.screen === "1",
+      JSON.stringify(localTile()?.dataset));
+check("and says so", localTile()?.querySelector(".call-name")?.textContent === "you — screen",
+      localTile()?.querySelector(".call-name")?.textContent);
+check("the room is told a screen started",
+      sentEnvelopes.some((e) => e.kind === "call-screen" && e.on === true),
+      JSON.stringify(sentEnvelopes));
+
+calls.toggleScreen();          // stop
+await settle();
+check("the room is told it stopped",
+      sentEnvelopes.some((e) => e.kind === "call-screen" && e.on === false),
+      JSON.stringify(sentEnvelopes));
+check("and the tile is a face again", localTile()?.dataset.screen === undefined,
+      JSON.stringify(localTile()?.dataset));
+
+// --- somebody else shares ----------------------------------------------------
+// The announce and the track race, so the announce lands first here — the tile
+// does not exist yet, and it still has to end up big when the track arrives.
+calls.peerScreen("bob", true);
+calls.remoteStream("bob", new Stream([new Track("video", "bob-screen")]));
+check("their screen comes up big", tileFor("bob")?.classList.contains("expanded"),
+      tileFor("bob")?.className);
+check("and is not cropped", tileFor("bob")?.dataset.screen === "1",
+      JSON.stringify(tileFor("bob")?.dataset));
+
+docHandlers.keydown?.({ key: "Escape" });
+check("Esc shrinks it", !tileFor("bob")?.classList.contains("expanded"), tileFor("bob")?.className);
+
+tileFor("bob")?.fire("click");
+check("clicking the tile brings it back", tileFor("bob")?.classList.contains("expanded"),
+      tileFor("bob")?.className);
+
+calls.peerScreen("bob", false);
+check("when they stop sharing it shrinks", !tileFor("bob")?.classList.contains("expanded"),
+      tileFor("bob")?.className);
+check("only one tile is ever big",
+      tilesEl.children.filter((c) => c.classList.contains("expanded")).length === 0,
+      tilesEl.children.map((c) => c.className).join(" | "));
+
 
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);
