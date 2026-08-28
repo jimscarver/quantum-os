@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `work` is where changes land first; `main` is what is deployed. Both are
+    # checked, so a merge to main is never the first time anything is run.
+    branches: [main, work]
   pull_request:
-    branches: [main]
+    branches: [main, work]
 
 jobs:
   rust:

@@ -511,6 +511,36 @@ cargo test --workspace
 pnpm build:wasm && pnpm build:browser   # output: packages/browser/dist/
 ```
 
+### Branches
+
+`main` is what is **deployed**: a push to it publishes GitHub Pages and redeploys
+the signaling server on Render. So it is not the place to accumulate work.
+
+```
+project branch ──┐
+project branch ──┼──▶  work  ──PR──▶  main   (deploys)
+small change ────┘
+```
+
+- **`work`** — the working branch. Small changes go straight here; project
+  branches are cut from it and merged back into it. CI runs on every push to it,
+  so nothing reaches `main` unrun.
+- **project branches** — one per piece of work, cut from `work`, merged to
+  `work` (a PR if it wants reading, otherwise directly). Delete them the same
+  session.
+- **`main`** — reached only by a PR from `work`, which is the moment the batch
+  goes live and the place to read it as a whole.
+
+```bash
+git checkout work && git pull                 # start from the working branch
+git checkout -b some-feature                  # a project branch off work
+gh pr create --base work                      # …reviewed into work
+gh pr create --base main --head work          # …and work into main, when it should ship
+```
+
+An urgent fix still goes straight to `main` — then `git checkout work && git merge main`,
+so the two do not drift.
+
 ### Deployment
 
 - **GitHub Pages**: auto-deploys on every push to `main` via `.github/workflows/pages.yml`
