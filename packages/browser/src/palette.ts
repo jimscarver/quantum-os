@@ -212,6 +212,8 @@ const OTHER_ACTIONS: QuickAction[] = [
     hint: "a secp256k1 key held in this browser, wrapped by a passphrase — a deploy needs one" },
   { label: "Claim your locker record", ico: "📇", kind: "command", cmd: "/rholang register",
     hint: "the on-chain record that makes later lookups answer" },
+  { label: "Groups", ico: "🏛", kind: "command", cmd: "/gov",
+    hint: "the groups in this room, and the one you are focused on — members, issues, delegation, trust" },
   { label: "Start a group", ico: "⚖", kind: "command", cmd: "/gov new",
     args: [{ prompt: "What is the group called?", example: "Steering" }],
     hint: "members, issues, delegated voting" },
