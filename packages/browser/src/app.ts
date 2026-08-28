@@ -6183,6 +6183,9 @@ function initUx(): void {
       // The Call action belongs to calls.ts; the palette only offers it.
       toggleCall: () => calls.toggle(),
       toggleRecord: () => recorder.toggle(),
+      // A built line goes through the box, so it echoes, logs and reaches the
+      // history exactly like one that was typed.
+      run: (text) => { msgInput.value = text; send(); },
     },
     document.getElementById("cmd-menu"),
   );
@@ -7517,13 +7520,21 @@ async function init(): Promise<void> {
   connectBtn.addEventListener("click", connect);
   sendBtn.addEventListener("click", send);
   msgInput.addEventListener("keydown", (e) => {
-    if (palette.isOpen()) {
+    // A quick action collecting its arguments owns Enter and Esc: the box holds
+    // an answer, not a message.
+    if (palette.guiding()) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); palette.submitArg(); return; }
+      if (e.key === "Escape") { e.preventDefault(); palette.cancel(); return; }
+    }
+    // Only when there is something to pick. A usage hint is not a menu: Enter
+    // has to send the line it is a hint about.
+    if (palette.isPicking()) {
       if (e.key === "ArrowDown") { e.preventDefault(); palette.move(1); return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); palette.move(-1); return; }
       // Shift+Enter is a continuation, not a completion: let it fall through.
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") { e.preventDefault(); palette.accept(); return; }
-      if (e.key === "Escape")    { e.preventDefault(); palette.hide(); return; }
     }
+    if (palette.isOpen() && e.key === "Escape") { e.preventDefault(); palette.hide(); return; }
     // Esc drops held lines. The line in the box is left alone — you may well
     // want to keep typing it; it is the earlier lines you are taking back.
     if (e.key === "Escape" && pendingLines.length) { e.preventDefault(); discardPending(); return; }

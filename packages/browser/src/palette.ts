@@ -147,17 +147,85 @@ export const SLASH_COMMANDS: SlashCmd[] = [
   { name: "rhoqu",   template: "/rhoqu ",     desc: "RhoQu macro → commands" },
 ];
 
-interface QuickAction { label: string; ico: string; fill: string; hint: string }
+/**
+ * The toolbar.
+ *
+ * It is not a shortcut list — a shortcut list wants to be complete, and a
+ * complete one is what it used to be: nine buttons, most of them a primitive
+ * you reach for once you already know what you are doing. `⌘ Commands` and
+ * `/help` are the complete list, and they are better at it.
+ *
+ * What is left answers the two questions someone actually has in front of a
+ * room: **what are we deciding**, and **how do I get set up**. Rholang leads
+ * because it is the thing here that outlives the room; `Next step` closes
+ * because setup is a sequence, and a sequence wants an order, not nine peers.
+ */
+interface ArgSpec {
+  /** What to ask for, in the second person. */
+  prompt: string;
+  /** A real example, not a placeholder — it is what people copy. */
+  example?: string;
+  /** Empty is an answer: skip it and run without. */
+  optional?: boolean;
+  /** What goes between the command so far and this argument. */
+  join?: string;
+}
+
+interface QuickAction {
+  label: string;
+  ico: string;
+  /** `command` builds and runs a line; the rest hand off. */
+  kind: "command" | "call" | "record" | "commands" | "next";
+  /** The command up to its first argument, e.g. "/poll new". */
+  cmd?: string;
+  /** Asked for one at a time. A command with none simply runs. */
+  args?: ArgSpec[];
+  hint?: string;
+}
+
+/** The getting-started sequence behind `Next step`, in the order it is done. */
+const NEXT_STEPS: QuickAction[] = [
+  { label: "Say who you are", ico: "🙂", kind: "command", cmd: "/name",
+    args: [{ prompt: "What should the room call you?", example: "Jim" }],
+    hint: "your display name, so peers see a person and not a hex id" },
+  { label: "Protect your identity", ico: "🔐", kind: "command", cmd: "/password",
+    hint: "encrypt your identity under a password so you can come back as you" },
+  { label: "Log in as someone you already are", ico: "🔑", kind: "command", cmd: "/login",
+    args: [{ prompt: "Which handle? (blank to paste a recovery string instead)", example: "jim", optional: true }],
+    hint: "restore an identity from a group you have rejoined" },
+  { label: "Point at a chain", ico: "🔗", kind: "command", cmd: "/rholang rnode",
+    args: [{ prompt: "Which rnode?", example: "http://localhost:40403" }],
+    hint: "the node /rholang eval and deploy talk to" },
+  { label: "Make a signing key", ico: "🗝", kind: "command", cmd: "/rholang key generate",
+    hint: "a secp256k1 key held in this browser, wrapped by a passphrase — a deploy needs one" },
+  { label: "Claim your locker record", ico: "📇", kind: "command", cmd: "/rholang register",
+    hint: "the on-chain record that makes later lookups answer" },
+  { label: "Start a group", ico: "⚖", kind: "command", cmd: "/gov new",
+    args: [{ prompt: "What is the group called?", example: "Steering" }],
+    hint: "members, issues, delegated voting" },
+  { label: "Show the invite link", ico: "✉", kind: "command", cmd: "/room ref",
+    hint: "prints the room URL into the transcript — it is a capability, so only do this on a screen you trust" },
+  { label: "What can I type?", ico: "?", kind: "command", cmd: "/help",
+    hint: "every command, with per-command detail behind /help <command>" },
+];
+
 const QUICK_ACTIONS: QuickAction[] = [
-  { label: "Commands",   ico: "⌘", fill: "",                hint: "" },
-  { label: "Call",       ico: "📞", fill: "",                hint: "" },
-  { label: "Record",     ico: "⏺", fill: "",                hint: "" },
-  { label: "Poll",       ico: "🗳", fill: "/poll new ",      hint: "e.g. /poll new Lunch?  — then everyone adds options & votes (add  | a, b  to seed)" },
-  { label: "Capability", ico: "✦", fill: "/grant ",         hint: "name a capability, e.g. /grant alice-read" },
-  { label: "Lemma",      ico: "≡", fill: "/lemma ",         hint: "name a lemma, e.g. /lemma mortality  (multi-word: /lemma [all men are mortal])" },
-  { label: "Note",       ico: "$", fill: "/note grant ",    hint: "mint a note, e.g. /note grant USD 10  (add  | terms…  for a terms-stamped note)" },
-  { label: "Swap",       ico: "⇄", fill: "/rdv swap ",      hint: "atomic swap, e.g. /rdv swap USD 30 EUR 20 Alice" },
-  { label: "Channel",    ico: "#", fill: "/channel send ",  hint: "tagged message, e.g. /channel send news hello" },
+  { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
+    hint: "write rholang and run it on a node — opens the editor (Ctrl+Enter runs, Esc cancels)" },
+  { label: "Poll", ico: "🗳", kind: "command", cmd: "/poll new",
+    args: [
+      { prompt: "What are you deciding?", example: "Lunch — pizza, burgers or salad?" },
+      { prompt: "Options, comma-separated — or blank, and let people add their own",
+        example: "pizza, burgers, salad", optional: true, join: " | " },
+    ],
+    hint: "a group decision: approval or ranked-choice, tallied the same way on every peer" },
+  { label: "Estimate", ico: "📊", kind: "command", cmd: "/estimate new",
+    args: [{ prompt: "What are you estimating?", example: "How many hours to finish the deploy?" }],
+    hint: "a group number — median and spread, so one confident outlier cannot swing it" },
+  { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
+  { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
+  { label: "Commands", ico: "⌘", kind: "commands", hint: "every command there is" },
+  { label: "Next step", ico: "▾", kind: "next", hint: "getting set up, in order" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -173,12 +241,19 @@ export interface PaletteHost {
   toggleCall(): void;
   /** The Record action, which belongs to record.ts. */
   toggleRecord(): void;
+  /** Run a finished command line, exactly as if it had been typed. */
+  run(text: string): void;
 }
 
 export interface Palette {
   /** Build the quick-action toolbar into `row`. */
   mountActions(row: HTMLElement | null): void;
   isOpen(): boolean;
+  /**
+   * The menu is showing something selectable. The usage strip is not: it is a
+   * hint about the line you are typing, and Enter must still send that line.
+   */
+  isPicking(): boolean;
   hide(): void;
   /** The input changed: open on a bare command word, close otherwise. */
   onInput(value: string): void;
@@ -186,19 +261,142 @@ export interface Palette {
   move(delta: number): void;
   /** Take the highlighted entry, or the first if none is highlighted. */
   accept(): void;
+  /** A quick action is collecting its arguments. */
+  guiding(): boolean;
+  /** Take what is in the box as the current argument, and ask for the next. */
+  submitArg(): void;
+  /** Abandon the collection, leaving nothing behind. */
+  cancel(): void;
 }
 
 export function createPalette(host: PaletteHost, menu: HTMLElement | null): Palette {
   let sel = -1;
   let matches: SlashCmd[] = [];
+  /** The action currently asking for arguments, if any. */
+  let guide: { action: QuickAction; parts: string[]; at: number } | null = null;
+  /** The box's own placeholder, borrowed while collecting an argument. */
+  const PLACEHOLDER = host.input.placeholder;
 
   const isOpen = () => !!menu && !menu.hidden;
-  const hide = () => { if (menu) menu.hidden = true; sel = -1; };
+  const hide = () => {
+    // While an action is collecting arguments the panel IS the menu, and blur
+    // fires on every click in the room — so hiding has to leave it alone.
+    if (guide) return;
+    if (menu) menu.hidden = true;
+    sel = -1;
+  };
 
   function apply(c: SlashCmd): void {
     host.input.value = c.template;
     hide();
     host.input.focus();
+  }
+
+  /** Ask for the argument we are on, showing what has been answered already. */
+  function paintGuide(): void {
+    if (!menu || !guide) return;
+    const { action, parts, at } = guide;
+    const spec = action.args![at];
+    menu.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "cmd-guide";
+
+    const head = document.createElement("div");
+    head.className = "guide-head";
+    head.textContent = `${action.ico}  ${action.label}`;
+    box.appendChild(head);
+
+    // What the command looks like so far — the point is that the person can
+    // see the line being built rather than trusting a form.
+    const so = document.createElement("div");
+    so.className = "guide-line";
+    so.textContent = [action.cmd, ...parts].join(" ") + " …";
+    box.appendChild(so);
+
+    const ask = document.createElement("div");
+    ask.className = "guide-ask";
+    ask.textContent = spec.prompt;
+    box.appendChild(ask);
+
+    if (spec.example) {
+      const eg = document.createElement("div");
+      eg.className = "guide-eg";
+      eg.textContent = `e.g. ${spec.example}`;
+      box.appendChild(eg);
+    }
+
+    const keys = document.createElement("div");
+    keys.className = "guide-keys";
+    keys.textContent = spec.optional
+      ? "Enter to continue · Enter on an empty box to skip · Esc to cancel"
+      : "Enter to continue · Esc to cancel";
+    box.appendChild(keys);
+
+    menu.appendChild(box);
+    menu.hidden = false;
+  }
+
+  /** Start an action: collect what it needs, or just run it. */
+  function begin(action: QuickAction): void {
+    guide = null;
+    hide();
+    if (!action.args?.length) {
+      if (action.hint) host.say(action.hint);
+      host.run(action.cmd!);
+      return;
+    }
+    guide = { action, parts: [], at: 0 };
+    host.input.value = "";
+    host.input.placeholder = action.args[0].prompt;
+    if (action.hint) host.say(action.hint);
+    paintGuide();
+    host.input.focus();
+  }
+
+  function endGuide(): void {
+    guide = null;
+    host.input.value = "";
+    host.input.placeholder = PLACEHOLDER;
+    if (menu) { menu.hidden = true; menu.innerHTML = ""; }
+  }
+
+  /**
+   * What comes next in the line being typed.
+   *
+   * The same question the toolbar answers by asking, answered here by showing:
+   * once a command has a space after it, the person is on an argument and the
+   * syntax is what they need — not a list of other commands. CMD_HELP already
+   * holds it, per subcommand, so nothing here invents a second source of truth.
+   */
+  function showUsage(value: string): boolean {
+    if (!menu) return false;
+    const m = /^\/([A-Za-z][\w-]*)\s+(.*)$/.exec(value);
+    if (!m) return false;
+    const lines = CMD_HELP[m[1].toLowerCase()];
+    if (!lines?.length) return false;
+    // Prefer the line for the subcommand actually being typed; a command whose
+    // help is one line falls back to it, which is the same answer.
+    const sub = m[2].trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    const want = `/${m[1].toLowerCase()} ${sub}`;
+    const pick = (sub && lines.find((l) => l.toLowerCase().startsWith(want))) || lines[0];
+    menu.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "cmd-guide";
+    const line = document.createElement("div");
+    line.className = "guide-line";
+    line.textContent = pick;
+    box.appendChild(line);
+    // The detail behind it, without turning the strip into the whole help.
+    const more = lines.filter((l) => l !== pick).slice(0, 1);
+    for (const extra of more) {
+      const d = document.createElement("div");
+      d.className = "guide-eg";
+      d.textContent = extra;
+      box.appendChild(d);
+    }
+    menu.appendChild(box);
+    menu.hidden = false;
+    return true;
   }
 
   function show(filter: string, all = false): void {
@@ -221,6 +419,29 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
     menu.hidden = false;
   }
 
+  /** The getting-started list, in order, each entry starting its own action. */
+  function showNext(): void {
+    if (!menu) return;
+    menu.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "guide-head next-head";
+    head.textContent = "▾  Next step — setting up, in order";
+    menu.appendChild(head);
+    for (const step of NEXT_STEPS) {
+      const item = document.createElement("div");
+      item.className = "cmd-item";
+      const n = document.createElement("span");
+      n.className = "cmd-name"; n.textContent = `${step.ico} ${step.label}`;
+      const d = document.createElement("span");
+      d.className = "cmd-desc"; d.textContent = step.hint ?? "";
+      item.appendChild(n); item.appendChild(d);
+      // mousedown, not click: blur closes the menu before a click would land.
+      item.addEventListener("mousedown", (e) => { e.preventDefault(); begin(step); });
+      menu.appendChild(item);
+    }
+    menu.hidden = false;
+  }
+
   return {
     mountActions(row) {
       if (!row) return;
@@ -230,39 +451,75 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
         // Named so a module that owns an action can find its own button —
         // recording repaints its one with the elapsed time.
         btn.dataset.action = a.label.toLowerCase();
-        btn.title = a.hint || "browse all commands";
+        btn.title = a.hint ?? "";
         const ico = document.createElement("span"); ico.className = "ico"; ico.textContent = a.ico;
         const lab = document.createElement("span"); lab.className = "act-label"; lab.textContent = a.label;
         btn.appendChild(ico);
         btn.appendChild(lab);
         btn.addEventListener("click", () => {
-          if (a.label === "Commands") {
-            if (isOpen()) hide();
-            else { sel = -1; show("", true); host.input.focus(); }
-            return;
+          // A second click on the button that opened something closes it.
+          const wasOpen = isOpen();
+          if (guide) endGuide();
+          switch (a.kind) {
+            case "call":   host.toggleCall(); return;
+            case "record": host.toggleRecord(); return;
+            case "commands":
+              if (wasOpen) { hide(); return; }
+              sel = -1; show("", true); host.input.focus(); return;
+            case "next":
+              if (wasOpen) { hide(); return; }
+              showNext(); host.input.focus(); return;
+            default:
+              begin(a);
           }
-          if (a.label === "Call") { host.toggleCall(); return; }
-          if (a.label === "Record") { host.toggleRecord(); return; }
-          host.input.value = a.fill;
-          host.input.focus();
-          if (a.hint) host.say(a.hint);
-          hide();
         });
         row.appendChild(btn);
       }
     },
 
     isOpen,
+    isPicking: () => isOpen() && matches.length > 0,
     hide,
 
+    guiding: () => !!guide,
+
+    submitArg() {
+      if (!guide) return;
+      const spec = guide.action.args![guide.at];
+      const value = host.input.value.trim();
+      // A required argument is the whole point of asking: keep asking.
+      if (!value && !spec.optional) { paintGuide(); return; }
+      if (value) guide.parts.push((spec.join ?? " ").trimStart() === "" ? value : `${spec.join ?? ""}${value}`.trim());
+      guide.at += 1;
+      if (guide.at < guide.action.args!.length) {
+        host.input.value = "";
+        host.input.placeholder = guide.action.args![guide.at].prompt;
+        paintGuide();
+        return;
+      }
+      const line = [guide.action.cmd, ...guide.parts].join(" ");
+      endGuide();
+      host.run(line);
+    },
+
+    cancel() { if (guide) endGuide(); },
+
     onInput(value) {
+      // While collecting arguments the box holds an answer, not a command.
+      if (guide) return;
+      if (!value.startsWith("/") || value.startsWith("//")) { hide(); return; }
       // A bare command word and nothing else: `/no` yes, `//text` no, `/note x` no.
-      if (value.startsWith("/") && !value.startsWith("//") && !value.includes(" ")) {
+      if (!value.includes(" ")) {
         sel = -1;
         show(value.slice(1), false);
-      } else {
-        hide();
+        return;
       }
+      // Past the command name the question changes from "which command" to
+      // "what goes here", so the answer does too. Until now the help stopped
+      // at the space, which is the moment it starts being needed.
+      matches = [];
+      sel = -1;
+      if (!showUsage(value)) hide();
     },
 
     move(delta) {
