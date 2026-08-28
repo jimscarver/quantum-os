@@ -1830,19 +1830,26 @@ const RHOLANG_HELP = [
 function editRholang(mode: "eval" | "deploy", seed: string, echoOnly = false): void {
   const cfg = loadNodeConfig();
   void (async () => {
-    const source = await openRholangEditor({
+    const written = await openRholangEditor({
       mode,
       seed,
-      scope: ["return", ...powerboxNames(mode)],
+      // Deploy's names are the superset, and the editor can end in either mode
+      // now, so highlight against them: `deployId`/`deployerId` are marked in
+      // scope in a program that is then evaluated, where rnode reports them
+      // unbound — which is what /rholang eval's own help says it will.
+      scope: ["return", ...powerboxNames("deploy")],
       nodeUrl: cfg.url,
       lint: lintRholang,
       // Per device, not per room: a program is written against an rnode, and the
       // same one is usually run from whichever room you happen to be in.
       draftKey: "qos-rholang-draft",
     });
-    if (source === null) { addMessage("", "cancelled — nothing run", "system"); return; }
-    if (echoOnly) { echoRholang(mode, source); return; }
-    runRholangProgram(mode, source);
+    if (written === null) { addMessage("", "cancelled — nothing run", "system"); return; }
+    // The editor says which button ended it, so the verb that opened it is only
+    // a default: a program written to be evaluated can be deployed on the spot.
+    const { source, mode: chosen } = written;
+    if (echoOnly) { echoRholang(chosen, source); return; }
+    runRholangProgram(chosen, source);
   })();
 }
 
