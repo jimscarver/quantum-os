@@ -2217,37 +2217,41 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
   addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`, "system");
   for (const l of out) addMessage("", "  " + l, "system");
 
-  // Does the rnode it names actually answer? Every line above is about a node
-  // that may not be there, and "it did nothing" is the least useful way to find
-  // that out. Asked here rather than assumed, since the answer decides whether
-  // the next thing to do is write rholang or start a node.
+  // What explaining a program actually wants is somebody who can read it, and
+  // that is an AI in the room — not an rnode, which only says whether the thing
+  // would run. So the agent comes first and the node is a footnote.
+  //
+  // Offered rather than sent: asking posts the program to the room, and that is
+  // the user's call, not a side effect of pressing a button.
+  const advisor = [...peers].find((p) => peerAgents.has(p));
+  if (advisor) {
+    const cmd = peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor);
+    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
+    addMessage("", `  🤖 ${peerLabel(advisor)} can read the program itself — press Enter to ask `
+      + "(it posts the program to the room)", "system");
+    msgInput.value = `/${cmd} ask explain this rholang program, briefly: ${oneLine}`;
+    msgInput.focus();
+  } else {
+    addMessage("", "  🤖 no AI is in the room to read the program itself — an agent with --ai answers "
+      + "“what does this do”, which nothing here can", "system");
+  }
+
+  // And whether the node it names is even there — a footnote, because it is
+  // about running rather than understanding, and Explain is useful with no
+  // rnode at all.
   try {
     const st = await nodeStatus(cfg);
-    addMessage("", `  ✓ ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
+    addMessage("", `  · ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
     if (st.shardId && cfg.shard && st.shardId !== cfg.shard) {
       addMessage("", `  ⚠ it is shard ${st.shardId} and you are set to ${cfg.shard} — a deploy for the wrong shard is rejected (/rholang shard ${st.shardId})`, "system");
     }
   } catch {
-    addMessage("", `  ✗ ${cfg.url} does not answer — nothing will run until an rnode does`, "system");
-    if (cfg.url === DEFAULT_NODE_CONFIG.url) {
-      addMessage("", "     start the one that ships with this repo:  bash scripts/localnet/run-node.sh", "system");
-      addMessage("", "     or point at another:  /rholang rnode <url>   (Other ▸ If you use a chain)", "system");
-    } else {
-      addMessage("", `     try the local default:  /rholang rnode ${DEFAULT_NODE_CONFIG.url}  (bash scripts/localnet/run-node.sh starts it)`, "system");
-    }
+    addMessage("", `  · ${cfg.url} does not answer, so nothing would run yet`
+      + (cfg.url === DEFAULT_NODE_CONFIG.url
+        ? " — bash scripts/localnet/run-node.sh starts the one in this repo"
+        : `, and neither would ${DEFAULT_NODE_CONFIG.url}`), "system");
   }
 
-  // An AI in the room can read the program itself, which is the one thing this
-  // account cannot do. Offered rather than sent: asking posts the program to
-  // the room, and that is the user's call to make, not a side effect of
-  // pressing Explain.
-  const advisor = [...peers].find((p) => peerAgents.has(p));
-  if (advisor) {
-    const oneLine = source.replace(/\s+/g, " ").trim().slice(0, 400);
-    addMessage("", `  🤖 ${peerLabel(advisor)} is here and can read the program itself — press Enter to ask (it posts the program to the room)`, "system");
-    msgInput.value = `/${peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor)} ask explain this rholang program, briefly: ${oneLine}`;
-    msgInput.focus();
-  }
   addMessage("", "  nothing has been run — Show for what would be sent, or run it from the editor", "system");
 }
 
