@@ -175,6 +175,13 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
         video: { frameRate: FPS, displaySurface: preferredSurface() },
         audio: true,
         surfaceSwitching: "include",
+        // Everything the device is playing — a video, another app — can only
+        // reach a recording through the picker's own checkbox: it is a consent
+        // decision the browser reserves for the user, and no constraint ticks
+        // it. `systemAudio: "include"` asks that the option be offered at all,
+        // which is the whole of what a page is allowed to do. Chrome offers it
+        // for a whole-screen capture on ChromeOS and Windows, and not on Linux.
+        systemAudio: "include",
       } as DisplayMediaStreamOptions);
     } catch (e) {
       // Cancelling the picker is an ordinary thing to do, not an error.
@@ -236,6 +243,13 @@ export function createRecorder(host: RecordHost, btn: HTMLElement | null): Recor
     if (voices.length) on.push(`${voices.length} voice${voices.length === 1 ? "" : "s"} from the call`);
     if (shared.length) on.push("the captured audio");
     host.say(`⏺ recording your screen — ${on.join(" + ")} on it. Click ⏹ to stop and save.`);
+    // The room is on it either way; anything else the device is playing is not,
+    // and the checkbox is the only way in. Say so at the one moment it is
+    // actionable rather than leaving it to be discovered on playback.
+    if (!shared.length) {
+      host.say("   to also capture what your device is playing, share an Entire Screen "
+        + "and tick “Share system audio” (offered on ChromeOS and Windows, not on Linux)");
+    }
   }
 
   function stop(): void {

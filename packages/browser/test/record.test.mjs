@@ -218,6 +218,8 @@ rec.toggle();
 await settle();
 check("a window share still has the room on it",
       said.some((s) => s.includes("2 voices from the call")), said.join(" | "));
+check("and it says how to catch what the device is playing, which it cannot",
+      said.some((s) => s.includes("Share system audio")), said.join(" | "));
 
 // A peer who joins after the recording started belongs on it too, and a
 // renegotiation re-delivers a stream we already have.
