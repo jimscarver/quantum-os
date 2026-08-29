@@ -6950,6 +6950,11 @@ function connect(): void {
           // built to avoid.
           forgetHolder(id);
           peerSeenAt.delete(id);
+          // A peer that has left and comes back is announced as joining, so the
+          // "connected after all" line would be a second announcement of the
+          // same event, out of order with it. That line is for a peer that was
+          // flagged and then connected without ever leaving.
+          unreachableWarned.delete(id);
           renderPeers();
           // If their join was never announced (no name arrived / a quick refresh),
           // stay silent on the leave too — no "<id> joined"/"left" noise.
