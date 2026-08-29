@@ -5618,7 +5618,28 @@ function handleCommand(raw: string): string[] {
 // Connect
 // ---------------------------------------------------------------------------
 
+/**
+ * Can this browser peer at all?
+ *
+ * `RTCPeerConnection` missing is not a network problem and no relay, retry or
+ * reload touches it: a browser without WebRTC cannot reach anybody, ever. It is
+ * usually a privacy extension, a disabled setting, or an in-app browser — a
+ * link opened inside a chat app rather than in a browser — and each of those
+ * has a different fix, so the message names all three.
+ */
+function webrtcMissing(): boolean {
+  return typeof RTCPeerConnection === "undefined";
+}
+
 function connect(): void {
+  if (webrtcMissing()) {
+    addMessage("", "✗ this browser has no WebRTC (RTCPeerConnection is missing), so it cannot connect to anybody here.", "system");
+    addMessage("", "  · a privacy extension or shield blocking WebRTC — allow it for this site", "system");
+    addMessage("", "  · WebRTC disabled in the browser's own settings", "system");
+    addMessage("", "  · an in-app browser (a link opened inside a chat or mail app) — open it in Chrome, Firefox or Safari instead", "system");
+    setStatus("disconnected", "no WebRTC in this browser");
+    return;
+  }
   if (qpeer) {
     qpeer.disconnect();
     setQpeer(null);
