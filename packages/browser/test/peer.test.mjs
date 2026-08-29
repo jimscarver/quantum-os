@@ -147,7 +147,10 @@ await tick();                 // handlers are attached after the open resolves
 check("joining the room is announced", sent.some((m) => m.type === "join"), JSON.stringify(sent));
 
 deliver({ type: "peers", peers: ["aaa", "zzz"] });
-await new Promise((r) => setTimeout(r, 200));   // the join stagger is real time
+// The stagger is real time and deliberate: dialling everyone at once makes a
+// join cost a burst that grows with the room, which is what the signaling
+// server refuses.
+await new Promise((r) => setTimeout(r, 700));
 check("joining dials everyone already in the room", offersTo("aaa") === 1 && offersTo("zzz") === 1,
       `aaa:${offersTo("aaa")} zzz:${offersTo("zzz")}`);
 
@@ -199,7 +202,7 @@ await tick();
 FakeWS.last.onopen?.();
 await tick();
 deliver({ type: "peers", peers: ["aaaa"] });
-await new Promise((r) => setTimeout(r, 200));
+await new Promise((r) => setTimeout(r, 700));
 const highBefore = offersTo("aaaa");
 made.forEach((pc) => { pc.connectionState = "failed"; });
 advance(120_000);
@@ -231,6 +234,19 @@ const goneAt = offersTo("aaaa");
 advance(200_000);
 high.sweep();
 await tick(); await tick();
+// --- a join does not become a burst -------------------------------------------
+const many = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "bbbb" });
+many.connect();
+await tick();
+FakeWS.last.onopen?.();
+await tick();
+const before10 = sent.filter((m) => m.type === "offer").length;
+deliver({ type: "peers", peers: ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"] });
+await new Promise((r) => setTimeout(r, 700));
+const burst = sent.filter((m) => m.type === "offer").length - before10;
+check("ten peers are dialled a few at a time, not all at once", burst > 0 && burst <= 4, `${burst} offers`);
+many.disconnect();
+
 check("a peer that left is not dialled", offersTo("aaaa") === goneAt, `${offersTo("aaaa")} vs ${goneAt}`);
 
 Date.now = realNow;

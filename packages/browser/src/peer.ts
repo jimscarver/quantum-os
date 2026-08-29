@@ -17,6 +17,7 @@ export interface PeerConfig {
   peerId?: string;
   onSignalingOpen?: () => void;                       // fires on every successful WS connect
   onSignalingClose?: () => void;                      // fires when WS drops (before retry)
+  onSignalingError?: (message: string) => void;       // the server refused something
   onMessage?: (from: string, data: unknown) => void;
   onPeerJoined?: (peerId: string) => void;
   onPeerLeft?: (peerId: string) => void;
@@ -138,7 +139,18 @@ export class QOSPeer {
   private static readonly RECONNECT_MIN = 1500;
   private static readonly RECONNECT_MAX = 30000;
   /// Gap between offers when dialling a room's existing peers (see "peers" below).
-  private static readonly JOIN_STAGGER_MS = 50;
+  private static readonly JOIN_STAGGER_MS = 250;
+  /**
+   * How many handshakes may be in flight at once.
+   *
+   * A dial is not one message: it is an offer and then a trickle of ICE
+   * candidates, and doing that to everybody at once makes a join cost a burst
+   * that grows with the room. Past what the signaling server will carry per
+   * connection, handshakes stop completing — which from inside a browser looks
+   * exactly like peers who never arrived. Three at a time finishes a room of
+   * ten in a few seconds and never spikes.
+   */
+  private static readonly MAX_IN_FLIGHT = 3;
   /// How often to look for peers in the room we have no channel to.
   private static readonly SWEEP_MS = 12_000;
   /// Backoff between attempts at one peer, doubling to a ceiling.
@@ -449,11 +461,13 @@ export class QOSPeer {
           if (ch?.readyState === "open") continue;
           this.config.onPeerJoined?.(peerId);
           const at = nth++ * QOSPeer.JOIN_STAGGER_MS;
-          if (at === 0) { this.initiateConnection(peerId); continue; }
+          if (at === 0) { void this.initiateConnection(peerId); continue; }
           setTimeout(() => {
             if (this._disconnected) return;
             if (this.channels.get(peerId)?.readyState === "open") return;
-            this.initiateConnection(peerId);
+            // Wait rather than pile on: the sweep will pick up whoever is left.
+            if (this.inFlight() >= QOSPeer.MAX_IN_FLIGHT) return;
+            void this.initiateConnection(peerId);
           }, at);
         }
         break;
@@ -482,7 +496,12 @@ export class QOSPeer {
         this.handleIce(msg.from, msg.candidate);
         break;
       case "error":
+        // Surfaced, not swallowed. "rate limit exceeded" is the server telling
+        // us the room is bigger than the join burst it will carry — the exact
+        // failure that looks, from inside a browser, like peers who never
+        // arrived. Nobody could see it, so it was argued about instead.
         console.error("[signaling]", msg.message);
+        this.config.onSignalingError?.(msg.message);
         break;
     }
   }
@@ -514,6 +533,7 @@ export class QOSPeer {
       // before it could ever finish, forever.
       if (this.connecting(peerId)) continue;
       if (now < (this.retryAt.get(peerId) ?? 0)) continue;
+      if (this.inFlight() >= QOSPeer.MAX_IN_FLIGHT) break;
       const n = (this.retryN.get(peerId) ?? 0) + 1;
       this.retryN.set(peerId, n);
       // Both sides may dial, and the one with the higher id waits a little
@@ -539,6 +559,13 @@ export class QOSPeer {
    * running for longer than any real handshake takes is treated as stuck, so a
    * negotiation that silently died cannot block retries indefinitely.
    */
+  /** Handshakes currently under way, which is what a burst is made of. */
+  private inFlight(): number {
+    let n = 0;
+    for (const peerId of this.connections.keys()) if (this.connecting(peerId)) n++;
+    return n;
+  }
+
   private connecting(peerId: string): boolean {
     const pc = this.connections.get(peerId);
     if (!pc) return false;
