@@ -1033,6 +1033,22 @@ function iceServersFor(stun: string): RTCIceServer[] {
   return [{ urls: stun }, ...saved.filter((s) => JSON.stringify(s.urls) !== JSON.stringify(stun))];
 }
 
+/**
+ * Put later output back where the command was typed.
+ *
+ * `activeRoom` is aliased state: an inbound callback swaps it while it works,
+ * and an async command finishing during that window appends its lines to
+ * whichever room happened to be current — where they are either invisible or
+ * wiped by the next transcript repaint, which reads the *viewed* room's log.
+ * Anything that answers after an await has to say which room it is answering
+ * in, the way the peer callbacks already do.
+ */
+function inRoom<T>(ctx: RoomContext, fn: () => T): T {
+  const prev = activeRoom;
+  setActiveRoom(ctx);
+  try { return fn(); } finally { setActiveRoom(prev); }
+}
+
 function connectedLabel(): string {
   const n = peers.size;
   const out = unreachablePeers().length;
@@ -2272,13 +2288,16 @@ function forgetLibraryEntry(entry: LibraryEntry): void {
  */
 function explainRholang(mode: "eval" | "deploy", source: string, ask = false): void {
   const cfg = loadNodeConfig();
-  void explainRholangAsync(mode, source, cfg, ask);
+  const ctx = activeRoom;
+  void explainRholangAsync(mode, source, cfg, ask, ctx);
 }
 
 /** The question put to an AI that can read the program, in one place. */
 const EXPLAIN_ASK = "explain this rholang program and any security concerns, briefly:";
 
-async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg: NodeConfig, ask: boolean): Promise<void> {
+async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg: NodeConfig, ask: boolean, ctx: RoomContext): Promise<void> {
+  // Answers arrive after awaits, so each one says which room it belongs to.
+  const line = (t: string): void => { inRoom(ctx, () => addMessage("", t, "system")); };
   const out: string[] = [];
   const say = (l: string) => out.push(l);
 
@@ -2326,8 +2345,8 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
     say("⚠ nothing is sent to `return`, so nothing comes back — the run will look empty");
   }
 
-  addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`, "system");
-  for (const l of out) addMessage("", "  " + l, "system");
+  addMessage("", `📖 what this ${mode === "deploy" ? "deploy" : "evaluation"} will do`);
+  for (const l of out) line("  " + l);
 
   // What explaining a program actually wants is somebody who can read it, and
   // that is an AI in the room — not an rnode, which only says whether the thing
@@ -2342,15 +2361,15 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
     // the agent reads it and answers where everyone can see the answer.
     const cmd = peerAgents.get(advisor) === "facilitator" ? "facil" : peerAgents.get(advisor);
     qpeer?.broadcast({ kind: "chat", text: `/${cmd} ask ${EXPLAIN_ASK} ${oneLine}` });
-    addMessage("", `  🤖 asked ${peerLabel(advisor)} to read it — the program went to the room with the question`, "system");
+    line(`  🤖 asked ${peerLabel(advisor)} to read it — the program went to the room with the question`);
   } else if (advisor) {
-    addMessage("", `  🤖 ${peerLabel(advisor)} can read the program itself — press Enter to ask `
-      + "(it posts the program to the room)", "system");
+    line(`  🤖 ${peerLabel(advisor)} can read the program itself — press Enter to ask `
+      + "(it posts the program to the room)");
     msgInput.value = `/rholang explain ${oneLine}`;
     msgInput.focus();
   } else {
-    addMessage("", "  🤖 no AI is in the room to read the program itself — an agent with --ai answers "
-      + "“what does this do, and what should worry me”, which nothing here can", "system");
+    line("  🤖 no AI is in the room to read the program itself — an agent with --ai answers "
+      + "“what does this do, and what should worry me”, which nothing here can");
   }
 
   // And whether the node it names is even there — a footnote, because it is
@@ -2358,18 +2377,18 @@ async function explainRholangAsync(mode: "eval" | "deploy", source: string, cfg:
   // rnode at all.
   try {
     const st = await nodeStatus(cfg);
-    addMessage("", `  · ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`, "system");
+    line(`  · ${cfg.url} answers — rnode ${st.version?.node ?? "?"}, shard ${st.shardId ?? "?"}, block ${st.latestBlockNumber ?? "?"}`);
     if (st.shardId && cfg.shard && st.shardId !== cfg.shard) {
-      addMessage("", `  ⚠ it is shard ${st.shardId} and you are set to ${cfg.shard} — a deploy for the wrong shard is rejected (/rholang shard ${st.shardId})`, "system");
+      line(`  ⚠ it is shard ${st.shardId} and you are set to ${cfg.shard} — a deploy for the wrong shard is rejected (/rholang shard ${st.shardId})`);
     }
   } catch {
-    addMessage("", `  · ${cfg.url} does not answer, so nothing would run yet`
+    line(`  · ${cfg.url} does not answer, so nothing would run yet`
       + (cfg.url === DEFAULT_NODE_CONFIG.url
         ? " — bash scripts/localnet/run-node.sh starts the one in this repo"
-        : `, and neither would ${DEFAULT_NODE_CONFIG.url}`), "system");
+        : `, and neither would ${DEFAULT_NODE_CONFIG.url}`));
   }
 
-  addMessage("", "  nothing has been run — Show for what would be sent, or run it from the editor", "system");
+  line("  nothing has been run — Show for what would be sent, or run it from the editor");
 }
 
 /**
@@ -5125,7 +5144,8 @@ function handleCommand(raw: string): string[] {
       if (isub === "test") {
         // Ask the network what it will give us. Only a relay candidate answers
         // "can I reach somebody whose network is as awkward as mine".
-        sys("gathering candidates…");
+        sys("gathering candidates… (5 seconds)");
+        const iceCtx = activeRoom;
         void (async () => {
           const seen = new Set<string>();
           const pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
@@ -5139,12 +5159,15 @@ function handleCommand(raw: string): string[] {
           await new Promise((r) => setTimeout(r, 5000));
           pc.close();
           const kinds = [...seen];
-          addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
-          addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
-          addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
-                                                 : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
-          addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
-                                                 : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
+          inRoom(iceCtx, () => {
+            addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
+            addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
+            addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
+                                                   : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
+            addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
+                                                   : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
+            addMessage("", "  (paste these four lines to whoever is helping — they say whether this network can be crossed)", "system");
+          });
         })();
         break;
       }
