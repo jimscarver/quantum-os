@@ -90,13 +90,18 @@ const offersTo = (id) => sent.filter((m) => m.type === "offer" && m.to === id).l
 // --- a peer in a room --------------------------------------------------------
 // This peer's id sorts BELOW "zzz…" and above "aaa…", so both the eager and the
 // polite path can be exercised against one peer.
-const peer = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "mmm" });
-peer.connect();
-FakeWS.last.onopen?.();
+const tick = () => new Promise((r) => setTimeout(r, 0));
 const deliver = (msg) => FakeWS.last.onmessage?.({ data: JSON.stringify(msg) });
 
+const peer = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "mmm" });
+peer.connect();
+await tick();                 // the socket is created inside an async open
+FakeWS.last.onopen?.();
+await tick();                 // handlers are attached after the open resolves
+check("joining the room is announced", sent.some((m) => m.type === "join"), JSON.stringify(sent));
+
 deliver({ type: "peers", peers: ["aaa", "zzz"] });
-await new Promise((r) => setTimeout(r, 120));   // the join stagger is real time
+await new Promise((r) => setTimeout(r, 200));   // the join stagger is real time
 check("joining dials everyone already in the room", offersTo("aaa") === 1 && offersTo("zzz") === 1,
       `aaa:${offersTo("aaa")} zzz:${offersTo("zzz")}`);
 
@@ -107,12 +112,14 @@ check("joining dials everyone already in the room", offersTo("aaa") === 1 && off
 const before = offersTo("aaa");
 advance(30_000);
 peer.sweep();
+await tick();
 check("a connection still negotiating is not redialled", offersTo("aaa") === before,
       `${offersTo("aaa")} vs ${before}`);
 
 // --- until it is clearly stuck ----------------------------------------------
 advance(60_000);   // past ATTEMPT_PATIENCE_MS
 peer.sweep();
+await tick(); await tick();
 check("an attempt stuck far too long is retried", offersTo("aaa") === before + 1,
       `${offersTo("aaa")} vs ${before}`);
 
@@ -121,6 +128,7 @@ made.forEach((pc) => { pc.connectionState = "failed"; });
 const failedAt = offersTo("zzz");
 advance(60_000);
 peer.sweep();
+await tick(); await tick();
 check("a failed connection is dialled again", offersTo("zzz") > failedAt,
       `${offersTo("zzz")} vs ${failedAt}`);
 
@@ -129,21 +137,25 @@ check("a failed connection is dialled again", offersTo("zzz") > failedAt,
 // is false whenever builds are mixed — and then nobody dials at all.
 const high = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "zzzz" });
 high.connect();
+await tick();
 FakeWS.last.onopen?.();
-FakeWS.last.onmessage?.({ data: JSON.stringify({ type: "peers", peers: ["aaaa"] }) });
-await new Promise((r) => setTimeout(r, 120));
+await tick();
+deliver({ type: "peers", peers: ["aaaa"] });
+await new Promise((r) => setTimeout(r, 200));
 const highBefore = offersTo("aaaa");
 made.forEach((pc) => { pc.connectionState = "failed"; });
 advance(120_000);
 high.sweep();
+await tick(); await tick();
 check("the higher-id peer retries too, rather than waiting to be dialled",
       offersTo("aaaa") > highBefore, `${offersTo("aaaa")} vs ${highBefore}`);
 
 // --- a peer that left is not chased ------------------------------------------
-FakeWS.last.onmessage?.({ data: JSON.stringify({ type: "left", peerId: "aaaa" }) });
+deliver({ type: "left", peerId: "aaaa" });
 const goneAt = offersTo("aaaa");
 advance(200_000);
 high.sweep();
+await tick(); await tick();
 check("a peer that left is not dialled", offersTo("aaaa") === goneAt, `${offersTo("aaaa")} vs ${goneAt}`);
 
 Date.now = realNow;
