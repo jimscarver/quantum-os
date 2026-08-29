@@ -1092,19 +1092,45 @@ const HANDSHAKE_GRACE_MS = 30_000;
  * coming. Say so once, in the terms that are actually true: past ten the room
  * is full, below it something else went wrong.
  */
+/**
+ * What the connection's own state means, in a sentence.
+ *
+ * Three faults look identical from the roster and want different things done
+ * about them, and nobody should have to know a diagnostic command to be told
+ * which one they have.
+ */
+function readConnection(row: { channel: string; connection: string; ice: string }): string {
+  if (row.ice === "failed" || row.connection === "failed") {
+    return "no path between these two networks — that pair needs a relay (/ice turn …)";
+  }
+  if (row.ice === "checking") {
+    return "candidates are arriving but not pairing, which usually means one side is behind a strict NAT";
+  }
+  if (row.connection === "connected" && row.channel !== "open") {
+    return "connected, but the data channel never surfaced — a reload on either side clears this one";
+  }
+  if (row.connection === "none") return "no attempt in flight; the next retry will start one";
+  return "still negotiating";
+}
+
 function reportUnreachable(id: string): void {
   if (!qpeer || qpeer.hasChannel(id) || !peers.has(id)) return;
   if (unreachableWarned.has(id)) return;
   unreachableWarned.add(id);
+  // The diagnosis, with the complaint. Asking someone to run a command to find
+  // out why is asking them to already know there is a command.
+  const row = qpeer.connectionReport().find((r) => r.peerId === id);
   const size = peers.size + 1;
   addMessage("", size > ROOM_HOLDS
     ? `⚠ the room is full — ${size} here, and a browser mesh holds about ${ROOM_HOLDS}. `
       + `${peerLabel(id)} is in the room but not connected to you: neither of you sees what the other types. `
       + `Split the group (five is where a room actually thinks together) or run your own signaling server.`
     : `⚠ still not connected to ${peerLabel(id)} — they are in the room but no channel has opened, `
-      + `so neither of you sees what the other types. It keeps retrying; reloading either side also settles it. `
-      + `If it never connects, the two networks may have no direct path — /ice test says whether yours can be crossed.`,
+      + `so neither of you sees what the other types. It keeps retrying.`,
     "system");
+  if (row) {
+    addMessage("", `   connection ${row.connection} · ice ${row.ice} — ${readConnection(row)}`, "system");
+  }
   renderPeers();
 }
 

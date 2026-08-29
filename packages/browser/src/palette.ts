@@ -37,7 +37,7 @@ export const CMD_HELP: Record<string, string[]> = {
          "/file drop <hash|name> — stop holding the bytes; the entry stays, because what the room has and what you keep are different facts.",
          "/file forget <hash|name> — retract the entry: for everyone if you added it, from your view otherwise.",
          "A file's name IS its content hash, so adding the same file twice is one entry and a copy from anyone is verifiable. Fetching from another peer comes next (#100); today the index is the useful part."],
-  conn: ["/conn — every peer connection with its channel, connection and ICE state.",
+  conn: ["/conn — every peer connection with its channel, connection and ICE state. The room already says this by itself when a peer will not connect; this is for looking before that, or at everyone at once.",
          "channel open is the only state that means you can talk. ice 'checking' that never ends means candidates that never pair; 'failed' means no path at all (/ice test); connected-with-no-channel is a different fault again.",
          "Local only — nothing is broadcast."],
   version: ["/version — the build this browser is running, the signaling server and rnode it is pointed at, and whether WebRTC exists here.",
