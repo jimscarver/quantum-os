@@ -5109,6 +5109,19 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "version":
+    case "build": {
+      // Asked constantly while debugging a room, and answered until now only by
+      // a line at the foot of the sidebar, below everything, behind a drawer on
+      // a phone. "Which build are you on" needs an answer you can type.
+      sys(`quantum-os ${__APP_VERSION__} · build ${__APP_BUILD__}`);
+      sys(`  signaling  ${activeRoom.signalingUrl}`);
+      sys(`  rnode      ${loadNodeConfig().url}`);
+      sys(`  webrtc     ${webrtcMissing() ? "MISSING — this browser cannot connect to anyone" : "available"}`);
+      sys("  https://github.com/rchain-community/quantum-os");
+      break;
+    }
+
     case "ice": {
       // Whether two peers can connect at all is decided here, and it is the one
       // piece of the room that no amount of retrying can substitute for: two
