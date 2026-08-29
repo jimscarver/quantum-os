@@ -21,8 +21,11 @@ const stubZfa = {
   setup(b) {
     b.onResolve({ filter: /\.\/zfa\.js$/ }, () => ({ path: "zfa-stub", namespace: "stub" }));
     b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-      contents: "export const validateCapability = () => true;"
-              + "export const generateCapability = (l) => `cap:${l}:0246`;",
+      // Unique per call: two tabs minting the same id would hide the very
+      // collision this file is here to rule out.
+      contents: "let n = 0;"
+              + "export const validateCapability = (t) => typeof t === 'string' && t.startsWith('cap:');"
+              + "export const generateCapability = (l) => `cap:${l}:${(++n).toString().padStart(4,'0')}`;",
       loader: "js",
     }));
   },
@@ -91,6 +94,40 @@ const check = (label, cond, detail) => {
   else { failed++; console.log(`  FAIL ${label}  (${detail})`); }
 };
 const offersTo = (id) => sent.filter((m) => m.type === "offer" && m.to === id).length;
+
+// --- an identity that survives a phone discarding the tab ---------------------
+// sessionStorage is per-tab, which is right, but a mobile browser throws it away
+// when it evicts a backgrounded tab — so a phone came back as a NEW peer every
+// time and the room filled with ghosts of its previous incarnations.
+const session = new Map();
+const local = new Map();
+provide("sessionStorage", {
+  getItem: (k) => session.get(k) ?? null,
+  setItem: (k, v) => session.set(k, String(v)),
+});
+provide("localStorage", {
+  getItem: (k) => local.get(k) ?? null,
+  setItem: (k, v) => local.set(k, String(v)),
+  key: (i) => [...local.keys()][i] ?? null,
+  get length() { return local.size; },
+});
+
+const first = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246" });
+check("an id is leased when it is minted",
+      [...local.keys()].some((k) => k.endsWith(first.peerId)), [...local.keys()].join(","));
+
+session.clear();                       // the phone discarded the tab
+advance(60_000);                       // and stayed away long enough
+const back = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246" });
+check("a tab that comes back reclaims its own id rather than becoming a stranger",
+      back.peerId === first.peerId, `${back.peerId} vs ${first.peerId}`);
+
+session.clear();
+local.set(`qos-peer-lease:${first.peerId}`, String(now));   // the other tab is alive
+const second = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246" });
+check("a second tab open at the same time gets its own id",
+      second.peerId !== first.peerId, `${second.peerId} vs ${first.peerId}`);
+first.disconnect(); back.disconnect(); second.disconnect();
 
 // --- a peer in a room --------------------------------------------------------
 // This peer's id sorts BELOW "zzz…" and above "aaa…", so both the eager and the

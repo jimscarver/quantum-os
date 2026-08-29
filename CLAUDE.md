@@ -323,6 +323,12 @@ What matters is that the room **says so**: a peer in the roster with no data cha
 
 Past ten needs a different topology (an SFU for media, a relay or partial-mesh/gossip overlay for data), not a bigger rate limit.
 
+### An identity that survives a phone discarding the tab
+
+`peerId` lived in `sessionStorage` alone: per-tab, which is right (two tabs must differ), but **a mobile browser throws sessionStorage away when it evicts a backgrounded tab**. So a phone whose screen locked rejoined as a *new peer* every time, and the room filled with ghosts of its previous incarnations — each listed, each unreachable, each intro'd to again by the agents, until the signaling heartbeat evicted them. Every symptom of that reads as a connection problem and none of it is one: `⚠` on hex ids nobody could ever reach, `connection none · ice none`, and three greetings to one person.
+
+So an id is **leased** (`claimPeerId` in `peer.ts`): a live tab refreshes `qos-peer-lease:<id>` in localStorage every 5s, and a load with no sessionStorage id reclaims any lease older than 20s rather than minting. Two tabs open at once still differ — both leases are fresh, and only an expired one can be taken.
+
 ### Whether two peers can connect at all (`/ice`)
 
 Before any of this: **a browser may have no WebRTC**. `RTCPeerConnection` missing is not a network problem and no relay, retry or reload touches it — that browser cannot reach anybody. `webrtcMissing()` is checked in `connect()` and names the three causes, which have different fixes: a privacy extension or shield, WebRTC disabled in settings, or an in-app browser (a link opened inside a chat or mail app). Seen live: a laptop where `/ice test` answered `RTCPeerConnection is not defined` while the same person's phone connected fine.

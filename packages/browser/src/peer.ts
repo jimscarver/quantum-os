@@ -13,6 +13,8 @@ export interface PeerConfig {
   signalingUrl: string;    // ws://localhost:4444
   roomId: string;          // ZFA capability token identifying the room
   iceServers?: RTCIceServer[];
+  /** Override the leased identity. Tests use it; the app never does. */
+  peerId?: string;
   onSignalingOpen?: () => void;                       // fires on every successful WS connect
   onSignalingClose?: () => void;                      // fires when WS drops (before retry)
   onMessage?: (from: string, data: unknown) => void;
@@ -46,6 +48,56 @@ function iceUfrag(sdp: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/** Key holding "a tab is currently using this id", refreshed while it lives. */
+const LEASE = "qos-peer-lease:";
+const LEASE_TICK_MS = 5_000;
+/** How long without a refresh before an id counts as abandoned. */
+const LEASE_STALE_MS = 20_000;
+
+/**
+ * An identity that survives a phone discarding the tab.
+ *
+ * It used to live in sessionStorage alone, which is per-tab and therefore
+ * distinct between two tabs — right — but which a mobile browser throws away
+ * when it evicts a backgrounded tab. So a phone whose screen locked came back
+ * as a NEW peer every time: the room filled with ghosts of its previous
+ * incarnations, each listed and unreachable, each intro'd to again, until the
+ * signaling heartbeat eventually evicted them. Every symptom of that looks like
+ * a connection problem and none of it is one.
+ *
+ * So an id is leased. A live tab keeps saying it is using its id; a tab that
+ * goes away stops, and the next load reclaims the abandoned id rather than
+ * minting another. Two tabs open at once still differ, because both leases are
+ * fresh and only an expired one can be taken.
+ */
+function claimPeerId(): string {
+  try {
+    const mine = sessionStorage.getItem("qos-peer-id");
+    if (mine && validateCapability(mine)) { touchLease(mine); return mine; }
+  } catch { /* storage unavailable */ }
+
+  let reclaimed: string | null = null;
+  try {
+    const now = Date.now();
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(LEASE)) continue;
+      const at = Number(localStorage.getItem(key) ?? 0);
+      const id = key.slice(LEASE.length);
+      if (now - at > LEASE_STALE_MS && validateCapability(id)) { reclaimed = id; break; }
+    }
+  } catch { /* ignore */ }
+
+  const id = reclaimed ?? generateCapability("peer");
+  try { sessionStorage.setItem("qos-peer-id", id); } catch { /* ignore */ }
+  touchLease(id);
+  return id;
+}
+
+function touchLease(id: string): void {
+  try { localStorage.setItem(LEASE + id, String(Date.now())); } catch { /* ignore */ }
+}
+
 /// A QuantumOS browser peer.
 /// Identity is a ZFA capability token — possessing the peer ID IS authorization.
 export class QOSPeer {
@@ -64,6 +116,7 @@ export class QOSPeer {
   /** peerId → when the current connection attempt began. */
   private attemptAt = new Map<string, number>();
   private sweepTimer?: ReturnType<typeof setInterval>;
+  private leaseTimer?: ReturnType<typeof setInterval>;
   private channels = new Map<string, RTCDataChannel>();
   private config: PeerConfig;
   private _disconnected = false;   // true after explicit disconnect()
@@ -111,18 +164,14 @@ export class QOSPeer {
 
   constructor(config: PeerConfig) {
     this.config = config;
-    // ZFA-balanced peer identity, kept stable across page reloads via
-    // sessionStorage so peerId-keyed state (group membership, poll creator /
-    // ballots) survives a refresh. sessionStorage is per-tab, so two tabs in the
-    // same browser still get distinct identities (no signaling collision); a
-    // brand-new tab starts fresh.
-    let id: string | null = null;
-    try { id = sessionStorage.getItem("qos-peer-id"); } catch { /* storage unavailable */ }
-    if (!id || !validateCapability(id)) {
-      id = generateCapability("peer");
-      try { sessionStorage.setItem("qos-peer-id", id); } catch { /* ignore */ }
-    }
-    this.peerId = id;
+    this.peerId = config.peerId ?? claimPeerId();
+    // Keep saying this id is live, so a tab that goes away stops saying it and
+    // the next one can take it back.
+    try {
+      this.leaseTimer = setInterval(() => {
+        try { localStorage.setItem(LEASE + this.peerId, String(Date.now())); } catch { /* ignore */ }
+      }, LEASE_TICK_MS);
+    } catch { /* no storage, no lease */ }
   }
 
   connect(): void {
@@ -140,6 +189,7 @@ export class QOSPeer {
   disconnect(): void {
     this._disconnected = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    if (this.leaseTimer) clearInterval(this.leaseTimer);
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     if (this._stableTimer) clearTimeout(this._stableTimer);
     this.signal({ type: "leave", roomId: this.config.roomId, peerId: this.peerId });
