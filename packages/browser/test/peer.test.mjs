@@ -76,9 +76,11 @@ class FakePC {
   getSenders() { return []; }
   addTrack() { return {}; }
   close() {
+    // A browser fires the state handler on close — that is what made a retry
+    // look like the peer leaving — but it does not fire again for a connection
+    // that is already closed, and a stub that does recurses through cleanup.
+    if (this.connectionState === "closed") return;
     this.connectionState = "closed";
-    // A browser fires the state handler on close; that is what made a retry
-    // look like the peer leaving.
     this.onconnectionstatechange?.();
   }
 }
