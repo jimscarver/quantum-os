@@ -169,6 +169,25 @@ export class QOSPeer {
     }
   }
 
+  /**
+   * What every connection is doing right now.
+   *
+   * The roster can say reachable or not; this says why not. "checking" that
+   * never ends is candidates that never pair; "failed" is no path at all; a
+   * connection that is "connected" with no open channel is a different fault
+   * again. Guessing between those has cost a whole evening.
+   */
+  connectionReport(): { peerId: string; channel: string; connection: string; ice: string }[] {
+    const ids = new Set([...this.roster, ...this.connections.keys(), ...this.channels.keys()]);
+    ids.delete(this.peerId);
+    return [...ids].map((peerId) => ({
+      peerId,
+      channel: this.channels.get(peerId)?.readyState ?? "none",
+      connection: this.connections.get(peerId)?.connectionState ?? "none",
+      ice: this.connections.get(peerId)?.iceConnectionState ?? "none",
+    }));
+  }
+
   /// Whether the signaling WebSocket is currently open (used to label connection status).
   isSignalingUp(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
 
@@ -568,6 +587,17 @@ export class QOSPeer {
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       this.config.onRemoteTrack?.(remotePeerId, stream);
+    };
+
+    // ICE is where a connection that never completes actually stops, and its
+    // state is the difference between "no candidate pair works" (a network that
+    // cannot be crossed) and "checking forever" (candidates arriving too late,
+    // or not at all). Neither is visible from the connection state alone.
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[qos-peer] ice to ${remotePeerId.slice(-8)} → ${pc.iceConnectionState}`);
+    };
+    pc.onicegatheringstatechange = () => {
+      console.log(`[qos-peer] gathering for ${remotePeerId.slice(-8)} → ${pc.iceGatheringState}`);
     };
 
     pc.onconnectionstatechange = () => {

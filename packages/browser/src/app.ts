@@ -5109,6 +5109,23 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "conn": {
+      // What each connection is actually doing. The roster says reachable or
+      // not; this says why not, which is the difference between a network that
+      // cannot be crossed and one that simply has not finished.
+      const p = qpeer;
+      if (!p) { sys("not connected to a room"); break; }
+      const rows = p.connectionReport();
+      if (!rows.length) { sys("no peer connections yet"); break; }
+      sys(`connections (${rows.length}):`);
+      for (const r of rows) {
+        sys(`  ${peerLabel(r.peerId).padEnd(14)} channel ${r.channel.padEnd(11)} conn ${r.connection.padEnd(12)} ice ${r.ice}`);
+      }
+      sys("  channel open is the only one that means you can talk;");
+      sys("  ice 'checking' forever = candidates that never pair · 'failed' = no path (/ice test)");
+      break;
+    }
+
     case "version":
     case "build": {
       // Asked constantly while debugging a room, and answered until now only by
@@ -7009,7 +7026,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
