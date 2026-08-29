@@ -1148,6 +1148,13 @@ function reportUnreachable(id: string): void {
     "system");
   if (row) {
     addMessage("", `   connection ${row.connection} · ice ${row.ice} — ${readConnection(row)}`, "system");
+    // "No attempt in flight" for somebody the room can see means the two
+    // rosters disagree. Repair it from the side that knows, rather than
+    // reporting it and waiting.
+    if (row.connection === "none") {
+      qpeer.ensureConnected(id);
+      addMessage("", "   starting one now", "system");
+    }
   }
   renderPeers();
 }

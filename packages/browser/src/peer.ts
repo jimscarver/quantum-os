@@ -170,6 +170,25 @@ export class QOSPeer {
   }
 
   /**
+   * Make sure we are at least trying to reach this peer.
+   *
+   * The room's roster and this one can disagree: a `peers` list replaces this
+   * set wholesale, so a peer the server omitted once — mid-flap, or joining as
+   * the list was built — is dropped here while the app still shows them
+   * present. Nothing then dials them, and the room reports somebody present
+   * that no attempt is being made to reach, which is as useless as it sounds.
+   * The app can say "this one, now".
+   */
+  ensureConnected(peerId: string): void {
+    if (this._disconnected || peerId === this.peerId) return;
+    this.roster.add(peerId);
+    if (this.channels.get(peerId)?.readyState === "open") return;
+    if (this.connecting(peerId)) return;
+    this.retryAt.delete(peerId);
+    void this.initiateConnection(peerId);
+  }
+
+  /**
    * What every connection is doing right now.
    *
    * The roster can say reachable or not; this says why not. "checking" that

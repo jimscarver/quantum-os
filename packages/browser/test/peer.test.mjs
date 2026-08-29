@@ -171,6 +171,23 @@ await tick(); await tick();
 check("the higher-id peer retries too, rather than waiting to be dialled",
       offersTo("aaaa") > highBefore, `${offersTo("aaaa")} vs ${highBefore}`);
 
+// --- the two rosters can disagree ---------------------------------------------
+// A `peers` list replaces this peer's own set wholesale, so somebody the server
+// omitted once is dropped here while the room still shows them. Nothing dials
+// them, and the room reports a peer no attempt is being made to reach.
+deliver({ type: "peers", peers: [] });            // the server forgets somebody
+const forgotten = offersTo("aaaa");
+advance(200_000);
+high.sweep();
+await tick(); await tick();
+check("a peer dropped from the list is not dialled by the sweep",
+      offersTo("aaaa") === forgotten, `${offersTo("aaaa")} vs ${forgotten}`);
+
+high.ensureConnected("aaaa");
+await tick(); await tick();
+check("but the room can say 'this one, now'", offersTo("aaaa") > forgotten,
+      `${offersTo("aaaa")} vs ${forgotten}`);
+
 // --- a peer that left is not chased ------------------------------------------
 deliver({ type: "left", peerId: "aaaa" });
 const goneAt = offersTo("aaaa");
