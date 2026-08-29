@@ -231,6 +231,8 @@ interface RoomContext {
   pendingJoins: Map<string, ReturnType<typeof setTimeout>>;
   // Peers already reported as unreachable, so a full room says so once.
   unreachableWarned: Set<string>;
+  /** peerId → when it first appeared, so "long enough to worry" is answerable. */
+  peerSeenAt: Map<string, number>;
   // What the room has: the index (public, gossiped) and what this peer is
   // actually holding the bytes for (local — nobody else's business to be told
   // until they ask).
@@ -308,6 +310,7 @@ function createRoom(roomId: string): RoomContext {
     pendingLeaves: new Map(),
     pendingJoins: new Map(),
     unreachableWarned: new Set(),
+    peerSeenAt: new Map(),
     libraryStore: new Map(),
     heldFiles: new Set(),
     fileHolders: new Map(),
@@ -380,6 +383,7 @@ let peerAgents: Map<string, string> = new Map();
 let pendingLeaves: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let pendingJoins: Map<string, ReturnType<typeof setTimeout>> = new Map();
 let unreachableWarned: Set<string> = new Set();
+let peerSeenAt: Map<string, number> = new Map();
 let libraryStore: Map<string, LibraryEntry> = new Map();
 let heldFiles: Set<string> = new Set();
 let fileHolders: Map<string, Set<string>> = new Map();
@@ -426,6 +430,7 @@ function setActiveRoom(ctx: RoomContext): void {
   pendingLeaves      = ctx.pendingLeaves;
   pendingJoins       = ctx.pendingJoins;
   unreachableWarned  = ctx.unreachableWarned;
+  peerSeenAt         = ctx.peerSeenAt;
   libraryStore       = ctx.libraryStore;
   heldFiles          = ctx.heldFiles;
   fileHolders        = ctx.fileHolders;
@@ -1104,7 +1109,14 @@ function readConnection(row: { channel: string; connection: string; ice: string 
     return "no path between these two networks — that pair needs a relay (/ice turn …)";
   }
   if (row.ice === "checking") {
-    return "candidates are arriving but not pairing, which usually means one side is behind a strict NAT";
+    // Which side is at fault is answerable from the room: whoever fails against
+    // everyone remote, while peers on this machine still work, is the one whose
+    // network cannot be crossed — and a relay on that side alone is enough,
+    // because the other side can reach the relay's public address.
+    return "candidates are arriving but not pairing — a strict NAT on one side. "
+      + "If everyone remote fails for you while peers on this machine work, it is yours: "
+      + "add a relay with /ice turn <url> <user> <pass>, then Disconnect and Connect. "
+      + "One side having a relay is enough.";
   }
   if (row.connection === "connected" && row.channel !== "open") {
     return "connected, but the data channel never surfaced — a reload on either side clears this one";
@@ -1116,6 +1128,12 @@ function readConnection(row: { channel: string; connection: string; ice: string 
 function reportUnreachable(id: string): void {
   if (!qpeer || qpeer.hasChannel(id) || !peers.has(id)) return;
   if (unreachableWarned.has(id)) return;
+  // Long enough to be a problem rather than a handshake in progress. Timed from
+  // when the peer appeared, whichever way it appeared: it used to be armed only
+  // on a clean first join, so a peer that arrived through the flap-recovery
+  // path — which is every peer during a bad spell — was never diagnosed.
+  const since = peerSeenAt.get(id);
+  if (since === undefined || Date.now() - since < HANDSHAKE_GRACE_MS) return;
   unreachableWarned.add(id);
   // The diagnosis, with the complaint. Asking someone to run a command to find
   // out why is asking them to already know there is a command.
@@ -6888,17 +6906,14 @@ function connect(): void {
           clearTimeout(pending);
           pendingLeaves.delete(id);
           peers.add(id);
+          if (!peerSeenAt.has(id)) peerSeenAt.set(id, Date.now());
           renderPeers();
           return;
         }
         if (peers.has(id)) return;
         peers.add(id);
+        peerSeenAt.set(id, Date.now());
         renderPeers();
-        // A handshake that never completes is silent, so time it.
-        setTimeout(() => {
-          const p2 = activeRoom; setActiveRoom(ctx);
-          try { reportUnreachable(id); } finally { setActiveRoom(p2); }
-        }, HANDSHAKE_GRACE_MS);
         // Wait for the peer's name before announcing — browsers send it right after
         // the channel opens — so the line shows a name, not a raw id; fall back to the
         // id after a timeout. Fired early by the name handler; cleared on leave.
@@ -6927,6 +6942,7 @@ function connect(): void {
           // a departed holder listed as one is the broken link this design is
           // built to avoid.
           forgetHolder(id);
+          peerSeenAt.delete(id);
           renderPeers();
           // If their join was never announced (no name arrived / a quick refresh),
           // stay silent on the leave too — no "<id> joined"/"left" noise.
@@ -8641,6 +8657,17 @@ async function init(): Promise<void> {
   syncRoomHash();
   updateShareLink();
   uiActiveRoom = firstRoom;
+
+  // Look over the room every so often rather than arming a timer per join: a
+  // peer can enter the roster by several paths (a clean join, a rejoin inside
+  // the leave grace, a channel opening from their side) and only one of them
+  // used to schedule the check — so exactly the peers that were flapping went
+  // undiagnosed.
+  setInterval(() => {
+    for (const ctx of rooms.values()) {
+      inRoom(ctx, () => { for (const id of peers) reportUnreachable(id); });
+    }
+  }, 10_000);
 
   // Background tabs get throttled/frozen by the browser, which starves WebRTC's
   // keepalive (peers drop) and clamps our reconnect timer (they return only slowly).
