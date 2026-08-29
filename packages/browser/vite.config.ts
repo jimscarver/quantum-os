@@ -1,11 +1,21 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 
 // The version the app reports about itself. Read from package.json at build
 // time so there is one place it is written down, and it cannot drift from what
 // was actually shipped.
 const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
+
+// Which build this actually is. `version` moves when someone remembers to move
+// it; a commit does not, and "are you on the new build?" has been the first
+// question of every peer-connection puzzle. Falls back to a timestamp where
+// there is no git (a deploy from a tarball).
+const build = (() => {
+  try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); }
+  catch { return new Date().toISOString().slice(0, 16).replace("T", " "); }
+})();
 
 // The app derives every identity from SHA-256 via Web Crypto, which browsers
 // expose only in a secure context. http://localhost is one; http://<lan-ip> is
@@ -23,7 +33,10 @@ const { version } = JSON.parse(readFileSync(new URL("./package.json", import.met
 // once per origin. What Web Crypto is gated on is a secure context, and
 // bypassing the interstitial grants one; the app starts normally after that.
 export default defineConfig({
-  define: { __APP_VERSION__: JSON.stringify(version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+    __APP_BUILD__: JSON.stringify(build),
+  },
   plugins: [basicSsl({ name: "quantum-os-dev" })],
   base: "/quantum-os/",   // GitHub Pages repo subpath
   build: {

@@ -8426,11 +8426,13 @@ let palette: Palette;
 
 /** Injected by vite from package.json — see vite.config.ts. */
 declare const __APP_VERSION__: string;
+/** The commit this bundle was built from, so "are you on the new build?" has an answer. */
+declare const __APP_BUILD__: string;
 
 async function init(): Promise<void> {
   // Which build you are looking at, in the corner where nothing else wants the
   // space. A bug report that names a version is worth several that do not.
-  if (appVersionEl) appVersionEl.textContent = `version ${__APP_VERSION__}`;
+  if (appVersionEl) appVersionEl.textContent = `version ${__APP_VERSION__} · build ${__APP_BUILD__}`;
   const roomId = getRoomId();
 
   // The URL-hash room is the first joined room and becomes the active one.
