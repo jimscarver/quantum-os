@@ -311,6 +311,8 @@ export interface Palette {
   /** Build the quick-action toolbar into `row`. */
   mountActions(row: HTMLElement | null): void;
   isOpen(): boolean;
+  /** The panel was touched a moment ago, so a blur is that touch, not a dismissal. */
+  justTouched(): boolean;
   /**
    * The menu is showing something selectable. The usage strip is not: it is a
    * hint about the line you are typing, and Enter must still send that line.
@@ -338,6 +340,18 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
   let guide: { action: QuickAction; parts: string[]; at: number } | null = null;
   /** The box's own placeholder, borrowed while collecting an argument. */
   const PLACEHOLDER = host.input.placeholder;
+  /**
+   * When the panel itself was last touched.
+   *
+   * The panel is dismissed on the input losing focus, and touching the panel is
+   * how the input loses focus — so on a phone, where touching is the only way
+   * to interact, reading what it says dismisses it. The menu's own items work
+   * around this by cancelling mousedown, which the usage hint cannot do without
+   * also making its text unselectable — and text you cannot select is text you
+   * cannot paste to whoever is helping you.
+   */
+  let touchedAt = 0;
+  menu?.addEventListener("pointerdown", () => { touchedAt = Date.now(); });
 
   const isOpen = () => !!menu && !menu.hidden;
   const hide = () => {
@@ -544,6 +558,7 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
     },
 
     isOpen,
+    justTouched: () => Date.now() - touchedAt < 400,
     isPicking: () => isOpen() && matches.length > 0,
     hide,
 

@@ -7183,7 +7183,11 @@ function initUx(): void {
     histIdx = -1;   // manual typing exits history recall; the text is now the draft
     palette.onInput(msgInput.value);
   });
-  msgInput.addEventListener("blur", () => setTimeout(() => palette.hide(), 120));
+  // Losing focus closes the panel — unless the panel is what took the focus.
+  // Touching it to read it is not asking for it to go away.
+  msgInput.addEventListener("blur", () => setTimeout(() => {
+    if (!palette.justTouched()) palette.hide();
+  }, 120));
 
   // Attachments: picker button, drag-and-drop, clipboard paste.
   const attachBtn = document.getElementById("attach-btn");
