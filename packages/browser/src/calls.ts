@@ -192,6 +192,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       host.say(`⚠ calls need a secure context — open the site over https:// or localhost${window.isSecureContext ? "" : " (this page is not a secure context)"}`);
       return;
     }
+    // Read the stored answer first: if the camera is already blocked, no prompt
+    // will appear however long anyone waits, and saying so beats waiting.
+    const stored = await permissionState();
+    if (stored) host.say(`⚠ ${stored}`);
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO, video: true });
     } catch {
@@ -202,6 +206,8 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
         host.say("🎙 camera unavailable — starting an audio-only call");
       } catch (audioErr) {
         host.say(`⚠ could not start call: ${whyMediaFailed(audioErr)}`);
+        const stored = await permissionState();
+        if (stored) host.say(`   ${stored}`);
         return;
       }
     }
@@ -367,6 +373,34 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     peerGone(peerId) { remote.delete(peerId); removeTile(peerId); hideBarIfIdle(); },
     inCall: () => inCall,
   };
+}
+
+/**
+ * What the browser has already decided about the camera and mic.
+ *
+ * "I allowed Chrome to ask, but it never asks" is the commonest way this fails,
+ * and it is not a bug: a prompt appears only when the answer is unknown. A
+ * stored block, or an operating system that has not given the browser itself
+ * camera access, both mean silence — so the stored answer is worth reading out
+ * rather than leaving somebody waiting for a prompt that will not come.
+ */
+async function permissionState(): Promise<string> {
+  const q = (navigator as unknown as {
+    permissions?: { query(d: { name: string }): Promise<{ state: string }> };
+  }).permissions;
+  if (!q?.query) return "";
+  const read = async (name: string): Promise<string> => {
+    try { return (await q.query({ name })).state; } catch { return "unknown"; }
+  };
+  const [cam, mic] = await Promise.all([read("camera"), read("microphone")]);
+  if (cam === "denied" || mic === "denied") {
+    return `this site is blocked from the ${cam === "denied" ? "camera" : "microphone"}`
+      + " — the browser will not ask again until you change it: click the 🔒 (or ⓘ) at the left of the"
+      + " address bar → Site settings → Allow. If it already says Allow there, the operating system is"
+      + " withholding it from the browser itself (System settings → Privacy → Camera / Microphone).";
+  }
+  if (cam === "granted" || mic === "granted") return "";
+  return "";
 }
 
 /** Say why getUserMedia/getDisplayMedia refused, in terms of what to do next. */

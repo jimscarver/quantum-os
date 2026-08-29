@@ -88,6 +88,9 @@ const provide = (name, value) =>
 
 provide("document", { createElement: () => el(), addEventListener(n, f) { docHandlers[n] = f; } });
 provide("window", { isSecureContext: true });
+// The browser's stored answer about camera/mic. "denied" is why a prompt never
+// appears, which is the thing people report as "it doesn't ask".
+let permission = "prompt";
 const store = new Map();
 provide("localStorage", {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -98,7 +101,9 @@ const camera = new Track("video", "camera");
 const mic    = new Track("audio", "mic");
 const screen = new Track("video", "screen");
 screen.getSettings = () => ({ displaySurface: "monitor" });
-provide("navigator", { mediaDevices: {
+provide("navigator", {
+  permissions: { query: async () => ({ state: permission }) },
+  mediaDevices: {
   getUserMedia:    async () => new Stream([mic, camera]),
   getDisplayMedia: async () => new Stream([screen]),
 } });
@@ -213,6 +218,23 @@ check("only one tile is ever big",
 
 check("it says which surface was actually shared",
       said.some((s) => s.includes("sharing your entire screen")), said.join(" | "));
+
+// --- "I allowed it to ask, but it never asks" --------------------------------
+// A prompt appears only when the answer is unknown. A stored block means
+// silence, which is reported as the app being broken — so the app reads the
+// stored answer and says it.
+said.length = 0;
+permission = "denied";
+calls.end();
+calls.toggle();
+await settle();
+check("a stored block is explained rather than waited on",
+      said.some((t) => t.includes("will not ask again")), said.join(" | "));
+check("and it says where to change it",
+      said.some((t) => t.includes("Site settings")), said.join(" | "));
+check("including when the browser itself lacks the permission",
+      said.some((t) => t.includes("operating system")), said.join(" | "));
+permission = "prompt";
 
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);
