@@ -18,4 +18,19 @@ services:
       # guard the server.
       - key: SIGNAL_RATE_LIMIT
         value: "200"
+    # On, but it must only fire for changes to this server.
+    #
+    # A deploy restarts signaling, and a restart drops every peer's socket at
+    # once — the whole room reconnecting together because somebody edited a help
+    # string in the browser. Pages should deploy on every push (a reload is one
+    # person's choice, taken when they choose it); this is everybody's.
+    #
+    # The control is Render's **Build Filters** (Settings -> Build & Deploy),
+    # since a service Render did not create from this blueprint ignores the file:
+    #
+    #   Included Paths:  packages/signaling/**
+    #                    render.yaml
+    #
+    # Included rather than ignored, so anything new in the repo defaults to not
+    # restarting the room.
     autoDeploy: true
