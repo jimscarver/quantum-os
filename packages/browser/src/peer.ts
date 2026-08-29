@@ -94,6 +94,8 @@ export class QOSPeer {
   private static readonly RETRY_MIN_MS = 20_000;
   /// How long a connection may be "connecting" before it counts as stuck.
   private static readonly ATTEMPT_PATIENCE_MS = 45_000;
+  /// How much longer the higher-id side waits, so the two rarely dial at once.
+  private static readonly POLITE_EXTRA_MS = 7_000;
   private static readonly RETRY_MAX_MS = 90_000;
   private static readonly STABLE_MS = 15000;   // a connection must survive this long to reset the backoff
   // Live-call media: the local mic/cam stream shared into all connections, and a
@@ -417,7 +419,6 @@ export class QOSPeer {
     for (const peerId of this.roster) {
       if (peerId === this.peerId) continue;
       if (this.channels.get(peerId)?.readyState === "open") continue;
-      if (this.peerId > peerId) continue;             // their side dials
       // An attempt already under way is not a failure to retry. Redialling one
       // sends a fresh offer with a new ICE ufrag, the far side rebuilds, and
       // the negotiation in flight is thrown away — so a peer whose path is
@@ -427,7 +428,15 @@ export class QOSPeer {
       if (now < (this.retryAt.get(peerId) ?? 0)) continue;
       const n = (this.retryN.get(peerId) ?? 0) + 1;
       this.retryN.set(peerId, n);
-      const wait = Math.min(QOSPeer.RETRY_MAX_MS, QOSPeer.RETRY_MIN_MS * 2 ** (n - 1));
+      // Both sides may dial, and the one with the higher id waits a little
+      // longer before doing so. Deferring to the other side entirely — the
+      // earlier rule — assumed the other side also retries, which is false the
+      // moment the room is a mix of builds: nobody dialled and the connection
+      // never came back. Waiting instead means the usual case is still one
+      // dialler (the other's attempt is in flight, so `connecting()` skips this
+      // one), while a peer that will never dial is no longer fatal.
+      const polite = this.peerId > peerId ? QOSPeer.POLITE_EXTRA_MS : 0;
+      const wait = Math.min(QOSPeer.RETRY_MAX_MS, QOSPeer.RETRY_MIN_MS * 2 ** (n - 1)) + polite;
       // Jitter, so a room that all failed at once does not all retry at once.
       this.retryAt.set(peerId, now + Math.round(wait * (0.75 + Math.random() * 0.5)));
       console.log(`[qos-peer] retrying ${peerId} (attempt ${n})`);
