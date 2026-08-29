@@ -566,8 +566,25 @@ export class QOSPeer {
   }
 
   private createPeerConnection(remotePeerId: string): RTCPeerConnection {
-    // Close any stale connection before creating a new one
-    this.connections.get(remotePeerId)?.close();
+    // Replacing our own connection is not the peer leaving.
+    //
+    // Closing a connection fires its state handlers, and those declare the peer
+    // gone — so every retry produced a "left" and then a "joined" when the new
+    // channel opened, which reads as a peer flapping when nothing of the sort
+    // happened. Detach before closing: the old object has no further part in
+    // this, and its last act should not be to lie about who is in the room.
+    const stale = this.connections.get(remotePeerId);
+    if (stale) {
+      stale.onconnectionstatechange = null;
+      stale.oniceconnectionstatechange = null;
+      stale.onicegatheringstatechange = null;
+      stale.onicecandidate = null;
+      stale.ondatachannel = null;
+      stale.ontrack = null;
+      const ch = this.channels.get(remotePeerId);
+      if (ch) { ch.onclose = null; ch.onopen = null; ch.onmessage = null; }
+      stale.close();
+    }
 
     const pc = new RTCPeerConnection({
       iceServers: this.config.iceServers ?? DEFAULT_ICE,

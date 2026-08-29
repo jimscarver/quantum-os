@@ -72,7 +72,12 @@ class FakePC {
   async addIceCandidate() {}
   getSenders() { return []; }
   addTrack() { return {}; }
-  close() { this.connectionState = "closed"; }
+  close() {
+    this.connectionState = "closed";
+    // A browser fires the state handler on close; that is what made a retry
+    // look like the peer leaving.
+    this.onconnectionstatechange?.();
+  }
 }
 provide("RTCPeerConnection", FakePC);
 provide("RTCSessionDescription", class {});
@@ -93,7 +98,11 @@ const offersTo = (id) => sent.filter((m) => m.type === "offer" && m.to === id).l
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const deliver = (msg) => FakeWS.last.onmessage?.({ data: JSON.stringify(msg) });
 
-const peer = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "mmm" });
+const left = [];
+const peer = new QOSPeer({
+  signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "mmm",
+  onPeerLeft: (id) => left.push(id),
+});
 peer.connect();
 await tick();                 // the socket is created inside an async open
 FakeWS.last.onopen?.();
@@ -131,6 +140,18 @@ peer.sweep();
 await tick(); await tick();
 check("a failed connection is dialled again", offersTo("zzz") > failedAt,
       `${offersTo("zzz")} vs ${failedAt}`);
+
+// --- a retry is not a departure ----------------------------------------------
+// Closing the old connection fires its handlers, which declared the peer gone —
+// so every retry manufactured a "left", and the new channel opening
+// manufactured a "joined". Peers appeared to flap while nothing had happened.
+left.length = 0;
+made.forEach((pc) => { pc.connectionState = "failed"; });
+advance(200_000);
+peer.sweep();
+await tick(); await tick();
+check("replacing our own connection does not report the peer as gone",
+      left.length === 0, JSON.stringify(left));
 
 // --- both sides retry, and neither waits on the other -------------------------
 // Deferring entirely to the lower id assumed the other side also retries, which
