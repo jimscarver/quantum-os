@@ -1011,6 +1011,14 @@ function setStatus(state: "disconnected" | "connecting" | "connected", label: st
  * be the thing that holds it.
  */
 const ICE_KEY = "qos-ice";
+/**
+ * The last `/ice test` result, kept so it can be read again.
+ *
+ * A diagnostic is only useful once somebody else has read it, and on a phone
+ * the lines are easy to lose — a scroll, a tab, a keyboard opening. Stored per
+ * device rather than in the transcript so it survives whatever closed it.
+ */
+const ICE_TEST_KEY = "qos-ice-last";
 
 function loadIceServers(): RTCIceServer[] {
   try {
@@ -5116,6 +5124,8 @@ function handleCommand(raw: string): string[] {
           const urls = Array.isArray(srv.urls) ? srv.urls.join(", ") : srv.urls;
           sys(`  ${urls}${srv.username ? "   (with credentials)" : ""}`);
         }
+        const last = (() => { try { return localStorage.getItem(ICE_TEST_KEY); } catch { return null; } })();
+        if (last) { sys("last test:"); sys("```\n" + last + "\n```"); }
         if (!list.some((srv) => String(srv.urls).includes("turn:"))) {
           sys("  no relay (turn:) — two peers behind restrictive NAT cannot connect without one");
           sys("  /ice turn turn:host:3478 <user> <pass>   ·   /ice test  to see what your network allows");
@@ -5136,6 +5146,13 @@ function handleCommand(raw: string): string[] {
         saveIceServers([...list, entry]);
         sys(`✓ added ${url} — reconnect for it to take effect (Disconnect, then Connect)`);
         if (isub === "turn") sys("  a relay carries your traffic; DTLS keeps it unreadable, but it passes through that machine");
+        break;
+      }
+
+      if (isub === "last") {
+        const last = (() => { try { return localStorage.getItem(ICE_TEST_KEY); } catch { return null; } })();
+        if (last) sys("```\n" + last + "\n```");
+        else sys("no test on this device yet — /ice test");
         break;
       }
 
@@ -5179,16 +5196,29 @@ function handleCommand(raw: string): string[] {
             pc?.close();
           }
           const kinds = [...seen];
+          // One message, not five: a single block survives a scroll, copies in
+          // one gesture, and cannot be half-lost.
+          const report = [
+            `candidates: ${kinds.join(", ") || "none"}`,
+            kinds.includes("host") ? "host ✓ same machine or same LAN" : "host ✗ no host candidate, which is unusual",
+            kinds.includes("srflx") ? "srflx ✓ STUN answered: reachable from outside this NAT"
+                                    : "srflx ✗ STUN did not answer; a firewall may be blocking UDP",
+            kinds.includes("relay") ? "relay ✓ a TURN server is available, so even a hard NAT can be crossed"
+                                    : "relay ✗ no TURN, so a peer behind a restrictive NAT cannot be reached (/ice turn …)",
+          ].join("\n");
+          try { localStorage.setItem(ICE_TEST_KEY, report); } catch { /* not worth failing over */ }
           inRoom(iceCtx, () => {
-            addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
-            addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
-            addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
-                                                   : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
-            addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
-                                                   : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
-            addMessage("", "  (paste these four lines to whoever is helping — they say whether this network can be crossed)", "system");
+            addMessage("", "```\n" + report + "\n```", "system");
+            addMessage("", "  /ice last  shows this again — paste it to whoever is helping", "system");
           });
         })();
+        break;
+      }
+
+      if (isub === "last") {
+        const last = (() => { try { return localStorage.getItem(ICE_TEST_KEY); } catch { return null; } })();
+        if (last) sys("```\n" + last + "\n```");
+        else sys("no test on this device yet — /ice test");
         break;
       }
 
@@ -5212,14 +5242,20 @@ function handleCommand(raw: string): string[] {
           await new Promise((r) => setTimeout(r, 5000));
           pc.close();
           const kinds = [...seen];
+          // One message, not five: a single block survives a scroll, copies in
+          // one gesture, and cannot be half-lost.
+          const report = [
+            `candidates: ${kinds.join(", ") || "none"}`,
+            kinds.includes("host") ? "host ✓ same machine or same LAN" : "host ✗ no host candidate, which is unusual",
+            kinds.includes("srflx") ? "srflx ✓ STUN answered: reachable from outside this NAT"
+                                    : "srflx ✗ STUN did not answer; a firewall may be blocking UDP",
+            kinds.includes("relay") ? "relay ✓ a TURN server is available, so even a hard NAT can be crossed"
+                                    : "relay ✗ no TURN, so a peer behind a restrictive NAT cannot be reached (/ice turn …)",
+          ].join("\n");
+          try { localStorage.setItem(ICE_TEST_KEY, report); } catch { /* not worth failing over */ }
           inRoom(iceCtx, () => {
-            addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
-            addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
-            addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
-                                                   : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
-            addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
-                                                   : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
-            addMessage("", "  (paste these four lines to whoever is helping — they say whether this network can be crossed)", "system");
+            addMessage("", "```\n" + report + "\n```", "system");
+            addMessage("", "  /ice last  shows this again — paste it to whoever is helping", "system");
           });
         })();
         break;
@@ -5230,6 +5266,7 @@ function handleCommand(raw: string): string[] {
       sys("  /ice stun stun:host:3478           — add a STUN server");
       sys("  /ice turn turn:host:3478 <u> <p>   — add a relay, for networks direct connection cannot cross");
       sys("  /ice test                          — what your network actually allows");
+      sys("  /ice last                          — show the last test again");
       sys("  /ice reset                         — back to the default");
       break;
     }
