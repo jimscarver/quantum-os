@@ -5148,6 +5148,59 @@ function handleCommand(raw: string): string[] {
         const iceCtx = activeRoom;
         void (async () => {
           const seen = new Set<string>();
+          let pc: RTCPeerConnection | null = null;
+          try {
+            pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
+            pc.createDataChannel("probe");
+            pc.onicecandidate = (e) => {
+              if (!e.candidate) return;
+              const type = /\btyp (\w+)/.exec(e.candidate.candidate)?.[1];
+              if (type) seen.add(type);
+            };
+            await pc.setLocalDescription(await pc.createOffer());
+            // Stop as soon as the browser says it has finished, rather than
+            // always waiting the full five seconds.
+            const done = new Promise<void>((r) => {
+              const t = setTimeout(r, 5000);
+              pc!.onicegatheringstatechange = () => {
+                if (pc!.iceGatheringState === "complete") { clearTimeout(t); r(); }
+              };
+            });
+            await done;
+          } catch (e) {
+            // Never end without an answer: a test that fails silently is worse
+            // than no test, because it looks like the network is the problem.
+            inRoom(iceCtx, () => {
+              addMessage("", `✗ the test itself failed: ${(e as Error)?.message ?? String(e)}`, "system");
+              addMessage("", "  this browser refused to open a connection at all — which is itself the answer", "system");
+            });
+            return;
+          } finally {
+            pc?.close();
+          }
+          const kinds = [...seen];
+          inRoom(iceCtx, () => {
+            addMessage("", `candidates: ${kinds.join(", ") || "none"}`, "system");
+            addMessage("", kinds.includes("host") ? "  host — same machine or same LAN" : "  no host candidate, which is unusual", "system");
+            addMessage("", kinds.includes("srflx") ? "  srflx — STUN answered: reachable from outside your NAT"
+                                                   : "  no srflx — STUN did not answer; a firewall may be blocking UDP", "system");
+            addMessage("", kinds.includes("relay") ? "  relay — a TURN server is available, so even a hard NAT can be crossed"
+                                                   : "  no relay — with no TURN, a peer behind a restrictive NAT cannot be reached at all (/ice turn …)", "system");
+            addMessage("", "  (paste these four lines to whoever is helping — they say whether this network can be crossed)", "system");
+          });
+        })();
+        break;
+      }
+
+      if (isub === "reset") { saveIceServers(null); sys("ice servers back to the default (stun only) — reconnect to apply"); break; }
+
+      if (isub === "test") {
+        // Ask the network what it will give us. Only a relay candidate answers
+        // "can I reach somebody whose network is as awkward as mine".
+        sys("gathering candidates… (5 seconds)");
+        const iceCtx = activeRoom;
+        void (async () => {
+          const seen = new Set<string>();
           const pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
           pc.createDataChannel("probe");
           pc.onicecandidate = (e) => {
