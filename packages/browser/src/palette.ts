@@ -40,6 +40,7 @@ export const CMD_HELP: Record<string, string[]> = {
   ice: ["/ice test — what your network actually allows: host (same LAN), srflx (STUN answered), relay (a TURN server is available).",
         "/ice list — the servers a connection may use. /ice turn turn:host:3478 <user> <pass> adds a relay; /ice stun stun:host:3478 adds a STUN server; /ice reset restores the default.",
         "Why it matters: STUN only tells each side its public address — the connection is still direct. Two peers behind symmetric NAT (corporate networks, mobile CGNAT) have no address pair that works, so the handshake fails permanently and no amount of retrying helps. Only a relay crosses that.",
+        "/ice is local: its output is never broadcast, because a TURN entry carries a username and password.",
         "A relay is not defaulted because it carries your traffic. DTLS keeps it unreadable, but whose machine it passes through is your decision. Reconnect after changing this."],
   zfa: ["/zfa <token> — validate a cap:label:hex capability; shows ZFA balance, spectral gap, twist counts."],
   braket: ["/braket <state> [state …] — evaluate bra-ket states as 2×2 density matrices.", "states: 0 1 + - i -i  (space-separated = superposition).", "e.g. /braket 0 1   ·   /braket -i"],
