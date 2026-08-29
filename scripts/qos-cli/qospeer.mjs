@@ -128,11 +128,16 @@ export class QOSPeer {
       missed++;
       try { ws.ping(); } catch {}
     }, 30000);
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
       clearInterval(heartbeat);
       clearTimeout(stableTimer);
       if (this._disconnected) return;
-      this.config.onSignalingClose?.();
+      // Why it closed, not just that it did. An agent that reconnects every
+      // half minute is either being terminated by the server (1006 with no
+      // reason, which is what a missed heartbeat looks like), sent away
+      // deliberately (1000/1001), or losing the network under it — three causes
+      // wanting three different fixes, and the log said only "dropped".
+      this.config.onSignalingClose?.(code, String(reason ?? ""));
       this._scheduleReconnect();
     });
     this._signal({ type: "join", roomId: this.config.roomId, peerId: this.peerId });
@@ -274,7 +279,16 @@ export class QOSPeer {
 
   async _handleAnswer(fromId, sdp) {
     const pc = this.connections.get(fromId);
-    if (pc) await pc.setRemoteDescription({ type: "answer", sdp });
+    if (!pc) return;
+    // An answer is only meaningful while our own offer is outstanding. Two
+    // peers can dial each other at the same moment — glare — and then each
+    // receives an answer to an offer it has already replaced, which werift
+    // reports as "Cannot handle answer in signaling state". Thrown, that became
+    // an error the agent treated as a broken socket and reconnected over,
+    // which is a flap caused by a message that only needed ignoring.
+    const state = pc.signalingState;
+    if (state && state !== "have-local-offer") return;
+    await pc.setRemoteDescription({ type: "answer", sdp });
   }
 
   async _handleIce(fromId, candidate) {
