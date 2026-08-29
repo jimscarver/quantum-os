@@ -8750,9 +8750,20 @@ async function init(): Promise<void> {
   msgInput.addEventListener("keydown", (e) => {
     // A quick action collecting its arguments owns Enter and Esc: the box holds
     // an answer, not a message.
+    //
+    // Except a command. Somebody who types "/facil help" while a prompt is open
+    // is not answering the prompt, and binding it as an argument means their
+    // command silently does not run — which reads as the app ignoring Enter.
+    // The collection is abandoned and the command goes through.
     if (palette.guiding()) {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); palette.submitArg(); return; }
+      const typedCommand = msgInput.value.trimStart().startsWith("/");
       if (e.key === "Escape") { e.preventDefault(); palette.cancel(); return; }
+      if (e.key === "Enter" && !e.shiftKey && typedCommand) {
+        palette.cancel();
+        // fall through to send(), below
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault(); palette.submitArg(); return;
+      }
     }
     // Only when there is something to pick. A usage hint is not a menu: Enter
     // has to send the line it is a hint about.
