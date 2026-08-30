@@ -345,8 +345,13 @@ many.disconnect();
   pinned.disconnect();
 }
 
-// --- pruning: closing a link that fell outside the target set is not a -------
-// departure — unlike declarePeerGone, it must never fire onPeerLeft.
+// --- pruning is deliberately disabled: an open connection is never closed --
+// just because ring math shifted. Live testing showed why: a roster change
+// reshuffles ring positions for EVERYONE, so one flaky peer bouncing in and
+// out of the room could cascade into closing other peers' entirely healthy
+// connections as a side effect. reconcilePrune is now inert; prunePeer
+// (what it used to call) stays correct and tested for a deliberate future
+// re-enable behind something better than a fixed per-peer grace timer.
 {
   const pruneLeft = [];
   const pruner = new QOSPeer({
@@ -358,11 +363,6 @@ many.disconnect();
   // nothing this test needs.
   pruner.channels.set("stale-peer", { readyState: "open", send() {}, close() {} });
 
-  pruner.roster = new Set(["prune-a", "stale-peer"]);   // n=2 — full mesh, IS a target
-  pruner.reconcilePrune();
-  check("a channel still inside the target set gets no prune timer armed",
-        !pruner.pruneTimers.has("stale-peer"), "timer armed for an in-range peer");
-
   // Insert enough peers between them (sorted) to push "stale-peer" past the
   // ±2 ring/skip radius.
   pruner.roster = new Set(["prune-a", "stale-peer", "prune-b", "prune-c", "prune-d",
@@ -370,18 +370,16 @@ many.disconnect();
   check("stale-peer is genuinely outside the target set for this roster",
         !pruner.targetPeers().has("stale-peer"), JSON.stringify([...pruner.targetPeers()]));
   pruner.reconcilePrune();
-  check("a channel that fell outside the target set gets a prune timer armed",
-        pruner.pruneTimers.has("stale-peer"), "no timer armed");
+  check("reconcilePrune does NOT arm a close timer, even for a peer outside the target set — disabled by design",
+        !pruner.pruneTimers.has("stale-peer"), "a timer got armed despite pruning being off");
+  check("...and the channel is still open — nothing closed it",
+        pruner.channels.get("stale-peer")?.readyState === "open", "channel got closed");
 
-  pruner.roster = new Set(["prune-a", "stale-peer"]);   // back in range
-  pruner.reconcilePrune();
-  check("...and the timer is cancelled if it comes back into range before firing",
-        !pruner.pruneTimers.has("stale-peer"), "stale timer left armed");
-
-  // Exercise the close path directly (what the timer would call when it
-  // fires) rather than waiting on the real 30s grace timer.
+  // prunePeer itself — no longer auto-triggered, but still correct if called
+  // directly (kept for a future re-enable).
   pruner.prunePeer("stale-peer");
-  check("pruning closes the channel", !pruner.channels.has("stale-peer"), "channel still open");
+  check("prunePeer, called directly, still closes the channel", !pruner.channels.has("stale-peer"),
+        "channel still open");
   check("...but does NOT report the peer as gone — they may still be in the room, just not a direct neighbor",
         pruneLeft.length === 0, JSON.stringify(pruneLeft));
   pruner.disconnect();
