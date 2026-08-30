@@ -1041,27 +1041,30 @@ export class QOSPeer {
   }
 
   /**
-   * Arm a grace-then-close timer on any open connection that's fallen
-   * outside the target neighbor set (see targetPeers/ringSkipNeighbors) — a
-   * roster change can shift who's a ring/skip neighbor, or a pin can be
-   * released. Cancels the timer if the peer comes back into range before it
-   * fires, so a reshuffle that resolves itself within the grace period never
-   * touches a working link. Always safe to call — it only ever closes a
-   * link, never opens one, so unlike dialing it can't glare.
+   * DELIBERATELY INERT — does not arm any close timer. See prunePeer for why
+   * it once did, and why that's off.
+   *
+   * Closing a working connection because ring math shifted turned out to have
+   * a real cost: a roster change reshuffles ring positions for *everyone*,
+   * so one flaky peer bouncing in and out of the room could cascade into
+   * closing OTHER peers' entirely healthy connections as a side effect —
+   * amplifying one device's instability into churn across the room, observed
+   * live during testing. The grace period (PRUNE_GRACE_MS) bounded how often
+   * that could happen, not whether it could.
+   *
+   * So: targetPeers() / ringSkipNeighbors still bound who gets *newly*
+   * dialled (the actual fix for the join-burst / signaling rate-limit
+   * problem this overlay exists for), but an already-open connection is now
+   * never actively closed just because it fell outside the ring. Degree
+   * can only grow past 4 over a long session with a lot of churn passing
+   * through, never shrink back — an accepted tradeoff for never being the
+   * cause of a working connection dropping. prunePeer/clearPruneTimer stay
+   * in place (and covered by tests) so this can be re-enabled deliberately,
+   * behind something better than a fixed per-peer grace timer — e.g. only
+   * pruning once the *room*, not just one peer, has been stable for a while.
    */
   private reconcilePrune(): void {
-    const targets = this.targetPeers();
-    for (const peerId of this.channels.keys()) {
-      if (targets.has(peerId)) { this.clearPruneTimer(peerId); continue; }
-      if (this.pruneTimers.has(peerId)) continue;
-      const t = setTimeout(() => {
-        this.pruneTimers.delete(peerId);
-        if (this.targetPeers().has(peerId)) return;   // back in range — recovered
-        if (this.channels.get(peerId)?.readyState !== "open") return;   // already gone
-        this.prunePeer(peerId);
-      }, QOSPeer.PRUNE_GRACE_MS);
-      this.pruneTimers.set(peerId, t);
-    }
+    // no-op — see above
   }
 
   private clearPruneTimer(peerId: string): void {

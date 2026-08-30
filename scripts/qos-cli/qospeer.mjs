@@ -112,25 +112,17 @@ export class QOSPeer {
   }
 
   /**
-   * Arm a grace-then-close timer on any open connection that's fallen
-   * outside the target neighbor set (roster reshuffle, or a released pin).
-   * Cancels the timer if the peer comes back into range first. Always safe
-   * to call — only ever closes a link, never opens one.
+   * DELIBERATELY INERT — see peer.ts's own _reconcilePrune/reconcilePrune for
+   * the full rationale. Closing a working connection because ring math
+   * shifted meant one flaky peer bouncing in and out could cascade into
+   * closing OTHER peers' healthy connections too (a roster change reshuffles
+   * ring positions for everyone) — observed live during testing. targetPeers
+   * still bounds who gets newly dialled; an already-open connection is never
+   * actively closed for falling outside the ring. _prunePeer/_clearPruneTimer
+   * stay in place for a deliberate future re-enable.
    */
   _reconcilePrune() {
-    const targets = this.targetPeers();
-    for (const peerId of this.channels.keys()) {
-      if (targets.has(peerId)) { this._clearPruneTimer(peerId); continue; }
-      if (this.pruneTimers.has(peerId)) continue;
-      const t = setTimeout(() => {
-        this.pruneTimers.delete(peerId);
-        if (this.targetPeers().has(peerId)) return;               // back in range
-        if (!this._channelOpen(this.channels.get(peerId))) return; // already gone
-        this._prunePeer(peerId);
-      }, PRUNE_GRACE_MS);
-      t.unref?.();
-      this.pruneTimers.set(peerId, t);
-    }
+    // no-op — see above
   }
 
   _clearPruneTimer(peerId) {
