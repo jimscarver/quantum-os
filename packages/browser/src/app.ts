@@ -6931,6 +6931,12 @@ function connect(): void {
     onPeerJoined(id) {
       const prev = activeRoom; setActiveRoom(ctx);
       try {
+        // A call in progress has no invite list — it's for whoever's in the
+        // room — so a peer who joins mid-call needs the same guaranteed
+        // direct connection start() gives everyone already present (media
+        // can't be relayed the way a data-channel message can under the
+        // bounded-degree overlay). Harmless no-op when no call is active.
+        if (calls.inCall()) qpeer?.pinNeighbor(id);
         const pending = pendingLeaves.get(id);
         if (pending !== undefined) {
           clearTimeout(pending);
@@ -7391,6 +7397,7 @@ function initUx(): void {
       say: (t) => addMessage("", t, "system"),
       label: (id) => peerLabel(id),
       isAgent: (id) => peerAgents.has(id),
+      roomPeers: () => [...peers],
     },
     {
       bar:   document.getElementById("call-bar"),
