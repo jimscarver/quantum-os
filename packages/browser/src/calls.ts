@@ -23,6 +23,16 @@ export interface CallHost {
   label(peerId: string): string;
   /** Agents are data-only: their media is never rendered. */
   isAgent(peerId: string): boolean;
+  /**
+   * Everyone currently in the room. A call has no invite list — it broadcasts
+   * to whoever's here — so this is who needs a guaranteed direct connection
+   * before media goes out (see start()): under the bounded-degree overlay
+   * (peer.ts), most peers past a handful aren't a direct ring/skip neighbor,
+   * and a MediaStreamTrack can't be relayed the way a data-channel message
+   * can. Without pinning, a call in a big room would silently reach only the
+   * caller's ring neighbors.
+   */
+  roomPeers(): string[];
 }
 
 export interface CallElements {
@@ -216,7 +226,23 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     local.muted = true;
     local.srcObject = localStream;
     showBar();
+    // addLocalMedia adds tracks to whatever's in `peer`'s connection map RIGHT
+    // NOW, so it must run BEFORE pinning, not after: pinning a peer with no
+    // existing connection creates a brand-new RTCPeerConnection synchronously
+    // and starts its initial offer/answer asynchronously, and if addLocalMedia
+    // then also renegotiated that same still-negotiating connection, the two
+    // offers would race. Called first, addLocalMedia only ever touches
+    // connections that are already stable. The peers a fresh pin dials in are
+    // still covered — peer.ts's data-channel onopen already pushes media to a
+    // newcomer whenever a call is in progress (checking `localStream`, which
+    // addLocalMedia just set) — so once each pinned connection's handshake
+    // completes, its media follows automatically, with no race.
     peer.addLocalMedia(localStream);
+    // Under the bounded-degree overlay most room peers aren't a direct
+    // neighbor by default, and a MediaStreamTrack can't be relayed the way a
+    // data-channel message can — pin everyone so a connection actually gets
+    // made to each of them (harmless no-ops for anyone already connected).
+    for (const id of host.roomPeers()) peer.pinNeighbor(id);
     peer.broadcast({ kind: "call-start" });
     host.say("📞 you started a call");
     updateControls();
