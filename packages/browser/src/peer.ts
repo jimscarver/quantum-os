@@ -49,6 +49,33 @@ function iceUfrag(sdp: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * Ring + skip-link neighbor computation for the bounded-degree connection
+ * overlay: sort everyone present lexicographically and connect to the peers
+ * one and two positions away in each direction (degree 4). A pure function
+ * of the roster, so every peer computes the same neighbor sets independently
+ * — no coordination message needed — and the relation is symmetric by
+ * construction (if B is in A's neighbor set, A is in B's).
+ *
+ * This degenerates to full mesh automatically for five or fewer peers: at
+ * that size every peer is within distance 2 of every other, which is
+ * exactly today's behaviour. There is no separate "mesh vs overlay" mode to
+ * maintain — one formula. Past five it caps degree at 4 regardless of room
+ * size, which is what keeps a big room from exceeding what a browser (or
+ * the signaling server's handshake rate limit) will actually sustain.
+ */
+export function ringSkipNeighbors(sortedIds: string[], myId: string): Set<string> {
+  const n = sortedIds.length;
+  const i = sortedIds.indexOf(myId);
+  const out = new Set<string>();
+  if (i === -1 || n <= 1) return out;
+  for (const off of [1, -1, 2, -2]) {
+    const j = ((i + off) % n + n) % n;
+    if (j !== i) out.add(sortedIds[j]);
+  }
+  return out;
+}
+
 /** Key holding "a tab is currently using this id", refreshed while it lives. */
 const LEASE = "qos-peer-lease:";
 const LEASE_TICK_MS = 5_000;
@@ -174,6 +201,42 @@ export class QOSPeer {
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static readonly DISCONNECT_GRACE_MS = 8000;
 
+  // Bounded-degree overlay (ring + skip-links, see ringSkipNeighbors above).
+  // `pins` are peers we want a direct link to regardless of ring position
+  // (an agent, a diagnostic /conn "connect now", a future call participant)
+  // — additive on top of the computed neighbor set.
+  private pins = new Set<string>();
+  // Grace-then-close timers for open connections that fell outside the
+  // target neighbor set (roster reshuffle, or an unpin). Mirrors
+  // disconnectTimers' shape, but a prune is not a departure — see prunePeer.
+  private pruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Between DISCONNECT_GRACE_MS (8s, a real ICE blip) and RETRY_MAX_MS (90s,
+  // a failing dial's backoff ceiling) — enough for a couple of SWEEP_MS
+  // cycles to let a roster reshuffle (peers joining/leaving close together)
+  // settle before actually closing a link that's still working.
+  private static readonly PRUNE_GRACE_MS = 30_000;
+
+  // Message relay (flooding, no routing table) for reaching a peer beyond
+  // direct reach — see broadcast()/send()/handleRelay(). `seenRelay` dedupes
+  // a message that reaches us by two paths (a ring link and its skip-link);
+  // bounded like bridge.mjs's own durable dedupe (firstState), since this
+  // must survive the message's full multi-hop lifetime, not just one burst.
+  private seenRelay = new Set<string>();
+  private static readonly SEEN_RELAY_MAX = 5000;
+  private relayCounter = 0;
+
+  // "Can we reach this peer at all" (direct channel OR recent relay
+  // traffic), as opposed to hasChannel's "are we directly linked to them" —
+  // see isReachable. Updated from relay traffic's _from field, and kept
+  // fresh for otherwise-silent peers by a periodic presence flood.
+  private lastHeardVia = new Map<string, number>();
+  private static readonly REACHABLE_WINDOW_MS = 45_000;
+  private presenceTimer?: ReturnType<typeof setInterval>;
+  // 1.5x this is REACHABLE_WINDOW_MS — tolerates one missed beat before a
+  // silent peer reads as unreachable, the same "miss one, not two" idiom as
+  // qospeer.mjs's own ping/pong keepalive.
+  private static readonly PRESENCE_FLOOD_MS = 30_000;
+
   constructor(config: PeerConfig) {
     this.config = config;
     this.peerId = config.peerId ?? claimPeerId();
@@ -196,11 +259,17 @@ export class QOSPeer {
     // reaches. Look for those on a timer rather than only when the server
     // happens to re-send the room's list.
     if (!this.sweepTimer) this.sweepTimer = setInterval(() => this.sweep(), QOSPeer.SWEEP_MS);
+    // Keeps isReachable() honest for peers who are relay-only (past direct
+    // reach) and otherwise never send anything themselves.
+    if (!this.presenceTimer) {
+      this.presenceTimer = setInterval(() => this.broadcast({ kind: "presence" }), QOSPeer.PRESENCE_FLOOD_MS);
+    }
   }
 
   disconnect(): void {
     this._disconnected = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    if (this.presenceTimer) clearInterval(this.presenceTimer);
     if (this.leaseTimer) clearInterval(this.leaseTimer);
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     if (this._stableTimer) clearTimeout(this._stableTimer);
@@ -211,6 +280,8 @@ export class QOSPeer {
     this.channels.clear();
     for (const t of this.disconnectTimers.values()) clearTimeout(t);
     this.disconnectTimers.clear();
+    for (const t of this.pruneTimers.values()) clearTimeout(t);
+    this.pruneTimers.clear();
   }
 
   /// Recover promptly after a background-throttled / frozen tab returns to the
@@ -244,10 +315,59 @@ export class QOSPeer {
   ensureConnected(peerId: string): void {
     if (this._disconnected || peerId === this.peerId) return;
     this.roster.add(peerId);
+    this.pinNeighbor(peerId);
+  }
+
+  /**
+   * Always keep a direct link to this peer, regardless of ring/skip
+   * position — additive on top of the computed overlay neighbor set (see
+   * ringSkipNeighbors). Used for peers we deliberately want reachable no
+   * matter how the room is shaped: an AI agent, a diagnostic "connect now",
+   * a live-call participant (media can't be relayed).
+   *
+   * Pinning is a local, one-sided decision — the other side has no wire
+   * signal that we just pinned them — so it dials immediately rather than
+   * waiting for the next sweep/reconcile pass, the same way ensureConnected
+   * always has.
+   */
+  pinNeighbor(peerId: string): void {
+    if (peerId === this.peerId) return;
+    this.pins.add(peerId);
     if (this.channels.get(peerId)?.readyState === "open") return;
     if (this.connecting(peerId)) return;
     this.retryAt.delete(peerId);
     void this.initiateConnection(peerId);
+  }
+
+  /// Release a pin. The link doesn't close instantly — it goes through the
+  /// same grace-then-prune path as any other connection that's fallen
+  /// outside the target set, in case it's still a ring/skip neighbor anyway.
+  unpinNeighbor(peerId: string): void {
+    this.pins.delete(peerId);
+    this.reconcilePrune();
+  }
+
+  /// Who we should be directly connected to right now: ring+skip neighbors
+  /// (see ringSkipNeighbors) plus anything pinned. Full mesh falls out of
+  /// this automatically for five or fewer peers.
+  private targetPeers(): Set<string> {
+    const sorted = [...new Set([...this.roster, this.peerId])].sort();
+    const set = ringSkipNeighbors(sorted, this.peerId);
+    for (const p of this.pins) if (p !== this.peerId) set.add(p);
+    return set;
+  }
+
+  /// Can we reach this peer at all — a direct channel, or relay traffic seen
+  /// from them recently (including the periodic presence flood, so an
+  /// otherwise-silent peer isn't mistaken for unreachable)? Under the
+  /// overlay, "no direct channel" is normal for most peers past a handful in
+  /// the room — this answers "can I talk to them", where hasChannel answers
+  /// "am I directly linked to them", which stays meaningful on its own for
+  /// /conn-style diagnostics.
+  isReachable(peerId: string): boolean {
+    if (this.hasChannel(peerId)) return true;
+    const last = this.lastHeardVia.get(peerId);
+    return last !== undefined && Date.now() - last < QOSPeer.REACHABLE_WINDOW_MS;
   }
 
   /**
@@ -280,19 +400,70 @@ export class QOSPeer {
     return this.channels.get(peerId)?.readyState === "open";
   }
 
-  /// Send data to a specific peer via their data channel.
+  /// Send data to a specific peer. Direct and raw — byte-identical to
+  /// today, no format change — if we hold an open channel to them (still
+  /// true for everyone in a room of five or fewer, and for anyone pinned).
+  /// Otherwise flood-routes it over the overlay: tagged with a dedupe id, a
+  /// remaining-hop budget, and who it's actually for, so every neighbor
+  /// relays it onward (whether or not they're the target) until it reaches
+  /// someone who is. No routing table — a deliberate simplicity tradeoff,
+  /// accepted for how infrequent a direct send to a non-neighbor is.
   send(targetPeerId: string, data: unknown): boolean {
     const ch = this.channels.get(targetPeerId);
-    if (!ch || ch.readyState !== "open") return false;
-    ch.send(JSON.stringify(data));
+    if (ch && ch.readyState === "open") {
+      ch.send(JSON.stringify(data));
+      return true;
+    }
+    if (this.channels.size === 0) return false;
+    const relayId = this.nextRelayId();
+    const tagged = {
+      ...(data as Record<string, unknown>),
+      _relayId: relayId, _hops: this.hopBudget(), _from: this.peerId, _relayTo: targetPeerId,
+    };
+    for (const other of this.channels.values()) {
+      if (other.readyState === "open") other.send(JSON.stringify(tagged));
+    }
     return true;
   }
 
-  /// Broadcast to all connected peers.
+  /// Broadcast to the room. Sent as a flood over the bounded-degree overlay
+  /// (see ringSkipNeighbors) — tagged with a dedupe id and a remaining-hop
+  /// budget so a peer beyond direct reach still gets it via relay, once,
+  /// with no routing table. A room of five or fewer is still direct to
+  /// everyone, so this degenerates to exactly today's fan-out.
   broadcast(data: unknown): void {
-    for (const peerId of this.channels.keys()) {
-      this.send(peerId, data);
+    const relayId = this.nextRelayId();
+    const tagged = {
+      ...(data as Record<string, unknown>),
+      _relayId: relayId, _hops: this.hopBudget(), _from: this.peerId,
+    };
+    const payload = JSON.stringify(tagged);
+    // Write directly rather than through send(): every entry here is by
+    // definition an open channel (we're iterating this.channels itself), so
+    // send()'s no-direct-link flood-fallback branch — which would add a
+    // _relayTo that doesn't belong on a broadcast — must never run here.
+    for (const ch of this.channels.values()) {
+      if (ch.readyState === "open") ch.send(payload);
     }
+  }
+
+  /// Unique id for one flood — `${peerId}:${counter}` is globally unique, so
+  /// dedupe never collides across peers. Marked seen immediately, not just
+  /// on receipt: without this, a broadcast that loops all the way around the
+  /// ring back to its own originator would be delivered to onMessage twice.
+  private nextRelayId(): string {
+    const id = `${this.peerId}:${this.relayCounter++}`;
+    this.seenRelay.add(id);
+    if (this.seenRelay.size > QOSPeer.SEEN_RELAY_MAX) this.seenRelay.clear();
+    return id;
+  }
+
+  /// Remaining-hop budget for a new flood — roughly 2x the true worst-case
+  /// ring+skip diameter (~n/4), erring generous: dedupe already bounds the
+  /// redundant-relay cost of an oversized budget, while an undersized one
+  /// would mean a directed send genuinely fails to arrive.
+  private hopBudget(): number {
+    return Math.max(4, Math.ceil((this.roster.size + 1) / 2));
   }
 
   /// Largest send-buffer backlog across open channels (bytes) — used to pace
@@ -447,19 +618,27 @@ export class QOSPeer {
         // On signaling reconnect the server re-sends the peers list. Skip peers
         // where the WebRTC data channel is still open — no need to re-establish.
         //
-        // The rest are dialled on a stagger. Firing every offer at once is a
-        // burst the joiner inflicts on itself: each connection follows its offer
-        // with its own ICE candidates, so a room of N costs N-1 offers plus
-        // their candidate storms in the same instant, and the server's
-        // per-connection rate limit trips exactly when the room is big enough
-        // to need every handshake to land. A join spread over a second or two
-        // is not slower in any way a person notices.
+        // We dial our overlay targets only (see targetPeers/ringSkipNeighbors),
+        // not everyone in the room — but onPeerJoined still fires for every
+        // peer in the list, unfiltered, so the app's roster keeps showing
+        // everyone present, whether or not they're a direct neighbor.
+        //
+        // The dial is staggered. Firing every offer at once is a burst the
+        // joiner inflicts on itself: each connection follows its offer with
+        // its own ICE candidates, so N-1 offers plus their candidate storms
+        // land in the same instant, tripping the server's per-connection rate
+        // limit exactly when a room needs every handshake to land. A join
+        // spread over a second or two is not slower in any way a person
+        // notices — and bounded degree means N-1 was never really the count
+        // anyway, just the four-ish targets below.
         this.roster = new Set(msg.peers);
+        const targets = this.targetPeers();
         let nth = 0;
         for (const peerId of msg.peers) {
+          this.config.onPeerJoined?.(peerId);
+          if (!targets.has(peerId)) continue;
           const ch = this.channels.get(peerId);
           if (ch?.readyState === "open") continue;
-          this.config.onPeerJoined?.(peerId);
           const at = nth++ * QOSPeer.JOIN_STAGGER_MS;
           if (at === 0) { void this.initiateConnection(peerId); continue; }
           setTimeout(() => {
@@ -470,21 +649,36 @@ export class QOSPeer {
             void this.initiateConnection(peerId);
           }, at);
         }
+        // A roster arriving fresh (we just (re)connected) is the one moment
+        // we're the unilateral initiator — safe to dial immediately above.
+        // Pruning is always safe (a local, unilateral decision), so it runs
+        // here too.
+        this.reconcilePrune();
         break;
       }
       case "joined":
         // The joiner dials us, which is why nothing is initiated here — but a
         // dial that never lands has to be retried by somebody, and the sweep
-        // below is what does it.
+        // below is what does it. (Both sides now potentially want to dial
+        // each other under the new roster — sweep's existing polite/impolite
+        // glare handling is what makes that safe; reconcilePrune below only
+        // ever closes a link, never opens one, so it can't glare.)
         this.roster.add(msg.peerId);
         this.config.onPeerJoined?.(msg.peerId);
+        this.reconcilePrune();
         break;
       case "left":
         this.roster.delete(msg.peerId);
         this.retryAt.delete(msg.peerId);
         this.retryN.delete(msg.peerId);
+        // A genuine departure clears any pin too — otherwise ensureConnected
+        // or an agent-tag pin would keep sweep() chasing someone provably
+        // gone forever (pins are sticky by design, but "gone" overrides it).
+        this.pins.delete(msg.peerId);
         this.cleanup(msg.peerId);
+        this.clearPruneTimer(msg.peerId);
         this.config.onPeerLeft?.(msg.peerId);
+        this.reconcilePrune();
         break;
       case "offer":
         this.handleOffer(msg.from, msg.sdp);
@@ -522,8 +716,12 @@ export class QOSPeer {
    */
   private sweep(): void {
     if (this._disconnected || !this.isSignalingUp()) return;
+    // Cheap backstop: reconcilePrune is called on every roster/pin change
+    // already, but this catches anything a missed event would otherwise
+    // leave stuck open past its target window.
+    this.reconcilePrune();
     const now = Date.now();
-    for (const peerId of this.roster) {
+    for (const peerId of this.targetPeers()) {
       if (peerId === this.peerId) continue;
       if (this.channels.get(peerId)?.readyState === "open") continue;
       // An attempt already under way is not a failure to retry. Redialling one
@@ -779,19 +977,108 @@ export class QOSPeer {
       this.declarePeerGone(peerId);
     };
     ch.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        this.config.onMessage?.(peerId, data);
-      } catch {
-        this.config.onMessage?.(peerId, event.data);
+      let data: unknown;
+      try { data = JSON.parse(event.data); }
+      catch { this.config.onMessage?.(peerId, event.data); return; }
+      // A tagged flood — either a broadcast, or a directed send() to a peer
+      // we have no direct link to. Anything untagged is a direct message
+      // exactly as before (old build or new, on either end) — unchanged.
+      if (data && typeof data === "object" && typeof (data as Record<string, unknown>)._relayId === "string") {
+        this.handleRelay(peerId, data as Record<string, unknown>);
+        return;
       }
+      this.config.onMessage?.(peerId, data);
     };
+  }
+
+  /**
+   * A message tagged for the flood overlay. `_relayId` dedupes so a message
+   * that reaches us by two paths (a ring link and its skip-link) is only
+   * delivered/relayed once; `_hops` bounds how much farther it can travel;
+   * `_relayTo`, if present, means only that one peer should actually receive
+   * it — everyone else on the path still relays it onward without
+   * delivering it, which is what lets a directed send() reach through
+   * peers who aren't the target. `_from` is who actually sent it — not
+   * `fromPeerId`, which is only the last hop.
+   */
+  private handleRelay(fromPeerId: string, data: Record<string, unknown>): void {
+    const relayId = data._relayId as string;
+    if (this.seenRelay.has(relayId)) return;
+    this.seenRelay.add(relayId);
+    if (this.seenRelay.size > QOSPeer.SEEN_RELAY_MAX) this.seenRelay.clear();
+
+    const hopsLeft = typeof data._hops === "number" ? data._hops : 0;
+    const relayTo = typeof data._relayTo === "string" ? data._relayTo : undefined;
+    const from = typeof data._from === "string" ? data._from : fromPeerId;
+
+    const cleaned = { ...data };
+    delete cleaned._relayId;
+    delete cleaned._hops;
+    delete cleaned._from;
+    delete cleaned._relayTo;
+
+    this.lastHeardVia.set(from, Date.now());
+
+    if (relayTo === undefined || relayTo === this.peerId) {
+      this.config.onMessage?.(from, cleaned);
+    }
+
+    if (hopsLeft > 0) {
+      const out: Record<string, unknown> = { ...cleaned, _relayId: relayId, _hops: hopsLeft - 1, _from: from };
+      if (relayTo !== undefined) out._relayTo = relayTo;
+      const payload = JSON.stringify(out);
+      for (const [peerId, ch] of this.channels) {
+        if (peerId === fromPeerId) continue;
+        if (ch.readyState === "open") ch.send(payload);
+      }
+    }
   }
 
   private cleanup(peerId: string): void {
     this.connections.get(peerId)?.close();
     this.connections.delete(peerId);
     this.channels.delete(peerId);
+  }
+
+  /**
+   * Arm a grace-then-close timer on any open connection that's fallen
+   * outside the target neighbor set (see targetPeers/ringSkipNeighbors) — a
+   * roster change can shift who's a ring/skip neighbor, or a pin can be
+   * released. Cancels the timer if the peer comes back into range before it
+   * fires, so a reshuffle that resolves itself within the grace period never
+   * touches a working link. Always safe to call — it only ever closes a
+   * link, never opens one, so unlike dialing it can't glare.
+   */
+  private reconcilePrune(): void {
+    const targets = this.targetPeers();
+    for (const peerId of this.channels.keys()) {
+      if (targets.has(peerId)) { this.clearPruneTimer(peerId); continue; }
+      if (this.pruneTimers.has(peerId)) continue;
+      const t = setTimeout(() => {
+        this.pruneTimers.delete(peerId);
+        if (this.targetPeers().has(peerId)) return;   // back in range — recovered
+        if (this.channels.get(peerId)?.readyState !== "open") return;   // already gone
+        this.prunePeer(peerId);
+      }, QOSPeer.PRUNE_GRACE_MS);
+      this.pruneTimers.set(peerId, t);
+    }
+  }
+
+  private clearPruneTimer(peerId: string): void {
+    const t = this.pruneTimers.get(peerId);
+    if (t !== undefined) { clearTimeout(t); this.pruneTimers.delete(peerId); }
+  }
+
+  /// Close a direct link that fell outside the target neighbor set. Not a
+  /// departure — the peer is (usually) still in the room, just no longer a
+  /// direct neighbor — so unlike declarePeerGone this must not fire
+  /// onPeerLeft. It doesn't need to: cleanup() empties connections/channels
+  /// synchronously, before the data channel's own onclose can fire, so
+  /// declarePeerGone's "had" idempotency guard (see below) already finds
+  /// nothing left to report by the time that async event lands.
+  private prunePeer(peerId: string): void {
+    this.clearPruneTimer(peerId);
+    this.cleanup(peerId);
   }
 
   private clearDisconnectTimer(peerId: string): void {

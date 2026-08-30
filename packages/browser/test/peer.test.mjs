@@ -87,7 +87,7 @@ class FakePC {
 provide("RTCPeerConnection", FakePC);
 provide("RTCSessionDescription", class {});
 
-const { QOSPeer } = await import(
+const { QOSPeer, ringSkipNeighbors } = await import(
   "data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
 
 let failed = 0;
@@ -96,6 +96,41 @@ const check = (label, cond, detail) => {
   else { failed++; console.log(`  FAIL ${label}  (${detail})`); }
 };
 const offersTo = (id) => sent.filter((m) => m.type === "offer" && m.to === id).length;
+
+// --- the bounded-degree overlay: ring + skip-links ---------------------------
+// ringSkipNeighbors is a pure function (see peer.ts) — degree 4 (±1, ±2 in a
+// sorted list of everyone present), which degenerates to full mesh for five
+// or fewer peers and caps degree at 4 past that, regardless of room size.
+{
+  for (let n = 1; n <= 5; n++) {
+    const ids = Array.from({ length: n }, (_, i) => String.fromCharCode(97 + i));
+    for (const id of ids) {
+      const nb = ringSkipNeighbors(ids, id);
+      check(`n=${n}: "${id}" is connected to every other peer (full mesh)`,
+            nb.size === n - 1, `got ${nb.size}, ids=${JSON.stringify([...nb])}`);
+    }
+  }
+
+  const six = ["a", "b", "c", "d", "e", "f"];
+  const nbA = ringSkipNeighbors(six, "a");
+  check("n=6: degree is capped at 4, not full mesh (n-1=5)", nbA.size === 4, JSON.stringify([...nbA]));
+  check("n=6: the excluded peer is the antipodal one", !nbA.has("d"), JSON.stringify([...nbA]));
+  check("n=6: the included peers are the ±1/±2 ring neighbors",
+        nbA.has("b") && nbA.has("c") && nbA.has("e") && nbA.has("f"), JSON.stringify([...nbA]));
+
+  const ten = Array.from({ length: 10 }, (_, i) => `p${i}`);
+  let allDegree4 = true, allSymmetric = true;
+  for (const id of ten) {
+    const nb = ringSkipNeighbors(ten, id);
+    if (nb.size !== 4) allDegree4 = false;
+    for (const other of nb) if (!ringSkipNeighbors(ten, other).has(id)) allSymmetric = false;
+  }
+  check("n=10: every peer has degree exactly 4", allDegree4, "some peer had a different degree");
+  check("n=10: the neighbor relation is symmetric — no coordination message needed",
+        allSymmetric, "some pair disagreed about being neighbors");
+
+  check("a lone peer has no neighbors", ringSkipNeighbors(["solo"], "solo").size === 0, "expected none");
+}
 
 // --- an identity that survives a phone discarding the tab ---------------------
 // sessionStorage is per-tab, which is right, but a mobile browser throws it away
@@ -236,18 +271,199 @@ const goneAt = offersTo("aaaa");
 advance(200_000);
 high.sweep();
 await tick(); await tick();
-// --- a join does not become a burst -------------------------------------------
+// --- a join does not become a burst, and ten peers no longer means ten offers -
+// It used to just mean "spread the ten offers over a second" (JOIN_STAGGER_MS
+// pacing). Now the overlay means most of the ten were never going to be
+// dialled at all — bounded-degree, not full mesh — so the invariant worth
+// checking is "no offer to anyone outside the ring/skip target set", which
+// holds regardless of exactly how the stagger and MAX_IN_FLIGHT interact.
+const roomOfTen = ["bbbb", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"];
+// ringSkipNeighbors takes an already-sorted list (targetPeers() sorts before
+// calling it) — "p10" sorts before "p2" lexicographically, so this is not
+// the order the array was written in.
+const tenTargets = ringSkipNeighbors([...roomOfTen].sort(), "bbbb");
+check("a room of eleven caps this peer's targets at degree 4, not ten", tenTargets.size === 4,
+      JSON.stringify([...tenTargets]));
+
 const many = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "bbbb" });
 many.connect();
 await tick();
 FakeWS.last.onopen?.();
 await tick();
-const before10 = sent.filter((m) => m.type === "offer").length;
-deliver({ type: "peers", peers: ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"] });
+const before10 = sent.length;   // an index into sent, not an offer count — sent mixes message types
+deliver({ type: "peers", peers: roomOfTen.filter((id) => id !== "bbbb") });
 await new Promise((r) => setTimeout(r, 700));
-const burst = sent.filter((m) => m.type === "offer").length - before10;
-check("ten peers are dialled a few at a time, not all at once", burst > 0 && burst <= 4, `${burst} offers`);
+const burstOffers = sent.slice(before10).filter((m) => m.type === "offer");
+check("the initial burst is staggered, not everyone at once",
+      burstOffers.length > 0 && burstOffers.length < 10, `${burstOffers.length} offers`);
+check("nothing outside the target set is ever dialled in the initial burst",
+      burstOffers.every((m) => tenTargets.has(m.to)), JSON.stringify(burstOffers.map((m) => m.to)));
+
+// Fail the in-flight attempts (the file's own idiom, above) and sweep a few
+// times — retries stay bounded to the same target set too, not just the
+// first dial. This is the same invariant that matters most: whatever else
+// happens on retry, a peer outside the ring/skip neighborhood is never
+// dialled — not on the first attempt and not on any later one.
+for (let i = 0; i < 3; i++) {
+  made.forEach((pc) => { if (pc.connectionState !== "closed") pc.connectionState = "failed"; });
+  advance(200_000);
+  many.sweep();
+  await tick(); await tick();
+}
+const everDialled = new Set(sent.filter((m) => m.type === "offer" && m.to !== "bbbb").map((m) => m.to)
+  .filter((id) => roomOfTen.includes(id)));
+check("some target actually got dialled (the invariant below isn't vacuous)",
+      everDialled.size > 0, "nobody was ever dialled");
+check("and nothing outside the target set is ever dialled, even after retries",
+      [...everDialled].every((id) => tenTargets.has(id)), JSON.stringify([...everDialled]));
 many.disconnect();
+
+// --- pinning: always reach a peer regardless of ring position -----------------
+{
+  const pinned = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "pin-a" });
+  pinned.connect();
+  await tick();
+  FakeWS.last.onopen?.();
+  await tick();
+  // A big room, and — computed, not guessed by name (the ring wraps around,
+  // so naming intuition about "far apart alphabetically" is not reliable) —
+  // a peer that genuinely is not one of "pin-a"'s ring/skip targets.
+  const bigRoster = ["pin-a", ...Array.from({ length: 20 }, (_, i) => `mid${i}`)];
+  const bigTargets = ringSkipNeighbors([...bigRoster].sort(), "pin-a");
+  const farTarget = bigRoster.find((id) => id !== "pin-a" && !bigTargets.has(id));
+  check("the big room actually has a peer outside pin-a's ring/skip targets to test with",
+        typeof farTarget === "string", "every peer was somehow a target");
+  deliver({ type: "peers", peers: bigRoster.filter((id) => id !== "pin-a") });
+  await new Promise((r) => setTimeout(r, 300));
+  const before = offersTo(farTarget);
+  check("ring math alone does not connect two peers far apart in a big room",
+        before === 0, `${before} offers already`);
+  pinned.pinNeighbor(farTarget);
+  await tick();
+  check("pinning dials immediately, bypassing ring position",
+        offersTo(farTarget) > before, `${offersTo(farTarget)} vs ${before}`);
+  pinned.disconnect();
+}
+
+// --- pruning: closing a link that fell outside the target set is not a -------
+// departure — unlike declarePeerGone, it must never fire onPeerLeft.
+{
+  const pruneLeft = [];
+  const pruner = new QOSPeer({
+    signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "prune-a",
+    onPeerLeft: (id) => pruneLeft.push(id),
+  });
+  // Direct injection: an "open" channel is what reconcilePrune/prunePeer act
+  // on, and driving a real handshake to "open" through the stub harness adds
+  // nothing this test needs.
+  pruner.channels.set("stale-peer", { readyState: "open", send() {}, close() {} });
+
+  pruner.roster = new Set(["prune-a", "stale-peer"]);   // n=2 — full mesh, IS a target
+  pruner.reconcilePrune();
+  check("a channel still inside the target set gets no prune timer armed",
+        !pruner.pruneTimers.has("stale-peer"), "timer armed for an in-range peer");
+
+  // Insert enough peers between them (sorted) to push "stale-peer" past the
+  // ±2 ring/skip radius.
+  pruner.roster = new Set(["prune-a", "stale-peer", "prune-b", "prune-c", "prune-d",
+    ...Array.from({ length: 10 }, (_, i) => `x${i}`)]);
+  check("stale-peer is genuinely outside the target set for this roster",
+        !pruner.targetPeers().has("stale-peer"), JSON.stringify([...pruner.targetPeers()]));
+  pruner.reconcilePrune();
+  check("a channel that fell outside the target set gets a prune timer armed",
+        pruner.pruneTimers.has("stale-peer"), "no timer armed");
+
+  pruner.roster = new Set(["prune-a", "stale-peer"]);   // back in range
+  pruner.reconcilePrune();
+  check("...and the timer is cancelled if it comes back into range before firing",
+        !pruner.pruneTimers.has("stale-peer"), "stale timer left armed");
+
+  // Exercise the close path directly (what the timer would call when it
+  // fires) rather than waiting on the real 30s grace timer.
+  pruner.prunePeer("stale-peer");
+  check("pruning closes the channel", !pruner.channels.has("stale-peer"), "channel still open");
+  check("...but does NOT report the peer as gone — they may still be in the room, just not a direct neighbor",
+        pruneLeft.length === 0, JSON.stringify(pruneLeft));
+  pruner.disconnect();
+}
+
+// --- message relay: tag, dedupe, hop-limit, and only the true target ----------
+// delivers a directed send() — see peer.ts's broadcast/send/handleRelay.
+{
+  const relayDelivered = [];
+  const cfg = {
+    signalingUrl: "wss://x", roomId: "cap:room:0246", peerId: "relay-a",
+    onMessage: (from, d) => relayDelivered.push({ from, d }),
+  };
+  const solo = new QOSPeer(cfg);
+  const sentTo = new Map();
+  const fakeChannel = (id) => ({
+    readyState: "open",
+    send(payload) { const arr = sentTo.get(id) ?? []; arr.push(JSON.parse(payload)); sentTo.set(id, arr); },
+  });
+  solo.channels.set("nb1", fakeChannel("nb1"));
+  solo.channels.set("nb2", fakeChannel("nb2"));
+  solo.roster = new Set(["relay-a", "nb1", "nb2", "far1"]);
+
+  solo.broadcast({ kind: "chat", text: "hi" });
+  const toNb1 = sentTo.get("nb1")[0];
+  check("broadcast tags every neighbor with a dedupe id, hop budget and origin",
+        typeof toNb1._relayId === "string" && typeof toNb1._hops === "number" && toNb1._from === "relay-a",
+        JSON.stringify(toNb1));
+  check("broadcast does not tag a target — that would make it a directed send",
+        !("_relayTo" in toNb1), JSON.stringify(toNb1));
+  check("the same payload reaches every open neighbor",
+        JSON.stringify(sentTo.get("nb2")[0]) === JSON.stringify(toNb1), "mismatch");
+  check("the raw kind/text survive tagging unchanged",
+        toNb1.kind === "chat" && toNb1.text === "hi", JSON.stringify(toNb1));
+
+  // Loop the same message back as if nb1 relayed it onward and it reached us
+  // again via nb2 — a real ring would do exactly this. Must be dropped, not
+  // re-delivered (we already have it) and not re-relayed either.
+  sentTo.set("nb1", []); sentTo.set("nb2", []);
+  solo.handleRelay("nb2", { ...toNb1, _hops: toNb1._hops - 1 });
+  check("a message looping back to its own relay id is dropped, not delivered again",
+        relayDelivered.length === 0, JSON.stringify(relayDelivered));
+  check("...and not relayed onward either", sentTo.get("nb1").length === 0 && sentTo.get("nb2").length === 0,
+        "re-relayed a dupe");
+
+  // A genuinely new flood from someone else, arriving via nb1: delivers once
+  // with the true originator (not the last hop), and relays onward only to
+  // the OTHER neighbor — never back where it came from.
+  solo.handleRelay("nb1", { kind: "chat", text: "from far", _relayId: "far1:1", _hops: 2, _from: "far1" });
+  check("a fresh flood delivers with the true originator, not the last hop",
+        relayDelivered.length === 1 && relayDelivered[0].from === "far1" && relayDelivered[0].d.text === "from far",
+        JSON.stringify(relayDelivered));
+  check("...and relays onward to the other neighbor, not back where it came from",
+        sentTo.get("nb2").length === 1 && sentTo.get("nb1").length === 0,
+        `nb1:${sentTo.get("nb1").length} nb2:${sentTo.get("nb2").length}`);
+  check("the relayed copy has no leftover tag fields visible to onMessage",
+        !("_relayId" in relayDelivered[0].d) && !("_hops" in relayDelivered[0].d),
+        JSON.stringify(relayDelivered[0].d));
+
+  // A directed send() with no direct channel to the target: floods, tagged
+  // with who it's for, delivered only there — not at us, a pass-through hop.
+  sentTo.set("nb1", []); sentTo.set("nb2", []);
+  const sentOk = solo.send("far-target", { kind: "note-pass", token: "cap:note-USD:0246" });
+  check("send() to a non-neighbor floods rather than failing outright", sentOk === true, "send returned false");
+  const toNb1Directed = sentTo.get("nb1")[0];
+  check("a directed send is tagged with who it's actually for",
+        toNb1Directed._relayTo === "far-target", JSON.stringify(toNb1Directed));
+
+  relayDelivered.length = 0;
+  solo.handleRelay("nb1", { kind: "chat", text: "not for me", _relayId: "x:1", _hops: 3, _from: "x", _relayTo: "someone-else" });
+  check("a directed relay not addressed to us passes through without delivering here",
+        relayDelivered.length === 0, JSON.stringify(relayDelivered));
+
+  // Direct send: byte-identical, no tagging at all — old-build compatibility.
+  sentTo.set("nb1", []);
+  solo.send("nb1", { kind: "chat", text: "direct" });
+  check("send() to an actual neighbor is raw and untagged — backward compatible",
+        JSON.stringify(sentTo.get("nb1")[0]) === JSON.stringify({ kind: "chat", text: "direct" }),
+        JSON.stringify(sentTo.get("nb1")[0]));
+
+  solo.disconnect();
+}
 
 check("a peer that left is not dialled", offersTo("aaaa") === goneAt, `${offersTo("aaaa")} vs ${goneAt}`);
 
