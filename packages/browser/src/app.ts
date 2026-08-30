@@ -1126,7 +1126,11 @@ function readConnection(row: { channel: string; connection: string; ice: string 
 }
 
 function reportUnreachable(id: string): void {
-  if (!qpeer || qpeer.hasChannel(id) || !peers.has(id)) return;
+  // isReachable, not hasChannel: under the bounded-degree overlay, "no
+  // direct channel" is the normal state for most peers past a handful in
+  // the room — it's only worth surfacing once there's also been no relay
+  // traffic from them at all (see peer.ts isReachable/lastHeardVia).
+  if (!qpeer || qpeer.isReachable(id) || !peers.has(id)) return;
   if (unreachableWarned.has(id)) return;
   // Long enough to be a problem rather than a handshake in progress. Timed from
   // when the peer appeared, whichever way it appeared: it used to be armed only
@@ -1168,7 +1172,7 @@ function reportUnreachable(id: string): void {
  */
 function unreachablePeers(): string[] {
   if (!qpeer) return [];
-  return [...peers].filter((id) => !qpeer!.hasChannel(id));
+  return [...peers].filter((id) => !qpeer!.isReachable(id));
 }
 
 function renderChatLine(line: ChatLine): void {
@@ -1506,13 +1510,17 @@ function renderPeers(): void {
   for (const id of peers) {
     const li = document.createElement("li");
     li.textContent = peerLabel(id);
-    if (qpeer && !qpeer.hasChannel(id)) {
+    // isReachable, not hasChannel: past a handful of peers, "no direct
+    // channel" is the ordinary state — most peers are reached over the
+    // bounded-degree overlay (ring + skip-links), not a direct link. This
+    // only lights up once there's also been no relay traffic from them.
+    if (qpeer && !qpeer.isReachable(id)) {
       li.classList.add("unreachable");
       const warn = document.createElement("span");
       warn.textContent = " ⚠";
-      warn.title = "No data channel — they cannot see what you type, and you cannot see theirs. "
-        + "The WebRTC handshake never completed; the public signaling server rate-limits it "
-        + "past a few peers in one room. Reload, drop a peer, or run your own signaling server.";
+      warn.title = "Not reachable — no direct channel and no relay traffic seen recently. Either "
+        + "the WebRTC handshake never completed, or every path to them (direct or via other "
+        + "peers) is down. Reload, drop a peer, or run your own signaling server.";
       li.appendChild(warn);
     }
     const role = peerAgents.get(id);
@@ -5792,14 +5800,29 @@ function connect(): void {
       try {
       if (typeof data === "object" && data !== null) {
         const d = data as Record<string, unknown>;
+        // The overlay's own liveness beacon (peer.ts's periodic flood, kept
+        // for isReachable) — nothing to do here, receiving it at all is the
+        // point (it updates lastHeardVia inside peer.ts before this fires).
+        if (d.kind === "presence") return;
         if (d.kind === "name") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
           if (status.startsWith("  · refused")) return;
           const nm = String(d.name ?? "");
           peerNames.set(from, nm);
           if (nm.trim()) lastKnownNames.set(from, nm);   // sticky cache — survives flaps so the label persists across reconnects
-          if (typeof d.agent === "string" && d.agent.trim()) { peerAgents.set(from, d.agent.trim()); qpeer?.dataOnly.add(from); }
-          else { peerAgents.delete(from); qpeer?.dataOnly.delete(from); }
+          if (typeof d.agent === "string" && d.agent.trim()) {
+            peerAgents.set(from, d.agent.trim());
+            qpeer?.dataOnly.add(from);
+            // Always keep a direct link to an AI agent regardless of ring
+            // position — pins every agent-tagged peer in the room, not
+            // specifically "yours"; there's no way from this envelope alone
+            // to tell whose agent it is.
+            qpeer?.pinNeighbor(from);
+          } else {
+            peerAgents.delete(from);
+            qpeer?.dataOnly.delete(from);
+            qpeer?.unpinNeighbor(from);
+          }
           // Stamp/reconcile this identity's anchor onto any group membership, so a
           // member returning on a new browser (same anchor, new peerId) is re-linked.
           reconcileGroups(from, (d.dyncap as DyncapField | undefined)?.anchor);
