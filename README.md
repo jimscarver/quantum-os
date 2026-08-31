@@ -32,7 +32,7 @@ The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). 
 **A QuantumOS room optimizes the way a quantum annealer actually does — by relaxing toward a low-energy consensus, not by "trying every answer at once."** Many minds (human *and* AI) propose candidates in parallel; the room scores them cheaply and **trust-weighted**; a facilitator lowers the "temperature" each round — explore wide early, refine the leader late — until the room settles on a ZFA-balanced closure and records it with `/lemma` + `/persist`. That is a physically faithful metaheuristic: the [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) says the substrate itself selects by closure / least free action (`ΔF = −log 2` per event), and the room realizes that same selection principle at the *logical* layer where human-meaningful problems live.
 
 - **`/facil optimize <objective + constraints>`** — an AI facilitator runs a round: proposes candidates, suggests the scoring step (`/estimate` or `/poll`), and on the next call refines the leaders (the *anneal*) toward `/probe` → `/lemma`.
-- **`/search [position]`** — the possibility step made literal: the [QLF QuCalc Search service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md) enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over. Bare `/search` co-reads every peer's position through one set of listeners (a *meeting of minds*).
+- **`/search [position]`** — the possibility step made literal, and **the search is the experiment**: the [QLF QuCalc Search service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md) enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over — and asks the substrate which of them close from *here* (truth divination; truth is what closes). Bare `/search` runs one enumeration over every peer's position with shared listeners — a **meeting of minds**, the room reading its own possibility space.
 - **Why a room, not a QPU:** runs in a browser with nothing to cool; takes the problem in plain language (no lossy QUBO/Ising encoding); handles soft, qualitative, evolving objectives an energy function can't express; and every step is explainable and dyncap-auditable — a trust-weighted decision trail, not a black-box bitstring.
 
 **Honest scope:** like every metaheuristic — and like a real annealer — it finds *good* solutions, not provably optimal ones; it is not an NP solver. Full method, worked example, and the QLF grounding: **[Collective Optimization →](Collective_Optimization.md)** · runnable demo (a room session converging to the brute-force TSP optimum): **[OptimizationDemo.md →](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
@@ -303,10 +303,17 @@ Rust: [`crates/zfa-core/src/coupling.rs`](crates/zfa-core/src/coupling.rs) · ce
 
 The admissible **next closures** from a QuCalc position — the twist words you can
 append so the whole history is a ZFA closure — via the [QLF **QuCalc Search**
-service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md).
-This is the possibility step of the [quantum problem solver](Collective_Optimization.md)
-made literal: all admissible histories exist *a priori* as possibility, and the
-search asks the substrate which of them close from *here*.
+service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md)
+(deployed from the QLF repo; point `/search url` at the running endpoint).
+
+**The search is the experiment — truth divination.** It is not a lookup: all
+admissible histories exist *a priori* as pure possibility, and the enumeration is
+the generative act — it asks the substrate *which of them close from here*. Truth
+in QLF is what closes, a closure receipt rather than a standing proposition, and
+`--events` makes that literal (each branch reported at its first closure — the
+future is un-rendered possibility; the search renders a slice of it). This is the
+possibility step of the [quantum problem solver](Collective_Optimization.md) made
+literal.
 
 ```
 /search ^<v>+-              next closures from an explicit position
@@ -320,10 +327,15 @@ search asks the substrate which of them close from *here*.
 
 Default output is a rollup — closures per Pauli phase, per appended-twist depth,
 and per **listening horizon** (`capacity:R` — how many closures a horizon of
-reach `R` hears) — plus the first 20 continuations. Bare `/search` co-reads every
-peer's position through one set of listeners: peers contribute their positions,
-the listeners are the room's joint reading (a *meeting of minds*). The result is
-broadcast to the room — the search is the room's shared experiment.
+reach `R` hears) — plus the first 20 continuations.
+
+**Bare `/search` is a meeting of minds.** One enumeration runs over *every* peer's
+`/qlf-action` position at once, with shared listeners: peers contribute their
+positions into the room, the listeners are the room's joint reading, and the
+result is broadcast — the room reading its own possibility space as one
+distributed experiment ([QLF_as_Intelligence §8](https://github.com/rchain-community/quantum-logical-framework/blob/main/QLF_as_Intelligence.md);
+peers as Markov-blanket sub-agents). `capacity:R` gives each peer's reach on the
+*same* census — one possibility structure, heard by horizons of different capacity.
 
 The service is read-only, stateless, and a pure function of the ZFA kernel — it
 holds no room state and nothing sent to it is signed. The client pins its
