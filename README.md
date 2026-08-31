@@ -321,13 +321,23 @@ literal.
 /search                     concurrent search over every peer's /qlf-action proposal
 /search --possibilities     every closure within depth (default is --events: first per branch)
 /search --depth 6 --full    stream every continuation, not just the rollup
+/search --no-save           don't turn the events into lemmas
 /search url https://host:8765   point at the deployed service (no default)
 /search info                the service's contract version and caps
 ```
 
+**Discovered events are kept.** Each new closure an `events` search finds is
+registered as a room **lemma named with an integer** in discovery order (`@1`,
+`@2`, …), so a re-run finds them already known rather than anonymous — the room
+accumulates the truths it has divined. Bounded (default 32 per search, raise with
+`--save-cap N`); `@N` works in any command (`/qucalc @7`), and they sync to peers
+like any lemma. Server-side persistence — the service remembering its own
+closures to speed later searches — is tracked separately in the QLF repo
+([QLF#153](https://github.com/rchain-community/quantum-logical-framework/issues/153)).
+
 Default output is a rollup — closures per Pauli phase, per appended-twist depth,
 and per **listening horizon** (`capacity:R` — how many closures a horizon of
-reach `R` hears) — plus the first 20 continuations.
+reach `R` hears).
 
 **Bare `/search` is a meeting of minds.** One enumeration runs over *every* peer's
 `/qlf-action` position at once, with shared listeners: peers contribute their

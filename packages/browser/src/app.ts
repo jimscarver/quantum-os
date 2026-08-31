@@ -159,7 +159,11 @@ let dyncapState: DynCapState | null = null;            // seed + anchor + per-ro
 let signQueue: Promise<void> = Promise.resolve();      // serializes outbound signing
 
 // Per-room types.
-interface LemmaEntry { twists: string; who: string; cap?: string; dyncap?: DyncapField }
+interface LemmaEntry { twists: string; who: string; cap?: string; dyncap?: DyncapField;
+  /** True when this lemma is a closure discovered by `/search`, not a named claim
+   *  someone wrote. Integer-named, so a re-run of the same search finds it already
+   *  known rather than anonymous. Cosmetic only — otherwise a lemma like any other. */
+  event?: boolean }
 interface NoteEntry { token: string; currency: string; denomination: number; receivedFrom?: string }
 interface ReceiptEntry { token: string; currency: string; denomination: number; issuer: string }
 interface RedemptionRecord { token: string; currency: string; denomination: number; redeemer: string; at: number }
@@ -474,6 +478,19 @@ function lemmaToCapToken(name: string, tw: Uint8Array): string {
   // The cap label sits between colons, so slugify spaces out of the name.
   const label = name.trim().replace(/\s+/g, "-");
   return `cap:${label}:${Array.from(tw).map(b => b.toString(16)).join("")}`;
+}
+
+// The next free integer lemma name — how a discovered closure ("event") is
+// named, in discovery order. First-write-wins by name (like every lemma), so
+// two peers running the same search converge (the service yields events in a
+// deterministic order); two peers running different searches may briefly race a
+// number, which the caller resolves by taking the next free one.
+function nextEventNumber(): number {
+  let max = 0;
+  for (const k of lemmaStore.keys()) {
+    if (/^\d+$/.test(k)) { const n = parseInt(k, 10); if (n > max) max = n; }
+  }
+  return max + 1;
 }
 
 function allocateTwists(name: string): Uint8Array {
@@ -1634,14 +1651,17 @@ function renderLemmas(): void {
   if (!isUiActive()) return;
   lemmaCountEl.textContent = String(lemmaStore.size);
   lemmaListEl.innerHTML = "";
-  for (const [name, entry] of lemmaStore) {
+  // Named claims first, then discovered closures (/search events) — both are
+  // lemmas, but a room's vocabulary reads better with the authored ones on top.
+  const ordered = [...lemmaStore.entries()].sort((a, b) => Number(!!a[1].event) - Number(!!b[1].event));
+  for (const [name, entry] of ordered) {
     const li = document.createElement("li");
     li.className = "row-item";
     const label = document.createElement("span");
-    label.textContent = lemmaRefStr(name);
+    label.textContent = (entry.event ? "⌁ " : "") + lemmaRefStr(name);
     label.className = "row-label";
     label.addEventListener("click", () => insertRef(lemmaRefStr(name)));
-    li.title = `${lemmaRefStr(name)}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
+    li.title = `${lemmaRefStr(name)}${entry.event ? "  (closure discovered by /search)" : ""}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.appendChild(label);
     appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
     lemmaListEl.appendChild(li);
@@ -3763,6 +3783,8 @@ function handleCommand(raw: string): string[] {
       let limit: number | undefined;
       let mode: "possibilities" | "events" = "events";
       let full = false;
+      let noSave = false;
+      let saveCap: number | undefined;
       let badFlag = false;
       const seedTokens: string[] = [];
       for (let i = 0; i < tokens.length; i++) {
@@ -3770,6 +3792,8 @@ function handleCommand(raw: string): string[] {
         if (t === "--events") mode = "events";
         else if (t === "--possibilities" || t === "--poss") mode = "possibilities";
         else if (t === "--full") full = true;
+        else if (t === "--no-save") noSave = true;
+        else if (t === "--save-cap") saveCap = parseInt(tokens[++i] ?? "", 10);
         else if (t === "--depth" || t === "-d") maxDepth = parseInt(tokens[++i] ?? "", 10);
         else if (t === "--limit" || t === "-n") limit = parseInt(tokens[++i] ?? "", 10);
         else if (t.startsWith("--") || (t.startsWith("-") && t.length === 2 && !/[0-9]/.test(t[1]))) {
@@ -3779,6 +3803,14 @@ function handleCommand(raw: string): string[] {
       if (badFlag) break;
       if (maxDepth !== undefined && (!Number.isFinite(maxDepth) || maxDepth < 1)) { sys("--depth must be an integer ≥ 1"); break; }
       if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) { sys("--limit must be an integer ≥ 1"); break; }
+      if (saveCap !== undefined && (!Number.isFinite(saveCap) || saveCap < 1)) { sys("--save-cap must be an integer ≥ 1"); break; }
+      // Each discovered event becomes a room lemma, integer-named in discovery
+      // order, so a re-run finds them already known. Only `events` (prefix-free
+      // first-closures) are saved — a `possibilities` closure may just be a
+      // prefix that already closed. Bounded so a deep search can't flood the
+      // room's vocabulary; --no-save opts out, --save-cap raises the ceiling.
+      const EVENT_LEMMA_CAP = Math.min(saveCap ?? 32, 256);
+      const save = mode === "events" && !noSave;
 
       // Resolve the seed(s). An explicit position — symbolic twists, @lemma, or
       // a cap:token — or, with none given, the room's /qlf-action proposals as a
@@ -3818,7 +3850,8 @@ function handleCommand(raw: string): string[] {
         }
       }
 
-      const listeners = "phase,depth,capacity:2,capacity:3" + (full ? "" : ",head:20");
+      // Drop the `head` listener when saving — the saved lemma names are the sample.
+      const listeners = "phase,depth,capacity:2,capacity:3" + (full || save ? "" : ",head:20");
       const searchCtx = activeRoom;
       const out: string[] = [];
       const say = (t: string) => { inRoom(searchCtx, () => addMessage("", t, "system")); out.push(t); };
@@ -3830,21 +3863,67 @@ function handleCommand(raw: string): string[] {
       void (async () => {
         try {
           const gen = qucalcSearch(scfg.url, seeds.length === 1 ? seeds[0] : seeds, {
-            maxDepth, limit, mode, listeners, stream: full,
+            // Saving needs the events streamed; keep the request bounded so a
+            // deep search can't stall on tens of thousands of lines.
+            maxDepth,
+            limit: limit ?? (save ? Math.max(EVENT_LEMMA_CAP * 6, 128) : undefined),
+            mode, listeners, stream: full || save,
           });
           say(`from ${posDesc} · ${mode}`);
           let shown = 0;
+          const foundHistories: string[] = [];
           let step: IteratorResult<{ cont: string; history: string; depth: number; phase: string; qc?: string }, QucalcSearchDone>;
           while (!(step = await gen.next()).done) {
+            const c = step.value;
             if (full && shown < 40) {
-              const c = step.value;
               say(`  ${c.cont.padEnd(8)} → ${c.history}  [${c.phase}]  d${c.depth}` + (c.qc ? `  <${c.qc}>` : ""));
               shown++;
             }
+            if (save && foundHistories.length < EVENT_LEMMA_CAP * 4) foundHistories.push(c.history);
           }
           const done = step.value;
           say(`  ${done.found} closure${done.found === 1 ? "" : "s"} in ${done.elapsedS}s`
             + (done.truncated ? "  (hit limit — raise --limit for the rest)" : ""));
+
+          // Turn the discovered events into room lemmas, integer-named in
+          // discovery order. All state touches go through the captured room.
+          if (save) {
+            let firstName = "", lastName = "", saved = 0, dup = 0;
+            const newEntries: Array<{ name: string; twists: string; who: string; cap?: string; event: boolean }> = [];
+            inRoom(searchCtx, () => {
+              const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+              const known = new Set([...lemmaStore.values()].map(e => e.twists));
+              let n = nextEventNumber();
+              for (const hist of foundHistories) {
+                if (saved >= EVENT_LEMMA_CAP) break;
+                if (known.has(hist)) { dup++; continue; }
+                const tw = parseSymbolicTwists(hist);
+                if (!tw || !achievesZfa(tw)) continue;   // service shouldn't return these; be safe
+                while (lemmaStore.has(String(n)) || isRetracted("lemma", String(n))) n++;
+                const name = String(n);
+                const cap = lemmaToCapToken(name, tw);
+                lemmaStore.set(name, { twists: hist, who, cap, event: true });
+                known.add(hist);
+                newEntries.push({ name, twists: hist, who, cap, event: true });
+                if (!firstName) firstName = name;
+                lastName = name;
+                saved++; n++;
+              }
+              if (newEntries.length) {
+                saveLemmas();
+                renderLemmas();
+                signedBroadcast({ kind: "sync-lemmas", entries: newEntries });
+              }
+            });
+            const overflow = foundHistories.length >= EVENT_LEMMA_CAP * 4 || (done.found > foundHistories.length && saved >= EVENT_LEMMA_CAP);
+            if (saved > 0) {
+              say(`  saved ${saved} new event${saved === 1 ? "" : "s"} as @${firstName}${saved > 1 ? `–@${lastName}` : ""}`
+                + (dup ? `  (${dup} already known)` : "")
+                + (overflow ? `  · more found — raise --save-cap or narrow --depth` : ""));
+            } else {
+              say(`  no new events to save${dup ? ` (${dup} already known)` : ""}`);
+            }
+          }
           const ph = done.listeners.phase as Record<string, number> | undefined;
           if (ph) {
             const parts = Object.entries(ph).filter(([, n]) => n > 0).map(([k, n]) => `${k}×${n}`);
@@ -6265,12 +6344,13 @@ function connect(): void {
             addMessage("", `  · dropped sync-lemmas from ${peerLabel(from)} (ignored: losing observer)`, "system");
             return;
           }
-          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField }>;
+          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField; event?: boolean }>;
           const who = peerLabel(from);
           // Record observations for the probe window even when we also apply.
           // Pair with sync-currencies if it arrives in the same handshake.
           if (probe.open) recordSyncObservations(from, entries, []);
           let added = 0;
+          let addedEvents = 0;
           for (const e of entries) {
             const name   = canonLemma(String(e.name ?? ""));
             const twists = String(e.twists ?? "").trim();
@@ -6278,14 +6358,16 @@ function connect(): void {
             if (lemmaStore.has(name) || isRetracted("lemma", name)) continue;
             const tw = resolveLemmaToBytes(twists);
             if (!tw || !achievesZfa(tw)) continue;
-            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap });
+            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap, event: e.event });
             added++;
+            if (e.event) addedEvents++;
           }
           if (added > 0) {
             saveLemmas();
             renderLemmas();
             addMessage(from, `sync`, "peer", who);
-            addMessage("", `  · synced ${added} lemma${added === 1 ? "" : "s"} from ${who}`, "system");
+            const evNote = addedEvents === added ? " (discovered events)" : addedEvents ? ` (${addedEvents} events)` : "";
+            addMessage("", `  · synced ${added} lemma${added === 1 ? "" : "s"} from ${who}${evNote}`, "system");
           }
           return;
         }
@@ -7073,7 +7155,7 @@ function connect(): void {
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
           const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
-            name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap,
+            name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap, event: e.event,
           }));
           signedSend(peerId, { kind: "sync-lemmas", entries });
         }
