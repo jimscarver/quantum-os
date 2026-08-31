@@ -6,7 +6,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 
 **[Open a room →](https://rchain-community.github.io/quantum-os/)** · **[My room →](MyRoom.md)** · **[Syllogism Demo →](SyllogismDemo.md)** · **[Promissory Note Demo →](PromissoryNoteDemo.md)** · **[Atomic Swap Demo →](AtomicSwapDemo.md)** · **[Multisig Demo →](MultisigDemo.md)** · **[Dining Philosophers Demo →](DiningPhilosophersDemo.md)** · **[RhoQu Macro Demo →](RhoQuDemo.md)** · **[Optimization Demo →](OptimizationDemo.md)** · **[Consensus →](Consensus.md)** · **[EIES legacy →](EIES_Legacy.md)** · **[Security →](SECURITY.md)** · **[New issue →](https://github.com/rchain-community/quantum-os/issues/new)**
 
-**Group processes:** **[User Guide →](User_Guide.md)** · **[Developer Guide (build agents) →](Developer_Guide.md)** · **[Group Decisions →](Group_Decisions.md)** · **[Collective Optimization →](Collective_Optimization.md)** · **[Governance (liquid democracy) →](Governance.md)** · **[Room Best Practices →](Room_Best_Practices.md)** · **[RhoQuCalc Macros — protocols as verified ρ-processes →](RhoQuCalc_Macros.md)**
+**Group processes:** **[User Guide →](User_Guide.md)** · **[Developer Guide (build agents) →](Developer_Guide.md)** · **[Group Decisions →](Group_Decisions.md)** · **[Quantum Problem Solver →](Collective_Optimization.md)** · **[Governance (liquid democracy) →](Governance.md)** · **[Room Best Practices →](Room_Best_Practices.md)** · **[RhoQuCalc Macros — protocols as verified ρ-processes →](RhoQuCalc_Macros.md)**
 
 **Case studies:** **[Multi-Stakeholder Governance →](GovernanceCaseStudy.md)** · **[Collaborative Learning →](CollaborativeLearningCaseStudy.md)** · **[Specialist Closure Room →](SpecialistRoomCaseStudy.md)** · **[Framework Self-Inquiry (draft) →](SelfInquiryCaseStudy.md)**
 
@@ -23,9 +23,19 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
 10. Use `/request name` to signal you need a named lemma; the holder sees a prompt and can `/pass name peer` to transfer it directly — no token strings to copy.
 
-Beyond evaluation, a room is a full collaboration space: take **group decisions** (`/poll`, `/estimate`, the `/probe` consensus check, trust-weighted `/gov` liquid democracy); invite **AI agent members** — a trust-governed *facilitator*, *scribe*, and *skeptic* that join as full peers and run on a Claude subscription ([Developer Guide](Developer_Guide.md)); and run the room as a **[collective optimizer](Collective_Optimization.md)** (`/facil optimize <problem>`, or watch the [demo](OptimizationDemo.md)). New here? Start with the **[User Guide](User_Guide.md)**.
+Beyond evaluation, a room is a full collaboration space: take **group decisions** (`/poll`, `/estimate`, the `/probe` consensus check, trust-weighted `/gov` liquid democracy); invite **AI agent members** — a trust-governed *facilitator*, *scribe*, and *skeptic* that join as full peers and run on a Claude subscription ([Developer Guide](Developer_Guide.md)); and run the room as a **quantum problem solver** (below). New here? Start with the **[User Guide](User_Guide.md)**.
 
 The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). Anyone with the link can join — no account needed. The public signaling server (`wss://quantum-os-signaling.onrender.com`) is used by default; edit the field to point at a self-hosted server.
+
+### The room as a quantum problem solver
+
+**A QuantumOS room optimizes the way a quantum annealer actually does — by relaxing toward a low-energy consensus, not by "trying every answer at once."** Many minds (human *and* AI) propose candidates in parallel; the room scores them cheaply and **trust-weighted**; a facilitator lowers the "temperature" each round — explore wide early, refine the leader late — until the room settles on a ZFA-balanced closure and records it with `/lemma` + `/persist`. That is a physically faithful metaheuristic: the [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) says the substrate itself selects by closure / least free action (`ΔF = −log 2` per event), and the room realizes that same selection principle at the *logical* layer where human-meaningful problems live.
+
+- **`/facil optimize <objective + constraints>`** — an AI facilitator runs a round: proposes candidates, suggests the scoring step (`/estimate` or `/poll`), and on the next call refines the leaders (the *anneal*) toward `/probe` → `/lemma`.
+- **`/search [position]`** — the possibility step made literal: the [QLF QuCalc Search service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md) enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over. Bare `/search` co-reads every peer's position through one set of listeners (a *meeting of minds*).
+- **Why a room, not a QPU:** runs in a browser with nothing to cool; takes the problem in plain language (no lossy QUBO/Ising encoding); handles soft, qualitative, evolving objectives an energy function can't express; and every step is explainable and dyncap-auditable — a trust-weighted decision trail, not a black-box bitstring.
+
+**Honest scope:** like every metaheuristic — and like a real annealer — it finds *good* solutions, not provably optimal ones; it is not an NP solver. Full method, worked example, and the QLF grounding: **[Collective Optimization →](Collective_Optimization.md)** · runnable demo (a room session converging to the brute-force TSP optimum): **[OptimizationDemo.md →](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
 
 **Foundation:** [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) — ZFA (Zero Free Action) is the security model. Every peer identity is a ZFA-balanced capability token. Possessing a token IS authorization (Curry-Howard for capabilities). The room process `parallel(peer1, peer2, …)` is machine-verified to stay ZFA-balanced under composition — decoherence is impossible by construction.
 
@@ -54,6 +64,7 @@ QLF slash commands:
   /qlf-action <tw> — propose a history string for the room to verify
   /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)
   /coupling [tw …] — was the room's closure shared, or several side by side?
+  /search [pos]    — the admissible next closures from a QuCalc position (QLF QuCalc Search)
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
@@ -287,6 +298,37 @@ The gauge pair splits the other way — `/coupling + -` is **product**, because 
 The sectors are not a heuristic. They are the same cut-and-classify the QLF census performs over every balanced history, so a room's verdict has an exact baseline to read against: of all shared closures cut from a balanced history, **80.3%** are coupled rather than product (0.750, 0.791, 0.804, 0.803 at lengths 2, 4, 6, 8 — nearly flat, so the comparison does not depend on picking a length). `crates/zfa-core/tests/census_conformance.rs` re-derives those sector counts from the kernel and requires them to match the census exactly.
 
 Rust: [`crates/zfa-core/src/coupling.rs`](crates/zfa-core/src/coupling.rs) · census: [`data/census_inventory.json`](https://github.com/jimscarver/quantum-logical-framework/blob/main/data/census_inventory.json) in QLF · Lean anchors: `QLF_IndexedFactors.phase_factorizes`, `count_balanced_pauli_closed`
+
+### `/search [position]` [shared]
+
+The admissible **next closures** from a QuCalc position — the twist words you can
+append so the whole history is a ZFA closure — via the [QLF **QuCalc Search**
+service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md).
+This is the possibility step of the [quantum problem solver](Collective_Optimization.md)
+made literal: all admissible histories exist *a priori* as possibility, and the
+search asks the substrate which of them close from *here*.
+
+```
+/search ^<v>+-              next closures from an explicit position
+/search @plan               … from a named lemma (or  /search cap:token)
+/search                     concurrent search over every peer's /qlf-action proposal
+/search --possibilities     every closure within depth (default is --events: first per branch)
+/search --depth 6 --full    stream every continuation, not just the rollup
+/search url https://host:8765   point at the deployed service (no default)
+/search info                the service's contract version and caps
+```
+
+Default output is a rollup — closures per Pauli phase, per appended-twist depth,
+and per **listening horizon** (`capacity:R` — how many closures a horizon of
+reach `R` hears) — plus the first 20 continuations. Bare `/search` co-reads every
+peer's position through one set of listeners: peers contribute their positions,
+the listeners are the room's joint reading (a *meeting of minds*). The result is
+broadcast to the room — the search is the room's shared experiment.
+
+The service is read-only, stateless, and a pure function of the ZFA kernel — it
+holds no room state and nothing sent to it is signed. The client pins its
+contract version and aborts on a mismatch, so an upstream substrate change can't
+silently reshape the data. Client: [`packages/browser/src/qucalc-search.ts`](packages/browser/src/qucalc-search.ts).
 
 ### `/grant [label]` [shared]
 Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.

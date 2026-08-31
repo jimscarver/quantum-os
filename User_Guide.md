@@ -55,13 +55,16 @@ Use the lightest process that fits:
 → **[Group Decisions](Group_Decisions.md)** (the whole family, and when to use each) ·
 **[Consensus](Consensus.md)** (the `/probe` protocol and its threat model).
 
-## 4½. Optimize, don't just decide
-Chain those tools into an **annealing loop** and the room becomes a collective optimizer: propose
-candidate solutions, score them (trust-weighted) with `/estimate` or `/poll`, refine the leaders each
-round, then `/probe` to converge and `/lemma`+`/persist` the winner. An AI facilitator can run the
-rounds for you — **`/facil optimize <objective + constraints>`** proposes candidates and the next step.
-→ **[Collective Optimization](Collective_Optimization.md)** (and how it compares to a quantum computer),
-with a runnable room-session **[demo](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
+## 4½. The quantum problem solver
+Chain those tools into an **annealing loop** and the room becomes a quantum-annealing-style optimizer:
+it relaxes toward a low-energy consensus rather than "trying every answer at once." Propose candidate
+solutions, score them (trust-weighted) with `/estimate` or `/poll`, lower the "temperature" each round
+(explore wide early, refine the leader late), then `/probe` to converge and `/lemma`+`/persist` the
+winner. An AI facilitator can run the rounds for you — **`/facil optimize <objective + constraints>`**
+proposes candidates and the next step. When the problem is a QuCalc position, **`/search`** renders the
+admissible possibility space straight from the substrate — the generate step done by the kernel.
+→ **[Collective Optimization](Collective_Optimization.md)** (the method, and why a room beats a QPU on
+real problems), with a runnable room-session **[demo](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
 
 ## 5. Record the decision
 A decision only outlives the session if it's written down: `/lemma <statement>` mints it;
