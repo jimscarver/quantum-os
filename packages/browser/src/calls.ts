@@ -250,7 +250,21 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
 
   function end(): void {
     const peer = host.peer();
-    if (peer) { peer.removeLocalMedia(); peer.broadcast({ kind: "call-end" }); }
+    if (peer) {
+      peer.removeLocalMedia();
+      peer.broadcast({ kind: "call-end" });
+      // Undo the pins start()/onPeerJoined made for this call — otherwise,
+      // with active pruning off (see peer.ts's reconcilePrune), a call's
+      // connections would stay pinned open for the rest of the session even
+      // after it ends, silently pushing the room toward full mesh forever
+      // the first time anyone makes a call. Unpinning doesn't itself close
+      // anything right now (pruning is inert), but keeps pin state honest
+      // for when pruning is eventually re-enabled, and for any other future
+      // reader of `pins`. Skip agents — they're pinned independently, for
+      // the life of the room, not for this call; unpinning one here would
+      // silently break that separate, permanent guarantee.
+      for (const id of host.roomPeers()) if (!host.isAgent(id)) peer.unpinNeighbor(id);
+    }
     stopScreenTracks();
     cameraTrack = null;
     localStream?.getTracks().forEach((t) => t.stop());

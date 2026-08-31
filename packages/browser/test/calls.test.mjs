@@ -273,5 +273,36 @@ permission = "prompt";
         addOrder[0] === "addLocalMedia", JSON.stringify(addOrder));
 }
 
+// --- ending a call releases the pins it made — except agents ----------------
+// With active pruning off, a pin is otherwise permanent: a call that never
+// unpinned anyone would silently push the room toward full mesh for the rest
+// of the session the first time anyone made a call. But an agent is pinned
+// for a separate, permanent reason (see app.ts's name handler) — end() must
+// not clear that just because a call it was never really "for" wraps up.
+{
+  const unpinnedAtEnd = [];
+  const endPeer = {
+    peerId: "end1",
+    addLocalMedia() {}, removeLocalMedia() {}, broadcast() {}, videoSenders() { return []; },
+    pinNeighbor() {},
+    unpinNeighbor(id) { unpinnedAtEnd.push(id); },
+  };
+  const endCalls = mod.createCalls(
+    {
+      peer: () => endPeer, say: () => {}, label: () => "peer",
+      isAgent: (id) => id === "the-agent",
+      roomPeers: () => ["r1", "r2", "the-agent"],
+    },
+    { bar: el(), tiles: el(), mute: el(), cam: el(), share: el() },
+  );
+  endCalls.toggle();   // start
+  await settle();
+  endCalls.toggle();   // end
+  check("ending a call unpins the ordinary room peers it pinned to start",
+        unpinnedAtEnd.includes("r1") && unpinnedAtEnd.includes("r2"), JSON.stringify(unpinnedAtEnd));
+  check("...but never unpins an agent — that pin is permanent, not call-scoped",
+        !unpinnedAtEnd.includes("the-agent"), JSON.stringify(unpinnedAtEnd));
+}
+
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);
