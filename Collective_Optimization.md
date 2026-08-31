@@ -32,13 +32,27 @@ Five steps, each one an existing room primitive. No new consensus machinery.
 | Step | Do this in the room | QLF analogue |
 |---|---|---|
 | **1 · Frame** | State the objective + constraints; record it with `/lemma`. | the proposition the blanket integrates |
-| **2 · Generate** | Everyone — humans *and* AI agents — proposes candidate solutions in chat. Many minds explore the space in parallel. | `expand_generation` (exponential search, parallelized) |
+| **2 · Generate** | Everyone — humans *and* AI agents — proposes candidate solutions in chat. Many minds explore the space in parallel. For a problem posed as a QuCalc position, **`/search`** renders the admissible possibility space directly from the substrate. | `expand_generation` (exponential search, parallelized) |
 | **3 · Score** | Score the candidates cheaply: `/estimate` for a number (cost, value, points) or `/poll` (approval or ranked) for preference — **trust-weighted**, so earned trust is the selection pressure. | the O(n) verify; trust = weighting |
 | **4 · Select & anneal** | Keep the top candidate(s). **Lower the temperature each round:** explore wide early (welcome wild proposals, keep several), refine the leader late. | multiplicity / Born selection |
 | **5 · Close** | When the room converges, confirm with `/probe` (supermajority) and record the winner with `/lemma` + `/persist`. | `full_zeno_prune` → the chosen ZFA closure |
 
 **Temperature** is simply how broadly you still explore: high in early rounds, low as you converge.
 That annealing schedule is the only genuinely new coordination — and a facilitator can run it.
+
+**Rendering the possibility space (`/search`).** When the objective can be posed as a QuCalc
+position — a twist history the room is trying to close — the [QLF QuCalc Search
+service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md)
+enumerates the admissible **next closures** from that position: every twist word you could append
+so the whole history is ZFA-balanced, shortest first. That is the generate step performed by the
+substrate rather than by proposal — *the search is the experiment*, asking which of the a-priori
+possibilities actually close from here. `/search` with no argument co-reads every peer's
+`/qlf-action` position through one set of listeners (per-phase, per-depth, and per **listening
+horizon** `capacity:R`), which is the room reading its own possibility space — peers as
+Markov-blanket sub-agents, the listeners the room's joint reading
+([QLF_as_Intelligence §8](https://github.com/rchain-community/quantum-logical-framework/blob/main/QLF_as_Intelligence.md)).
+The rollup (closures per phase, per depth, per horizon) is the cheap score for step 3 when the
+candidates *are* closures.
 
 **Let an agent run it for you.** With an AI facilitator in the room (see
 [Running agents](scripts/qos-cli/README.md)), `/facil optimize <objective + constraints>` proposes

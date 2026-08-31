@@ -167,6 +167,16 @@ All peer-to-peer data channel traffic is protected by the WebRTC security stack:
 
 The signaling server's SDP relay cannot be used to MITM the WebRTC connection — each peer's DTLS certificate fingerprint is included in the SDP and verified during the DTLS handshake.
 
+### External data sources — QuCalc Search (`/search`)
+
+The QLF QuCalc Search service (`quantum-logical-framework/qucalc_search.py`, consumed via `packages/browser/src/qucalc-search.ts`, qos#117) is a **read-only, stateless HTTP service** that enumerates admissible next closures from a twist history. It holds no room state, stores nothing, and is a pure function of `twist_core.py`.
+
+- **Nothing exchanged with it is signed or trusted as identity.** The `qc` seed the browser sends is a twist history (a peer's `/qlf-action` proposal or an explicit position), not a credential. The response is a list of closure strings each browser could recompute locally from the same kernel — the service is a convenience, not an authority.
+- **Contract pin.** The service stamps every stream with a `version`; `qucalc-search.ts` asserts it against `CONTRACT_VERSION` and aborts the stream on mismatch (`QucalcContractMismatch`), so a substrate change upstream cannot silently reshape the data a room acts on.
+- **Result is broadcast.** `/search` sends its result to the room as a `qlf` envelope (the shared-experiment framing). This is the same trust surface as any other `qlf` broadcast — a peer can post a misleading `/search` result the way it can post a misleading `/qucalc`; the closures are verifiable against the kernel by any recipient.
+- **Endpoint trust.** The endpoint is operator-configured (`/search url`), never defaulted and never carried in a room link. A hostile endpoint can return wrong closures or stall; it cannot obtain anything private (the `qc` seed is already room-public once proposed) and cannot forge a signature. If exposure beyond the mesh is a concern, front the service with the existing capability-token check rather than adding auth to the service itself.
+- **DoS shape.** The service's own `--max-depth-cap` / `--max-concurrent` bound its cost; a `429` is surfaced to the user as a retryable error. The browser aborts the fetch when the user cancels or the generator is dropped, and the service stops enumerating on the socket hangup.
+
 ### Promissory notes, rendezvous, and bearer semantics
 
 The `/note` and `/rdv` features extend the bearer-capability model from peer identity to value-bearing instruments. All defenses scale the same way: possession of bytes is authority; no protocol enforces who *should* possess them.
