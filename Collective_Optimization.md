@@ -45,10 +45,11 @@ position — a twist history the room is trying to close — the [QLF QuCalc Sea
 service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md)
 enumerates the admissible **next closures** from that position: every twist word you could append
 so the whole history is ZFA-balanced, shortest first. That is the generate step performed by the
-substrate rather than by proposal — *the search is the experiment*, asking which of the a-priori
-possibilities actually close from here. `/search` with no argument co-reads every peer's
+substrate rather than by proposal — *the search is the experiment*, **truth divination**: it asks
+which of the a-priori possibilities actually close from here, and in QLF truth is what closes (a
+closure receipt, not a standing proposition). `/search` with no argument co-reads every peer's
 `/qlf-action` position through one set of listeners (per-phase, per-depth, and per **listening
-horizon** `capacity:R`), which is the room reading its own possibility space — peers as
+horizon** `capacity:R`) — a **meeting of minds**, the room reading its own possibility space, peers as
 Markov-blanket sub-agents, the listeners the room's joint reading
 ([QLF_as_Intelligence §8](https://github.com/rchain-community/quantum-logical-framework/blob/main/QLF_as_Intelligence.md)).
 The rollup (closures per phase, per depth, per horizon) is the cheap score for step 3 when the

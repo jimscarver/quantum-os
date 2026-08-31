@@ -169,7 +169,7 @@ The signaling server's SDP relay cannot be used to MITM the WebRTC connection �
 
 ### External data sources — QuCalc Search (`/search`)
 
-The QLF QuCalc Search service (`quantum-logical-framework/qucalc_search.py`, consumed via `packages/browser/src/qucalc-search.ts`, qos#117) is a **read-only, stateless HTTP service** that enumerates admissible next closures from a twist history. It holds no room state, stores nothing, and is a pure function of `twist_core.py`.
+The QLF QuCalc Search service (`quantum-logical-framework/qucalc_search.py`, **deployed from the QLF repo** since it depends on `twist_core.py`; consumed via `packages/browser/src/qucalc-search.ts`, qos#117) is a **read-only, stateless HTTP service** that enumerates admissible next closures from a twist history. It holds no room state, stores nothing, and is a pure function of `twist_core.py`. quantum-os is a pure consumer — it never runs the service.
 
 - **Nothing exchanged with it is signed or trusted as identity.** The `qc` seed the browser sends is a twist history (a peer's `/qlf-action` proposal or an explicit position), not a credential. The response is a list of closure strings each browser could recompute locally from the same kernel — the service is a convenience, not an authority.
 - **Contract pin.** The service stamps every stream with a `version`; `qucalc-search.ts` asserts it against `CONTRACT_VERSION` and aborts the stream on mismatch (`QucalcContractMismatch`), so a substrate change upstream cannot silently reshape the data a room acts on.
