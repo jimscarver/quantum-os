@@ -46,6 +46,9 @@ import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeCon
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
          registryUriOf, powerboxUsed, DEFAULT_CONFIG as DEFAULT_NODE_CONFIG,
          readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
+import { qucalcSearch, qucalcSearchInfo, loadSearchConfig, saveSearchConfig,
+         CONTRACT_VERSION as QUCALC_CONTRACT_VERSION, QucalcContractMismatch,
+         type SearchDone as QucalcSearchDone } from "./qucalc-search.js";
 
 // ---------------------------------------------------------------------------
 // Room ID from URL hash: #room=cap:..., or generate a new one and set hash.
@@ -2830,6 +2833,7 @@ function handleCommand(raw: string): string[] {
       sys("  /qlf-action <tw> — propose a history string for the room to verify");
       sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
       sys("  /coupling [tw …] — was the room's closure shared, or several side by side?");
+      sys("  /search [pos]    — the admissible next closures from a QuCalc position (QLF search service)");
       sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
@@ -3696,6 +3700,181 @@ function handleCommand(raw: string): string[] {
                 new Uint8Array(parts.flatMap(p => [...p]))).join(", ")})`);
           break;
       }
+      break;
+    }
+
+    case "search": {
+      // The QLF QuCalc Search service (quantum-logical-framework/qucalc_search.py,
+      // QucalcSearch.md, qos#117): from a QuCalc position, the admissible next
+      // closures. The search is the room's shared experiment — it asks the
+      // substrate which a-priori possibilities close from here, not a lookup.
+      // Read-only and unsigned: the service holds no room state and is a pure
+      // function of twist_core.py. Its result IS broadcast to the room (the
+      // "meeting of minds" — peers' positions co-read through one set of
+      // listeners), so /search is excluded from the generic qlf rebroadcast and
+      // sends its own envelope when the async search completes.
+      const scfg = loadSearchConfig();
+      const rawArg = arg.trim();
+      const tokens = rawArg ? rawArg.split(/\s+/) : [];
+      const sub = (tokens[0] ?? "").toLowerCase();
+
+      if (sub === "url") {
+        const u = tokens.slice(1).join(" ").trim();
+        if (!u) {
+          sys(scfg.url ? `qucalc_search endpoint: ${scfg.url}` : "no qucalc_search endpoint set");
+          sys("  set one with /search url <endpoint>   (e.g. https://host:8765)");
+          sys("  the service is  python3 qucalc_search.py --serve  in quantum-logical-framework");
+          break;
+        }
+        try { new URL(u); } catch { sys(`not a URL: ${u}`); break; }
+        const clean = u.replace(/\/+$/, "");
+        saveSearchConfig({ ...scfg, url: clean });
+        sys(`✓ qucalc_search endpoint set to ${clean}`);
+        break;
+      }
+
+      if (!scfg.url) {
+        sys("no qucalc_search endpoint set — /search url <endpoint> first");
+        sys("  the service is  python3 qucalc_search.py --serve  in quantum-logical-framework");
+        break;
+      }
+
+      if (sub === "info" || sub === "status") {
+        sys(`asking ${scfg.url}…`);
+        const infoCtx = activeRoom;
+        void (async () => {
+          const line = (t: string) => inRoom(infoCtx, () => addMessage("", t, "system"));
+          try {
+            const info = await qucalcSearchInfo(scfg.url);
+            line(`✓ ${info.service} ${info.version}`
+              + (info.contractMismatch ? `  ⚠ this client expects ${QUCALC_CONTRACT_VERSION}` : ""));
+            line(`  caps: max_depth ${info.caps?.max_depth} · max_limit ${info.caps?.max_limit}`);
+            if (info.alphabet) line(`  alphabet: ${info.alphabet.join(" ")}`);
+            if (info.listeners) line(`  listeners: ${info.listeners.join(", ")}`);
+          } catch (e) {
+            line(`✗ ${(e as Error)?.message ?? e}`);
+          }
+        })();
+        break;
+      }
+
+      // Flags, then whatever is left is the seed position.
+      let maxDepth: number | undefined;
+      let limit: number | undefined;
+      let mode: "possibilities" | "events" = "events";
+      let full = false;
+      let badFlag = false;
+      const seedTokens: string[] = [];
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t === "--events") mode = "events";
+        else if (t === "--possibilities" || t === "--poss") mode = "possibilities";
+        else if (t === "--full") full = true;
+        else if (t === "--depth" || t === "-d") maxDepth = parseInt(tokens[++i] ?? "", 10);
+        else if (t === "--limit" || t === "-n") limit = parseInt(tokens[++i] ?? "", 10);
+        else if (t.startsWith("--") || (t.startsWith("-") && t.length === 2 && !/[0-9]/.test(t[1]))) {
+          sys(`unknown option: ${t}`); badFlag = true;
+        } else seedTokens.push(t);
+      }
+      if (badFlag) break;
+      if (maxDepth !== undefined && (!Number.isFinite(maxDepth) || maxDepth < 1)) { sys("--depth must be an integer ≥ 1"); break; }
+      if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) { sys("--limit must be an integer ≥ 1"); break; }
+
+      // Resolve the seed(s). An explicit position — symbolic twists, @lemma, or
+      // a cap:token — or, with none given, the room's /qlf-action proposals as a
+      // concurrent search (peers' positions, one set of listeners).
+      const seeds: string[] = [];
+      const seedLabels: string[] = [];
+      const seedArg = seedTokens.join(" ").trim();
+      if (seedArg) {
+        if (seedArg.includes("@")) {
+          const result = expandLemmaRefs(seedArg);
+          if (!result) { sys(`unknown lemma: ${firstUnknownRef(seedArg) ?? "@?"}  (type /lemma to list)`); break; }
+          const tw = parseSymbolicTwists(result.expanded);
+          if (!tw) { sys(`not a twist string: ${seedArg}`); break; }
+          seeds.push(twistsToSymbolic(tw)); seedLabels.push(seedArg);
+        } else if (seedArg.startsWith("cap:")) {
+          const tw = tokenTwists(seedArg);
+          if (!tw) { sys(`not a capability token: ${seedArg}`); break; }
+          seeds.push(twistsToSymbolic(tw)); seedLabels.push(seedArg.slice(0, 20) + "…");
+        } else {
+          const tw = parseSymbolicTwists(seedArg);
+          if (!tw) { sys(`not a twist string: ${seedArg}  (symbolic ^v<>/\\+- or hex 0-7)`); break; }
+          seeds.push(twistsToSymbolic(tw)); seedLabels.push(twistsToSymbolic(tw));
+        }
+      } else {
+        const entries = [...actionProposals.entries()]
+          .filter(([id]) => id === qpeer?.peerId || peers.has(id))
+          .sort((a, b) => a[1].at - b[1].at);
+        for (const [id, p] of entries) {
+          seeds.push(twistsToSymbolic(p.twists));
+          seedLabels.push(id === qpeer?.peerId ? (myName || shortId(id)) + " (you)" : peerLabel(id));
+        }
+        if (seeds.length === 0) {
+          sys("/search: no position to search from");
+          sys("  pass one:  /search ^v<>   ·   /search @lemma   ·   /search cap:…");
+          sys("  or have peers propose histories with /qlf-action, then bare /search reads the room");
+          break;
+        }
+      }
+
+      const listeners = "phase,depth,capacity:2,capacity:3" + (full ? "" : ",head:20");
+      const searchCtx = activeRoom;
+      const out: string[] = [];
+      const say = (t: string) => { inRoom(searchCtx, () => addMessage("", t, "system")); out.push(t); };
+      const posDesc = seeds.length === 1
+        ? seeds[0]
+        : `${seeds.length} positions (${seedLabels.join(" , ")})`;
+      sys(`/search ${mode} from ${posDesc} → ${scfg.url}…`);
+
+      void (async () => {
+        try {
+          const gen = qucalcSearch(scfg.url, seeds.length === 1 ? seeds[0] : seeds, {
+            maxDepth, limit, mode, listeners, stream: full,
+          });
+          say(`from ${posDesc} · ${mode}`);
+          let shown = 0;
+          let step: IteratorResult<{ cont: string; history: string; depth: number; phase: string; qc?: string }, QucalcSearchDone>;
+          while (!(step = await gen.next()).done) {
+            if (full && shown < 40) {
+              const c = step.value;
+              say(`  ${c.cont.padEnd(8)} → ${c.history}  [${c.phase}]  d${c.depth}` + (c.qc ? `  <${c.qc}>` : ""));
+              shown++;
+            }
+          }
+          const done = step.value;
+          say(`  ${done.found} closure${done.found === 1 ? "" : "s"} in ${done.elapsedS}s`
+            + (done.truncated ? "  (hit limit — raise --limit for the rest)" : ""));
+          const ph = done.listeners.phase as Record<string, number> | undefined;
+          if (ph) {
+            const parts = Object.entries(ph).filter(([, n]) => n > 0).map(([k, n]) => `${k}×${n}`);
+            if (parts.length) say(`  phase: ${parts.join("  ")}`);
+          }
+          const dp = done.listeners.depth as Record<string, number> | undefined;
+          if (dp && Object.keys(dp).length) {
+            say(`  by depth: ${Object.entries(dp).map(([k, n]) => `+${k}:${n}`).join("  ")}`);
+          }
+          for (const key of Object.keys(done.listeners)) {
+            if (!key.startsWith("capacity:")) continue;
+            const cap = done.listeners[key] as { R: number; heard: number; missed: number };
+            say(`  horizon R=${cap.R}: hears ${cap.heard} · misses ${cap.missed}`);
+          }
+          if (done.perSeed) {
+            for (const [s, n] of Object.entries(done.perSeed)) say(`  ${s}: ${n}`);
+          }
+          const hd = done.listeners.head as { conts: string[] } | undefined;
+          if (!full && hd && hd.conts.length) {
+            say(`  next: ${hd.conts.slice(0, 20).join("  ")}`);
+          }
+        } catch (e) {
+          if (e instanceof QucalcContractMismatch) say(`  ⚠ ${e.message}`);
+          else say(`  ✗ ${(e as Error)?.message ?? e}`);
+        } finally {
+          inRoom(searchCtx, () => {
+            if (qpeer && out.length) qpeer.broadcast({ kind: "qlf", cmd: "search", arg: rawArg, lines: out });
+          });
+        }
+      })();
       break;
     }
 
@@ -7109,7 +7288,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn" && cmd !== "search") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
