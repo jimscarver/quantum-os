@@ -359,7 +359,14 @@
     .guide-eg { color:#777; font-size:0.68rem; margin-bottom:0.2rem; word-break:break-word; }
     .guide-keys { color:#555; font-size:0.62rem; margin-top:0.35rem; }
     .cmd-menu .next-head { padding:0.45rem 0.7rem 0.3rem; border-bottom:1px solid #1c1c1c; margin-bottom:0.2rem; }
-    .cmd-menu { position:absolute; left:1.5rem; right:1.5rem; bottom:100%; margin-bottom:4px; background:#0e0e0e; border:1px solid #2a2a2a; border-radius:6px; max-height:16rem; overflow-y:auto; box-shadow:0 -6px 24px rgba(0,0,0,0.6); z-index:50; }
+    /* max-height is capped against the viewport, not just a fixed 16rem: on a
+       short window (a phone, a small split-screen) a fixed cap can eclipse
+       almost the whole visible transcript behind an opaque menu — nothing is
+       lost (the transcript is untouched underneath), but it reads as if it
+       were. Leaving at least 45% of the viewport uncovered keeps the most
+       recent messages in view while the menu — "Other" especially, the
+       longest one — is open. */
+    .cmd-menu { position:absolute; left:1.5rem; right:1.5rem; bottom:100%; margin-bottom:4px; background:#0e0e0e; border:1px solid #2a2a2a; border-radius:6px; max-height:min(16rem, 55vh); overflow-y:auto; box-shadow:0 -6px 24px rgba(0,0,0,0.6); z-index:50; }
     .cmd-item { display:flex; gap:0.6rem; align-items:baseline; padding:0.35rem 0.6rem; cursor:pointer; border-bottom:1px solid #161616; }
     .cmd-item:last-child { border-bottom:none; }
     .cmd-item.active, .cmd-item:hover { background:#16302e; }

@@ -210,8 +210,10 @@ interface ArgSpec {
 interface QuickAction {
   label: string;
   ico: string;
-  /** `command` builds and runs a line; the rest hand off. */
-  kind: "command" | "call" | "record" | "commands" | "next";
+  /** `command` builds and runs a line; `fill` drops `cmd` into the input and
+   *  leaves it there to finish typing (no guided prompt, no auto-run — for a
+   *  free-text tail like a question); the rest hand off. */
+  kind: "command" | "call" | "record" | "commands" | "next" | "fill";
   /** The command up to its first argument, e.g. "/poll new". */
   cmd?: string;
   /** Asked for one at a time. A command with none simply runs. */
@@ -288,6 +290,9 @@ const OTHER_ACTIONS: QuickAction[] = [
 ];
 
 const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Ask", ico: "🙋", kind: "fill", cmd: "/facil ask ",
+    hint: "drops /facil ask into the box — finish typing your question and send it. "
+        + "The room's facilitator agent (if one is present) answers in chat" },
   { label: "Call", ico: "📞", kind: "call", hint: "start or leave a call" },
   { label: "Record", ico: "⏺", kind: "record", hint: "record your screen with audio" },
   { label: "Rholang", ico: "⛓", kind: "command", cmd: "/rholang eval",
@@ -567,6 +572,12 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
             case "next":
               if (wasOpen) { hide(); return; }
               showNext(); host.input.focus(); return;
+            case "fill":
+              hide();
+              host.input.value = a.cmd ?? "";
+              if (a.hint) host.say(a.hint);
+              host.input.focus();
+              return;
             default:
               begin(a);
           }
