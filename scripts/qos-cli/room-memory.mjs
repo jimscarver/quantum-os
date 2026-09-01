@@ -105,7 +105,18 @@ const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: tru
   }
   if (seeded) persistLemmas();
 
+const _servedAt = new Map();   // peerId -> last full-state serve; a re-open within the window is a no-op
+const SERVE_COOLDOWN_MS = 15_000;
+
 function serveStateTo(peerId) {
+  // The whole payload is idempotent (first-write-wins on the receiver), so
+  // re-serving it because a data channel briefly flapped is pure cost — and
+  // when a connection is unstable that flap repeats, which is how one bad link
+  // turned into thousands of "serving state" lines and a pegged core. Once per
+  // peer per window is plenty; a real new joiner is always past the window.
+  const now = Date.now();
+  if (now - (_servedAt.get(peerId) ?? 0) < SERVE_COOLDOWN_MS) return;
+  _servedAt.set(peerId, now);
   log(`serving state to ${peerId.slice(0, 12)}…`);
   // Only announce a name when the carrier has no announce of its own. A role
   // agent's announce carries `agent: <role>`, which is what puts the 🤖 AI badge

@@ -27,6 +27,7 @@ const DISCONNECT_GRACE_MS = 30_000;
 const PRUNE_GRACE_MS = 30_000;
 const SEEN_RELAY_MAX = 5000;
 const REACHABLE_WINDOW_MS = 45_000;
+const ATTEMPT_PATIENCE_MS = 45_000;   // how long a dial/answer in flight is left alone before a redial is allowed
 const PRESENCE_FLOOD_MS = 30_000;
 
 // The ICE username fragment identifies an ICE session; a peer that reconnects (or
@@ -45,6 +46,7 @@ export class QOSPeer {
     this.connections = new Map();         // remoteId -> RTCPeerConnection
     this.channels = new Map();            // remoteId -> data channel
     this.makingOffer = new Map();         // remoteId -> we have an outstanding offer (perfect-negotiation glare)
+    this.attemptAt = new Map();           // remoteId -> when the current dial/answer began (see _connecting)
     this._disconnected = false;
     this._reconnectTimer = null;
     this._reconnectAttempts = 0;
@@ -75,6 +77,20 @@ export class QOSPeer {
     return !!ch && (!ch.readyState || ch.readyState === "open");
   }
 
+  /// A dial or answer to this peer is still in progress — don't start another
+  /// (a fresh `_newPC` closes the pc mid-negotiation and both sides restart,
+  /// which is how a `name` re-announce or a signaling reconnect turned into a
+  /// rebuild storm). Mirrors peer.ts's `connecting()`. A stale attempt (older
+  /// than ATTEMPT_PATIENCE_MS) no longer counts, so a genuinely dead one can be
+  /// retried.
+  _connecting(peerId) {
+    const pc = this.connections.get(peerId);
+    if (!pc) return false;
+    const st = pc.connectionState ?? pc.iceConnectionState;
+    if (st && st !== "new" && st !== "connecting" && st !== "checking") return false;
+    return Date.now() - (this.attemptAt.get(peerId) ?? 0) < ATTEMPT_PATIENCE_MS;
+  }
+
   /// Who we should be directly connected to right now: ring+skip neighbors
   /// (see ringSkipNeighbors) plus anything pinned. Full mesh falls out of
   /// this automatically for five or fewer peers.
@@ -92,6 +108,7 @@ export class QOSPeer {
     if (peerId === this.peerId) return;
     this.pins.add(peerId);
     if (this._channelOpen(this.channels.get(peerId))) return;
+    if (this._connecting(peerId)) return;   // a dial is already in flight — don't restart it
     this._initiate(peerId).catch((e) => this.config.onError?.(e));
   }
 
@@ -309,6 +326,7 @@ export class QOSPeer {
           this.config.onPeerJoined?.(peerId);
           if (!targets.has(peerId)) continue;
           if (this._channelOpen(this.channels.get(peerId))) continue;
+          if (this._connecting(peerId)) continue;   // attempt in flight — leave it
           this._initiate(peerId).catch((e) => this.config.onError?.(e));
         }
         this._reconcilePrune();
@@ -445,6 +463,7 @@ export class QOSPeer {
     // Mark BEFORE any await: an offer from the other side that lands before our
     // setLocalDescription resolves still needs to read as glare.
     this.makingOffer.set(remoteId, true);
+    this.attemptAt.set(remoteId, Date.now());
     try {
       const pc = this._newPC(remoteId);
       const ch = pc.createDataChannel("qos");
@@ -458,6 +477,9 @@ export class QOSPeer {
   }
 
   async _handleOffer(fromId, sdp) {
+    // Answering is an attempt too — the sweep and pinNeighbor must not dial a
+    // peer we are mid-answer with (see _connecting).
+    this.attemptAt.set(fromId, Date.now());
     // Renegotiation on a LIVE connection — e.g. a browser peer started a call and
     // added mic/cam, re-offering on the existing connection. Answer on the existing
     // pc; NEVER tear down a working data channel (the old bug: `_newPC` closes it,
@@ -537,6 +559,7 @@ export class QOSPeer {
     this.connections.delete(peerId);
     this.channels.delete(peerId);
     this.makingOffer.delete(peerId);
+    this.attemptAt.delete(peerId);
     // close() is async — it awaits sctpTransport.stop(), which is the step that stops
     // the retransmit timer. Fire-and-forget is fine here, but surface the rejection
     // rather than letting a failed teardown vanish (and leave the association live).
