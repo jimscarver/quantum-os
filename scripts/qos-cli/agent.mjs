@@ -138,10 +138,12 @@ export async function run(args) {
   const TAG = `[${CMD}]`;                                 // log tag
   const aliases = [...new Set([CMD, role.name])];         // command spellings, e.g. facil|facilitator
   const aliasAlt = aliases.map(escapeRe).join("|");
-  const cmdRe = new RegExp(`^/(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
-  const askStripRe = new RegExp(`^/(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
-  const optStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
-  const chairStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:chair|deliberate)\\b\\s*`, "i");
+  // Accept one or two leading slashes: `//facil` is how a user escapes a
+  // leading `/` in some clients, and it can reach the room as literal text.
+  const cmdRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
+  const askStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
+  const optStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
+  const chairStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+(?:chair|deliberate)\\b\\s*`, "i");
   const bareNameRe = new RegExp(`^(?:${aliasAlt})\\??$`, "i");
   const anyoneHereRe = new RegExp(`\\b(any\\s?(one|body)|${aliasAlt})\\b[^?]*\\b(here|there|around|online|present|listening)\\b\\??`, "i");
   const greetingRe = /^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/;
@@ -505,15 +507,35 @@ export async function run(args) {
   // a long-running agent records it for `/<cmd> health` and carries on instead.
   const bg = (p, what) => { Promise.resolve(p).catch((e) => noteError(what, e)); };
 
-  function handleCommand(text) {
+  function handleCommand(text, fromId) {
     const raw = String(text ?? "").trim();
     const lc = raw.toLowerCase();
+    // "Am I here?" — bare `/facil`, `/facil status|here|ping`, or a no-slash
+    // mention. A presence check is 1:1 ("tell ME you're there"), so answer the
+    // asker DIRECTLY and essentially every time: a reply lost on a flaky channel
+    // must not then be swallowed by a cooldown when they retry. Only a tight
+    // repeat from the same asker (< 2s) is squelched. Direct-send falls back to
+    // a broadcast if there is no route to the asker. NOT the verbose help text —
+    // that is `/facil help`.
+    const presenceReply = () => {
+      const key = `agstatus:${fromId ?? "?"}`;
+      if (!cooled(key, 2_000)) return true;
+      cooldown.set(key, Date.now());
+      const txt = statusText() + chairStatusSuffix();
+      if (fromId && peer.send(fromId, { kind: "chat", text: txt })) {
+        postLog.push(Date.now()); lastPostAt = Date.now();
+        console.log(`${TAG} ↩ ${txt}`);
+      } else {
+        reply(txt, null, 0);   // no asker id or no route → broadcast
+      }
+      return true;
+    };
     const m = cmdRe.exec(lc);
     if (m) {
       const sub = m[1] ?? "";
       if (sub === "off" || sub === "mute" || sub === "quiet") { muted = true; reply(`Muted — I'll stay quiet. Say \`/${CMD} on\` to bring me back.`, "agmute", 0); return true; }
       if (sub === "on" || sub === "unmute" || sub === "wake") { muted = false; reply(`Back on 👋 — \`/${CMD} help\` for what I do.`, "agmute", 0); return true; }
-      if (sub === "status" || sub === "here" || sub === "ping") { reply(statusText() + chairStatusSuffix(), "agstatus", 20_000); return true; }
+      if (sub === "" || sub === "status" || sub === "here" || sub === "ping") return presenceReply();
       if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
       if (sub === "health" || sub === "diag" || sub === "diagnostics") { reply(healthText(), "aghealth", 15_000); return true; }
       if (sub === "ask") { bg(handleAsk(raw.replace(askStripRe, "").trim()), "ask"); return true; }
@@ -523,9 +545,9 @@ export async function run(args) {
       if (sub === "back") { backChair(); return true; }
       if (sub === "close" || sub === "decide") { bg(closeChair(), "chair close"); return true; }
       if (sub === "cancel" || sub === "abort") { cancelChair(); return true; }
-      reply(helpText(), "aghelp", 25_000); return true;
+      reply(helpText(), "aghelp", 15_000); return true;   // `/facil help` and any unknown subcommand
     }
-    if (bareNameRe.test(lc) || anyoneHereRe.test(lc)) { reply(statusText(), "agstatus", 20_000); return true; }
+    if (bareNameRe.test(lc) || anyoneHereRe.test(lc)) return presenceReply();
     // bare greeting → only the lead greet-capable agent replies (so N agents don't all say hi)
     if (greetingRe.test(lc)) {
       if (leadGate("greet")) { reply(`👋 Hi! I'm ${myName}, the room ${role.name} — \`/${CMD} help\` for what I do.`, "aggreet", Math.round(4 * 60_000 * scale)); return true; }
@@ -656,7 +678,7 @@ export async function run(args) {
         recentMsgs.push({ name: nameOf(from), text: String(d.text ?? "").slice(0, 280), at: Date.now() });
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
         introduceTo(from);   // covers a human who chats before announcing a name
-        if (handleCommand(d.text)) break;
+        if (handleCommand(d.text, from)) break;
         // collect normal chat into an active chaired deliberation (skip agents + slash-commands)
         if (chair && !isAgentPeer(from)) {
           const txt = String(d.text ?? "");

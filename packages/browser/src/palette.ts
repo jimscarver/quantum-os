@@ -64,7 +64,7 @@ export const CMD_HELP: Record<string, string[]> = {
            "No position cuts the room along peers' /qlf-action proposals — one enumeration, shared listeners, a meeting of minds.",
            "Each discovered event becomes a room lemma, integer-named in discovery order (@1, @2, …), so a re-run finds them already known. --no-save opts out; --save-cap N raises the ceiling (default 32).",
            "Position: symbolic ^v<>/\\+-, @lemma, or cap:token. Flags: --depth N · --limit N · --events|--possibilities · --full · --no-save · --save-cap N.",
-           "Result is broadcast (the room's shared experiment). /search url <endpoint> sets the service (deployed from the QLF repo); /search info shows its version and caps."],
+           "Result is broadcast (the room's shared experiment). Defaults to the public Render deployment — /search url <endpoint> points it elsewhere (a local  python3 qucalc_search.py --serve ), /search url reset restores the default, /search info shows the service's version and caps."],
   solve: ["/solve [position] — pick the one closure the substrate takes from a position, and hand you that path.",
           "The complement of /search: search renders every way to close (the experiment); solve selects one (least free action).",
           "Cascade: min peak excursion → min depth → phase +1 → lexicographic — deterministic, so every peer computes the same path.",

@@ -173,7 +173,8 @@ const meta = (extra = {}) =>
 
 // --- config round-trips through localStorage -------------------------------
 {
-  ok("default config has no url", loadSearchConfig().url === "");
+  ok("default config is the public Render deployment",
+     loadSearchConfig().url === "https://quantum-os-qucalc-search.onrender.com");
   saveSearchConfig({ url: "https://qc.example:8765" });
   ok("saved url loads back", loadSearchConfig().url === "https://qc.example:8765");
 }

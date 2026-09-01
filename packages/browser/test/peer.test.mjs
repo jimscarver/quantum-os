@@ -166,6 +166,32 @@ check("a second tab open at the same time gets its own id",
       second.peerId !== first.peerId, `${second.peerId} vs ${first.peerId}`);
 first.disconnect(); back.disconnect(); second.disconnect();
 
+// A stale lease left by a DIFFERENT identity (a recovery, a storage clear, an
+// incognito key leak) must not be reclaimed — inheriting it makes every peer
+// that TOFU-pinned that id refuse our signed name as an anchor mismatch.
+session.clear(); local.clear();
+local.set("qos-dyncap-state", JSON.stringify({ seed: "x", anchor: "b".repeat(64) }));
+local.set("qos-peer-lease:cap:peer:02460246024602460246024602460246",
+          JSON.stringify({ at: now - 60_000, anchor: "a".repeat(64) }));   // someone else's abandoned id
+const fresh = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246" });
+check("a stale lease under another identity's anchor is not reclaimed",
+      fresh.peerId !== "cap:peer:02460246024602460246024602460246", fresh.peerId);
+check("the fresh id's own lease records this identity's anchor",
+      JSON.parse(local.get(`qos-peer-lease:${fresh.peerId}`)).anchor === "b".repeat(64),
+      local.get(`qos-peer-lease:${fresh.peerId}`));
+fresh.disconnect();
+
+// But a stale lease under OUR OWN anchor still comes back to us (the common case
+// — a phone that dropped the tab, same identity).
+session.clear(); local.clear();
+local.set("qos-dyncap-state", JSON.stringify({ seed: "x", anchor: "c".repeat(64) }));
+local.set("qos-peer-lease:cap:peer:02460246024602460246024602460246",
+          JSON.stringify({ at: now - 60_000, anchor: "c".repeat(64) }));
+const mineBack = new QOSPeer({ signalingUrl: "wss://x", roomId: "cap:room:0246" });
+check("a stale lease under our own anchor is reclaimed",
+      mineBack.peerId === "cap:peer:02460246024602460246024602460246", mineBack.peerId);
+mineBack.disconnect();
+
 // --- a peer in a room --------------------------------------------------------
 // This peer's id sorts BELOW "zzz…" and above "aaa…", so both the eager and the
 // polite path can be exercised against one peer.

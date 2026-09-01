@@ -29,11 +29,19 @@ const CONFIG_KEY = "qos-qucalc-config";
 
 export interface QucalcSearchConfig {
   /** Base URL of the deployed qucalc_search service, e.g. `https://host:8765`.
-   *  Empty until set with `/search url <endpoint>` — there is no default host. */
+   *  Defaults to the public Render deployment (see the QLF repo's render.yaml);
+   *  `/search url <endpoint>` overrides it per browser. */
   url: string;
 }
 
-export const DEFAULT_SEARCH_CONFIG: QucalcSearchConfig = { url: "" };
+/** The public qucalc_search deployment — a Render web service built from
+ *  `render.yaml` in the quantum-logical-framework repo. Free plan: sleeps after
+ *  ~15 min idle, ~50 s cold start, then sub-second. Override for a local
+ *  service with `/search url http://…` (only reachable from a non-https page or
+ *  a same-origin proxy — same mixed-content wall as rnode). */
+export const DEFAULT_SEARCH_URL = "https://quantum-os-qucalc-search.onrender.com";
+
+export const DEFAULT_SEARCH_CONFIG: QucalcSearchConfig = { url: DEFAULT_SEARCH_URL };
 
 export function loadSearchConfig(): QucalcSearchConfig {
   try {

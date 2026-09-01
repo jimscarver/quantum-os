@@ -46,7 +46,7 @@ import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeCon
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
          registryUriOf, powerboxUsed, DEFAULT_CONFIG as DEFAULT_NODE_CONFIG,
          readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
-import { qucalcSearch, qucalcSearchInfo, loadSearchConfig, saveSearchConfig,
+import { qucalcSearch, qucalcSearchInfo, loadSearchConfig, saveSearchConfig, DEFAULT_SEARCH_URL,
          CONTRACT_VERSION as QUCALC_CONTRACT_VERSION, QucalcContractMismatch,
          type SearchDone as QucalcSearchDone } from "./qucalc-search.js";
 
@@ -3784,9 +3784,17 @@ function handleCommand(raw: string): string[] {
       if (sub === "url") {
         const u = tokens.slice(1).join(" ").trim();
         if (!u) {
-          sys(scfg.url ? `qucalc_search endpoint: ${scfg.url}` : "no qucalc_search endpoint set");
-          sys("  set one with /search url <endpoint>   (e.g. https://host:8765)");
-          sys("  the service is  python3 qucalc_search.py --serve  in quantum-logical-framework");
+          const isDefault = scfg.url === DEFAULT_SEARCH_URL;
+          sys(scfg.url
+            ? `qucalc_search endpoint: ${scfg.url}${isDefault ? "  (default)" : "  (override — /search url reset restores the default)"}`
+            : "no qucalc_search endpoint set");
+          sys(`  default is ${DEFAULT_SEARCH_URL}  (public Render deployment)`);
+          sys("  override with /search url <endpoint>   (e.g. a local  python3 qucalc_search.py --serve )");
+          break;
+        }
+        if (u.toLowerCase() === "reset" || u.toLowerCase() === "default") {
+          saveSearchConfig({ ...scfg, url: DEFAULT_SEARCH_URL });
+          sys(`✓ qucalc_search endpoint reset to the default  ${DEFAULT_SEARCH_URL}`);
           break;
         }
         try { new URL(u); } catch { sys(`not a URL: ${u}`); break; }
