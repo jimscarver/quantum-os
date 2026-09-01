@@ -6291,8 +6291,24 @@ function connect(): void {
         if (d.kind === "presence") return;
         if (d.kind === "name") {
           const status = await verifyDyncapIfPresent(from, d); setActiveRoom(ctx);
-          if (status.startsWith("  · refused")) return;
           const nm = String(d.name ?? "");
+          if (status.startsWith("  · refused")) {
+            // A display name is cosmetic — anyone can `/name` anything, and the
+            // dyncap chain never owned it. Refusing to *show* a name because the
+            // chain is contested (a /login recovery, a reused peerId) just left
+            // the peer as a permanent hex id and the room unusable with them.
+            // So apply the label and flag it — but skip the parts that DO trust
+            // the chain: the agent pin, and reconcileGroups (which would move
+            // group membership / delegations onto this peerId).
+            if (nm.trim()) {
+              peerNames.set(from, `${nm} ⚠`);
+              lastKnownNames.set(from, `${nm} ⚠`);
+              renderPeers();
+              announceJoin(from);
+            }
+            addMessage("", `${peerLabel(from)} ${status.trim()} — showing its claimed name with ⚠; treat its identity as unverified`, "system");
+            return;
+          }
           peerNames.set(from, nm);
           if (nm.trim()) lastKnownNames.set(from, nm);   // sticky cache — survives flaps so the label persists across reconnects
           if (typeof d.agent === "string" && d.agent.trim()) {
