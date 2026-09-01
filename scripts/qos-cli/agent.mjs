@@ -138,10 +138,12 @@ export async function run(args) {
   const TAG = `[${CMD}]`;                                 // log tag
   const aliases = [...new Set([CMD, role.name])];         // command spellings, e.g. facil|facilitator
   const aliasAlt = aliases.map(escapeRe).join("|");
-  const cmdRe = new RegExp(`^/(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
-  const askStripRe = new RegExp(`^/(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
-  const optStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
-  const chairStripRe = new RegExp(`^/(?:${aliasAlt})\\s+(?:chair|deliberate)\\b\\s*`, "i");
+  // Accept one or two leading slashes: `//facil` is how a user escapes a
+  // leading `/` in some clients, and it can reach the room as literal text.
+  const cmdRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\b\\s*(\\w+)?`, "i");
+  const askStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+ask\\b\\s*`, "i");
+  const optStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+(?:optimize|opt)\\b\\s*`, "i");
+  const chairStripRe = new RegExp(`^/{1,2}(?:${aliasAlt})\\s+(?:chair|deliberate)\\b\\s*`, "i");
   const bareNameRe = new RegExp(`^(?:${aliasAlt})\\??$`, "i");
   const anyoneHereRe = new RegExp(`\\b(any\\s?(one|body)|${aliasAlt})\\b[^?]*\\b(here|there|around|online|present|listening)\\b\\??`, "i");
   const greetingRe = /^(hi|hello|hey|hiya|yo|howdy|gm|good\s+(morning|afternoon|evening))[\s!,.]*(all|everyone|folks|there|y'?all)?[\s!,.]*$/;
@@ -509,11 +511,25 @@ export async function run(args) {
     const raw = String(text ?? "").trim();
     const lc = raw.toLowerCase();
     // "Am I here?" — bare `/facil`, `/facil status|here|ping`, or a no-slash
-    // mention. Keep this snappy and per-asker: a worried user retrying, or a
-    // second person asking, must always get an answer, so the cooldown is short
-    // and keyed by who asked rather than shared. It is NOT the verbose help
-    // text — that is `/facil help`.
-    const presenceReply = () => { reply(statusText() + chairStatusSuffix(), `agstatus:${fromId ?? "?"}`, 5_000); return true; };
+    // mention. A presence check is 1:1 ("tell ME you're there"), so answer the
+    // asker DIRECTLY and essentially every time: a reply lost on a flaky channel
+    // must not then be swallowed by a cooldown when they retry. Only a tight
+    // repeat from the same asker (< 2s) is squelched. Direct-send falls back to
+    // a broadcast if there is no route to the asker. NOT the verbose help text —
+    // that is `/facil help`.
+    const presenceReply = () => {
+      const key = `agstatus:${fromId ?? "?"}`;
+      if (!cooled(key, 2_000)) return true;
+      cooldown.set(key, Date.now());
+      const txt = statusText() + chairStatusSuffix();
+      if (fromId && peer.send(fromId, { kind: "chat", text: txt })) {
+        postLog.push(Date.now()); lastPostAt = Date.now();
+        console.log(`${TAG} ↩ ${txt}`);
+      } else {
+        reply(txt, null, 0);   // no asker id or no route → broadcast
+      }
+      return true;
+    };
     const m = cmdRe.exec(lc);
     if (m) {
       const sub = m[1] ?? "";
