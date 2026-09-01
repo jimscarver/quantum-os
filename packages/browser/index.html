@@ -359,6 +359,15 @@
     .guide-eg { color:#777; font-size:0.68rem; margin-bottom:0.2rem; word-break:break-word; }
     .guide-keys { color:#555; font-size:0.62rem; margin-top:0.35rem; }
     .cmd-menu .next-head { padding:0.45rem 0.7rem 0.3rem; border-bottom:1px solid #1c1c1c; margin-bottom:0.2rem; }
+    /* Clicking outside the menu closes it (blur), but nothing said so — a
+       browsable menu (the command list, Other) can cover most of the screen
+       on a short window, and "just click away" is not obvious when you're
+       staring at a wall of options. Sticky, not fixed: it stays pinned to the
+       top of .cmd-menu's own scroll as the list scrolls under it, no separate
+       scroll container needed. */
+    .cmd-menu-close { position:sticky; top:0; z-index:2; display:flex; justify-content:flex-end; background:#0e0e0e; padding:0.2rem 0.3rem 0; margin:-1px -1px 0; }
+    .cmd-menu-close button { background:none; border:none; color:#666; font-size:0.85rem; line-height:1; padding:0.3rem 0.5rem; cursor:pointer; }
+    .cmd-menu-close button:hover { color:#e6e6e6; }
     /* max-height is capped against the viewport, not just a fixed 16rem: on a
        short window (a phone, a small split-screen) a fixed cap can eclipse
        almost the whole visible transcript behind an opaque menu — nothing is

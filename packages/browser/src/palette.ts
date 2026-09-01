@@ -385,6 +385,27 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
     sel = -1;
   };
 
+  /**
+   * A menu you browse (the command list, Other) has no visible way to close it
+   * — clicking anywhere outside does dismiss it (blur), but nothing says so,
+   * and the menu itself can cover most of the transcript on a short screen
+   * ("clicking elsewhere works but it's not obvious" — reported live). One
+   * sticky ✕, pinned to the top of the box regardless of scroll, fixes that
+   * without restructuring the menu into a separate scroll container.
+   */
+  function addCloseBar(): void {
+    if (!menu) return;
+    const bar = document.createElement("div");
+    bar.className = "cmd-menu-close";
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "✕"; x.title = "close";
+    // mousedown, not click: blur fires first on the input and would hide the
+    // menu (and clear `guide`/`sel` state) before this handler ever ran.
+    x.addEventListener("mousedown", (e) => { e.preventDefault(); hide(); });
+    bar.appendChild(x);
+    menu.appendChild(bar);
+  }
+
   function apply(c: SlashCmd): void {
     host.input.value = c.template;
     hide();
@@ -504,6 +525,7 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
     matches = all ? SLASH_COMMANDS.slice() : SLASH_COMMANDS.filter((c) => c.name.startsWith(f));
     if (matches.length === 0) { hide(); return; }
     menu.innerHTML = "";
+    addCloseBar();
     matches.forEach((c, i) => {
       const item = document.createElement("div");
       item.className = "cmd-item" + (i === sel ? " active" : "");
@@ -522,6 +544,7 @@ export function createPalette(host: PaletteHost, menu: HTMLElement | null): Pale
   function showNext(): void {
     if (!menu) return;
     menu.innerHTML = "";
+    addCloseBar();
     let section = "";
     for (const step of OTHER_ACTIONS) {
       if (step.section && step.section !== section) {

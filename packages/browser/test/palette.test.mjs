@@ -132,6 +132,17 @@ check("and a hint is NOT something to pick — Enter must still send",
 palette.onInput("hello everyone");
 check("ordinary chat shows nothing", !palette.isOpen(), "menu left open");
 
+// --- a browsable menu has a visible way to close it ---------------------------
+// Clicking outside does dismiss it, but nothing said so ("clicking elsewhere
+// works but it's not obvious" — reported live): a sticky close button fixes
+// that without needing to know blur closes the menu.
+button("other").fire("click");
+check("other is open", palette.isOpen(), "not open");
+const closeBtn = () => menu.children.find((c) => c.className === "cmd-menu-close")?.children[0];
+check("it has a close button", !!closeBtn(), "no close bar");
+closeBtn().fire("mousedown");
+check("clicking it closes the menu", !palette.isOpen(), "still open");
+
 // --- the getting-started list ------------------------------------------------
 ran.length = 0;
 button("other").fire("click");
@@ -166,8 +177,8 @@ check("an rnode is not part of getting set up",
 check("nor is a signing key",
       sectionOf("signing key") === "If you use a chain", sectionOf("signing key"));
 check("the list is sectioned, group first",
-      menu.children[0].className.includes("next-head")
-      && menu.children[0].textContent === "Group", menu.children[0].textContent);
+      menu.children[1].className.includes("next-head")
+      && menu.children[1].textContent === "Group", menu.children[1].textContent);
 entry("Mint a note").fire("mousedown");
 input.value = "USD"; palette.submitArg();
 input.value = "10";  palette.submitArg();
