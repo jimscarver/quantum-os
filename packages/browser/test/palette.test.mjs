@@ -63,13 +63,20 @@ const button = (label) => row.children.find((b) => b.dataset.action === label);
 // --- the toolbar itself ------------------------------------------------------
 const labels = row.children.map((b) => b.dataset.action);
 check("the room comes first and the catch-all closes",
-      labels.slice(0, 3).join(",") === "call,record,rholang"
+      labels.slice(0, 4).join(",") === "ask,call,record,rholang"
       && labels[labels.length - 1] === "other", labels.join(","));
-check("it is a short toolbar", labels.length <= 7, `${labels.length} buttons`);
+check("it is a short toolbar", labels.length <= 8, `${labels.length} buttons`);
 
 // --- an action with no arguments just runs -----------------------------------
 button("rholang").fire("click");
 check("rholang runs straight away", ran.includes("/rholang eval"), JSON.stringify(ran));
+
+// --- a "fill" action drops its command in the box and waits for you ----------
+input.value = ""; ran.length = 0;
+button("ask").fire("click");
+check("fill does not run anything itself", ran.length === 0, JSON.stringify(ran));
+check("fill does not start a guided collection", !palette.guiding(), "started guiding");
+check("fill leaves the command in the box to finish typing", input.value === "/facil ask ", input.value);
 
 // --- an action with arguments asks for them ----------------------------------
 ran.length = 0;
