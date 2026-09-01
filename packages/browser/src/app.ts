@@ -5670,6 +5670,46 @@ function handleCommand(raw: string): string[] {
       break;
     }
 
+    case "reset": {
+      // A fresh start for this browser's *connection identity*, without the
+      // Android-Chrome site-settings dance. The common case: after a /login
+      // recovery or a half-cleared storage, this browser is on a peerId that
+      // other peers TOFU-pinned to a now-stale dyncap anchor, so they show it
+      // as a hex id or "contested" and refuse its signed envelopes. Minting a
+      // fresh peerId and dropping this browser's own TOFU pins makes everyone
+      // re-recognise it cleanly on the next join.
+      //
+      //   /reset            — fresh peerId + drop TOFU pins. Identity, name,
+      //                       groups and vault are all kept.
+      //   /reset identity   — ALSO a brand-new dyncap seed: you rejoin as a
+      //                       different person. Room content is untouched.
+      const hard = /^(identity|hard|all)$/i.test(arg.trim());
+      void (async () => {
+        const ok = await confirmDialog(
+          hard ? "New identity for this browser?" : "Reset this browser's connection identity?",
+          hard
+            ? "This browser gets a brand-new identity (a new dyncap seed) and a new peer ID, then reloads.\n\n"
+              + "You rejoin as a different person: your name, your standing, and any group membership tied to your identity are left behind. An encrypted vault you saved still matches only its original identity.\n\n"
+              + "Room content — lemmas, notes, polls, macros — is NOT touched."
+            : "This browser gets a fresh peer ID and forgets which dyncap anchors it has seen, then reloads.\n\n"
+              + "Your identity, name, groups and vault are all kept — peers just re-recognise you cleanly. Use this when peers show you as a hex id, or as ⚠ / contested, after an identity change.",
+          hard ? "New identity" : "Reset",
+        );
+        if (!ok) { addMessage("", "reset: cancelled", "system"); return; }
+        try {
+          sessionStorage.removeItem("qos-peer-id");
+          for (const k of Object.keys(localStorage)) {
+            if (k.startsWith("qos-peer-lease:") || k.startsWith("qos-dyncap-chains-")) localStorage.removeItem(k);
+            if (hard && k === "qos-dyncap-state") localStorage.removeItem(k);
+          }
+        } catch { /* storage off — nothing to clear, reload still helps */ }
+        addMessage("", "reset — reloading…", "system");
+        setTimeout(() => location.reload(), 150);
+      })();
+      sys(hard ? "reset identity: confirm in the dialog…" : "reset: confirm in the dialog…");
+      break;
+    }
+
     case "version":
     case "build": {
       // Asked constantly while debugging a room, and answered until now only by
@@ -7613,7 +7653,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn" && cmd !== "search" && cmd !== "solve") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn" && cmd !== "search" && cmd !== "solve" && cmd !== "reset") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;
