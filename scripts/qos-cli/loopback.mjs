@@ -47,9 +47,10 @@ wss.on("connection", (ws) => {
 // ---- two peers ----
 const url = `ws://localhost:${PORT}`;
 const received = { A: null, B: null };
+const opens = { A: 0, B: 0 };   // onChannelOpen count — a glare rebuild storm shows up here
 const mk = (label) => new QOSPeer({
   signalingUrl: url, roomId: ROOM, peerId: generateCapability("peer"), iceServers: [],
-  onChannelOpen: (id) => { console.log(`[${label}] channel open → ${id.slice(0,10)}…; sending chat`); peers[label].broadcast({ kind: "chat", text: `hello-from-${label}` }); },
+  onChannelOpen: (id) => { opens[label]++; console.log(`[${label}] channel open → ${id.slice(0,10)}…; sending chat`); peers[label].broadcast({ kind: "chat", text: `hello-from-${label}` }); },
   onMessage: (from, d) => { if (d && d.kind === "chat") { received[label] = d.text; console.log(`[${label}] received: ${d.text}`); } },
   onError: (e) => console.error(`[${label}]`, e?.message ?? e),
 });
@@ -61,10 +62,30 @@ peers.B = mk("B");
 a.connect();
 setTimeout(() => peers.B.connect(), 600);
 
+// Glare: once both are connected, make BOTH dial the other on the same tick —
+// exactly what a roster change does to two node peers. Perfect-negotiation
+// arbitration (smaller peerId yields, larger keeps its offer) must settle this
+// without an endless rebuild. Before the fix this pegged both cores and
+// onChannelOpen fired hundreds of times.
 setTimeout(() => {
-  const pass = received.A === "hello-from-B" && received.B === "hello-from-A";
-  console.log(`\n${pass ? "PASS" : "FAIL"}  werift↔werift data channel round-trip (A↔B chat)`);
+  const bId = peers.B.peerId, aId = peers.A.peerId;
+  console.log(`\n-- forcing glare: A(${aId.slice(9,13)}) <-> B(${bId.slice(9,13)}) dial simultaneously --`);
+  peers.A._initiate(bId).catch(() => {});
+  peers.B._initiate(aId).catch(() => {});
+}, 6000);
+
+setTimeout(() => {
+  const roundTrip = received.A === "hello-from-B" && received.B === "hello-from-A";
+  // After glare, both sides must still hold an open channel…
+  const aOpen = peers.A._channelOpen(peers.A.channels.get(peers.B.peerId));
+  const bOpen = peers.B._channelOpen(peers.B.channels.get(peers.A.peerId));
+  // …and the channel must not have thrashed: 1 open normally, ≤3 tolerates the
+  // one legitimate rebuild the polite side does. Hundreds = the old storm.
+  const calm = opens.A <= 3 && opens.B <= 3;
+  const pass = roundTrip && aOpen && bOpen && calm;
+  console.log(`\n${pass ? "PASS" : "FAIL"}  werift↔werift: round-trip + glare survives without a rebuild storm`);
   console.log(`  A received: ${received.A}   B received: ${received.B}`);
+  console.log(`  channels open after glare: A→B ${aOpen}  B→A ${bOpen}   onChannelOpen counts: A ${opens.A}  B ${opens.B}`);
   try { peers.A.disconnect(); peers.B.disconnect(); wss.close(); } catch {}
   setTimeout(() => process.exit(pass ? 0 : 1), 200);
 }, 12000);

@@ -44,6 +44,7 @@ export class QOSPeer {
     this.ws = null;
     this.connections = new Map();         // remoteId -> RTCPeerConnection
     this.channels = new Map();            // remoteId -> data channel
+    this.makingOffer = new Map();         // remoteId -> we have an outstanding offer (perfect-negotiation glare)
     this._disconnected = false;
     this._reconnectTimer = null;
     this._reconnectAttempts = 0;
@@ -441,12 +442,19 @@ export class QOSPeer {
   }
 
   async _initiate(remoteId) {
-    const pc = this._newPC(remoteId);
-    const ch = pc.createDataChannel("qos");
-    this._setupChannel(remoteId, ch);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this._signal({ type: "offer", roomId: this.config.roomId, from: this.peerId, to: remoteId, sdp: pc.localDescription?.sdp ?? offer.sdp });
+    // Mark BEFORE any await: an offer from the other side that lands before our
+    // setLocalDescription resolves still needs to read as glare.
+    this.makingOffer.set(remoteId, true);
+    try {
+      const pc = this._newPC(remoteId);
+      const ch = pc.createDataChannel("qos");
+      this._setupChannel(remoteId, ch);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      this._signal({ type: "offer", roomId: this.config.roomId, from: this.peerId, to: remoteId, sdp: pc.localDescription?.sdp ?? offer.sdp });
+    } finally {
+      this.makingOffer.set(remoteId, false);
+    }
   }
 
   async _handleOffer(fromId, sdp) {
@@ -478,6 +486,21 @@ export class QOSPeer {
       } catch (e) { this.config.onError?.(e); }
       return;
     }
+
+    // Perfect-negotiation glare. We AND the far side dialed each other at once —
+    // each now holds an outstanding offer. Without arbitration both peers tear
+    // down their own offer to answer the other's, both answers land on a pc
+    // that's already been replaced, and neither side ever completes — an
+    // infinite rebuild that pegs a core on BOTH (seen live: facilitator <->
+    // skeptic, two node agents on one host, "serving state" thousands of times).
+    // Tiebreak matches peer.ts: the SMALLER peerId yields and answers; the
+    // larger keeps its own offer and ignores this one (the far side will answer
+    // it). Deterministic, symmetric, needs no extra signalling.
+    const glare = (this.makingOffer.get(fromId) ?? false)
+      || (existing && existing.signalingState && existing.signalingState !== "stable");
+    if (glare && this.peerId > fromId) return;   // larger id: our offer wins, ignore theirs
+    if (glare) this.makingOffer.set(fromId, false);   // smaller id: abandon ours, answer theirs
+
     const pc = this._newPC(fromId);
     if (pc.onDataChannel?.subscribe) pc.onDataChannel.subscribe((ch) => this._setupChannel(fromId, ch));
     else pc.ondatachannel = (ev) => this._setupChannel(fromId, ev.channel);
@@ -499,6 +522,7 @@ export class QOSPeer {
     const state = pc.signalingState;
     if (state && state !== "have-local-offer") return;
     await pc.setRemoteDescription({ type: "answer", sdp });
+    this.makingOffer.set(fromId, false);
   }
 
   async _handleIce(fromId, candidate) {
@@ -512,6 +536,7 @@ export class QOSPeer {
     // change) cannot double-close the same pc.
     this.connections.delete(peerId);
     this.channels.delete(peerId);
+    this.makingOffer.delete(peerId);
     // close() is async — it awaits sctpTransport.stop(), which is the step that stops
     // the retransmit timer. Fire-and-forget is fine here, but surface the rejection
     // rather than letting a failed teardown vanish (and leave the association live).
