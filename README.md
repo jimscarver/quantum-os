@@ -33,6 +33,7 @@ The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). 
 
 - **`/facil optimize <objective + constraints>`** — an AI facilitator runs a round: proposes candidates, suggests the scoring step (`/estimate` or `/poll`), and on the next call refines the leaders (the *anneal*) toward `/probe` → `/lemma`.
 - **`/search [position]`** — the possibility step made literal, and **the search is the experiment**: the [QLF QuCalc Search service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md) enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over — and asks the substrate which of them close from *here* (truth divination; truth is what closes). Bare `/search` runs one enumeration over every peer's position with shared listeners — a **meeting of minds**, the room reading its own possibility space.
+- **`/solve [position]`** — the selection step: **`/search` renders every way to close; `/solve` finds the solution, or the path to it.** It picks the one closure the substrate takes by a deterministic least-free-action cascade (so every peer agrees), widening the horizon until something closes; on a miss it reports the residual — what a completion still owes.
 - **Why a room, not a QPU:** runs in a browser with nothing to cool; takes the problem in plain language (no lossy QUBO/Ising encoding); handles soft, qualitative, evolving objectives an energy function can't express; and every step is explainable and dyncap-auditable — a trust-weighted decision trail, not a black-box bitstring.
 
 **Honest scope:** like every metaheuristic — and like a real annealer — it finds *good* solutions, not provably optimal ones; it is not an NP solver. Full method, worked example, and the QLF grounding: **[Collective Optimization →](Collective_Optimization.md)** · runnable demo (a room session converging to the brute-force TSP optimum): **[OptimizationDemo.md →](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
@@ -65,6 +66,7 @@ QLF slash commands:
   /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)
   /coupling [tw …] — was the room's closure shared, or several side by side?
   /search [pos]    — the admissible next closures from a QuCalc position (QLF QuCalc Search)
+  /solve [pos]     — pick the one closure the substrate takes (least free action); the residual if none
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
   /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
@@ -351,6 +353,35 @@ The service is read-only, stateless, and a pure function of the ZFA kernel — i
 holds no room state and nothing sent to it is signed. The client pins its
 contract version and aborts on a mismatch, so an upstream substrate change can't
 silently reshape the data. Client: [`packages/browser/src/qucalc-search.ts`](packages/browser/src/qucalc-search.ts).
+
+### `/solve [position]` [shared]
+
+The complement of `/search`. **`/search` renders every way to close (the
+experiment); `/solve` finds the solution, or the path to it** — it picks the
+*one* closure the substrate takes and hands you the continuation that reaches it.
+
+```
+/solve ^</>+          the least-free-action completion of a partial position
+/solve @7            … of a stored history, or  /solve cap:token
+/solve               complete the room's joined /qlf-action proposals
+/solve ^</>+ --all   the ranked shortlist, not just the winner
+```
+
+Selection is a **deterministic cascade**, so every peer computes the same path
+(joiner-local, like the `/poll` tally):
+
+> least peak excursion → shortest → phase `+1` → lexicographic
+
+Peak excursion is how far the walk strays from ZFA balance — the least-free-action
+reading, the path an ordinary listening horizon can follow. `/solve` **widens the
+horizon** until something closes. If nothing does within reach, it reports the
+**residual**: the exact action vector `(v,h,d,l)` a completion still owes, a
+concrete continuation that count-balances it, and whether the closure is simply
+deeper than the service's limit or off any short path — *"on a path to closure,
+but a deep one"* rather than a bare failure.
+
+The chosen path is saved as an integer-named lemma (like a `/search` event) and
+broadcast. `/solve` shares the endpoint with `/search`.
 
 ### `/grant [label]` [shared]
 Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.

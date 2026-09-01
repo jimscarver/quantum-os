@@ -71,7 +71,7 @@ const meta = (extra = {}) =>
       JSON.stringify({ cont: "v>", history: "^vv>", len: 4, depth: 2, phase: "-1" }),
       JSON.stringify({ cont: "<>", history: "^v<>", len: 4, depth: 2, phase: "+1" }),
       JSON.stringify({ _done: true, found: 2, elapsed_s: 0.01, truncated: false,
-                       mode: "possibilities", seeds: ["^v"], per_seed: null,
+                       mode: "possibilities", max_depth: 6, seeds: ["^v"], per_seed: null,
                        listeners: { count: { total: 2 } } }),
     ],
   };
@@ -81,7 +81,7 @@ const meta = (extra = {}) =>
   while (!(step = await gen.next()).done) got.push(step.value);
   const done = step.value;
   ok("yields every closure line", got.length === 2 && got[0].cont === "v>");
-  ok("returns the _done rollup", done.found === 2 && done.mode === "possibilities");
+  ok("returns the _done rollup", done.found === 2 && done.mode === "possibilities" && done.maxDepth === 6);
   ok("query carries qc + max_depth", lastUrl.searchParams.get("qc") === "^v" && lastUrl.searchParams.get("max_depth") === "6");
 }
 
