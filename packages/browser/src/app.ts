@@ -1759,6 +1759,33 @@ function zfaFreqLevel(twists: Uint8Array): number | null {
   return twists.length % 2 === 0 ? twists.length / 2 : null;
 }
 
+// How far a history strays from ZFA balance — the max over prefixes of the total
+// free action |v|+|h|+|d|+|l|. A capacity-R listener hears a closure iff this is
+// ≤ R (QLF_ClosureDepthLaw); /solve reads it as the least-free-action cost of a
+// path. Mirrors `max_excursion` in qucalc_search.py.
+function peakExcursion(history: string): number {
+  let v = 0, h = 0, d = 0, l = 0, m = 0;
+  for (const t of history) {
+    if (t === "^") v++; else if (t === "v") v--;
+    else if (t === ">") h++; else if (t === "<") h--;
+    else if (t === "/") d++; else if (t === "\\") d--;
+    else if (t === "+") l++; else if (t === "-") l--;
+    const e = Math.abs(v) + Math.abs(h) + Math.abs(d) + Math.abs(l);
+    if (e > m) m = e;
+  }
+  return m;
+}
+
+// One concrete continuation supplying exactly the residual action vector
+// (v, h, d, l) — count-balances the history, though its twists may not fold to a
+// Pauli scalar in any order. Used by /solve's residual fallback.
+function residualToTwists(r: readonly number[]): string {
+  const axes: Array<[string, string]> = [["^", "v"], [">", "<"], ["/", "\\"], ["+", "-"]];
+  let s = "";
+  for (let i = 0; i < 4; i++) s += (r[i] >= 0 ? axes[i][0] : axes[i][1]).repeat(Math.abs(r[i]));
+  return s;
+}
+
 // ---------------------------------------------------------------------------
 // Form matrix math for /braket — toMatrix = [[t+z, x−iy],[x+iy, t−z]]
 // ---------------------------------------------------------------------------
@@ -2854,6 +2881,7 @@ function handleCommand(raw: string): string[] {
       sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
       sys("  /coupling [tw …] — was the room's closure shared, or several side by side?");
       sys("  /search [pos]    — the admissible next closures from a QuCalc position (QLF search service)");
+      sys("  /solve [pos]     — pick the one closure the substrate takes (least free action); residual if none");
       sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
       sys("  /dump            — summary of all logic shared this session");
       sys("  /lemma           — list named lemmas");
@@ -3951,6 +3979,182 @@ function handleCommand(raw: string): string[] {
         } finally {
           inRoom(searchCtx, () => {
             if (qpeer && out.length) qpeer.broadcast({ kind: "qlf", cmd: "search", arg: rawArg, lines: out });
+          });
+        }
+      })();
+      break;
+    }
+
+    case "solve": {
+      // The complement of /search. /search renders every way to close from a
+      // position; /solve picks the one the substrate takes and hands you that
+      // path. Selection is a deterministic cascade — least free action first —
+      // so every peer computes the same winner (joiner-local, like /poll). When
+      // nothing closes within reach, it reports the residual: the exact action
+      // vector a completion still owes.
+      const scfg2 = loadSearchConfig();
+      const rawArg2 = arg.trim();
+      const solveTokens = rawArg2 ? rawArg2.split(/\s+/) : [];
+
+      if (solveTokens[0]?.toLowerCase() === "url" || solveTokens[0]?.toLowerCase() === "info") {
+        sys("/solve shares the endpoint with /search — use /search url / /search info");
+        break;
+      }
+      if (!scfg2.url) {
+        sys("no qucalc_search endpoint set — /search url <endpoint> first");
+        break;
+      }
+
+      let showAll = false;
+      let solveNoSave = false;
+      let solveBad = false;
+      const posTokens: string[] = [];
+      for (const t of solveTokens) {
+        if (t === "--all") showAll = true;
+        else if (t === "--no-save") solveNoSave = true;
+        else if (t.startsWith("--")) { sys(`unknown option: ${t}`); solveBad = true; }
+        else posTokens.push(t);
+      }
+      if (solveBad) break;
+
+      const posArg = posTokens.join(" ").trim();
+      let history = "";
+      let label = "";
+      if (posArg) {
+        if (posArg.includes("@")) {
+          const r = expandLemmaRefs(posArg);
+          if (!r) { sys(`unknown lemma: ${firstUnknownRef(posArg) ?? "@?"}  (type /lemma to list)`); break; }
+          const tw = parseSymbolicTwists(r.expanded);
+          if (!tw) { sys(`not a twist string: ${posArg}`); break; }
+          history = twistsToSymbolic(tw); label = posArg;
+        } else if (posArg.startsWith("cap:")) {
+          const tw = tokenTwists(posArg);
+          if (!tw) { sys(`not a capability token: ${posArg}`); break; }
+          history = twistsToSymbolic(tw); label = posArg.slice(0, 20) + "…";
+        } else {
+          const tw = parseSymbolicTwists(posArg);
+          if (!tw) { sys(`not a twist string: ${posArg}  (symbolic ^v<>/\\+- or hex 0-7)`); break; }
+          history = twistsToSymbolic(tw); label = history;
+        }
+      } else {
+        // The room's joint position: peers' latest /qlf-action proposals, in the
+        // order they were put on the table.
+        const entries = [...actionProposals.entries()]
+          .filter(([id]) => id === qpeer?.peerId || peers.has(id))
+          .sort((a, b) => a[1].at - b[1].at);
+        if (entries.length === 0) {
+          sys("/solve: no position to solve");
+          sys("  pass one:  /solve ^v<>   ·   /solve @lemma   ·   /solve cap:…");
+          sys("  or have peers propose histories with /qlf-action, then bare /solve completes the room's joint position");
+          break;
+        }
+        const merged: number[] = [];
+        for (const [, p] of entries) merged.push(...p.twists);
+        history = twistsToSymbolic(new Uint8Array(merged));
+        label = `room (${entries.length} proposal${entries.length === 1 ? "" : "s"})`;
+      }
+
+      const seedTw = parseSymbolicTwists(history);
+      if (!seedTw || seedTw.length === 0) { sys(`nothing to solve from '${history}'`); break; }
+
+      const solveCtx = activeRoom;
+      const sOut: string[] = [];
+      const sSay = (t: string) => { inRoom(solveCtx, () => addMessage("", t, "system")); sOut.push(t); };
+
+      if (achievesZfa(seedTw)) {
+        const st = twistStats(seedTw);
+        sSay(`/solve ${label}: ${history} is already a ZFA closure — no path needed  (${st.pos}+/${st.neg}-)`);
+        inRoom(solveCtx, () => { if (qpeer) qpeer.broadcast({ kind: "qlf", cmd: "solve", arg: rawArg2, lines: sOut }); });
+        break;
+      }
+
+      const resid = signedAction(seedTw).map(x => -x);
+      const floor = resid.reduce((s, x) => s + Math.abs(x), 0);
+      sys(`/solve ${label}  →  ${history}  ·  residual (${resid.join(",")})  ·  floor depth ${floor}  →  ${scfg2.url}…`);
+
+      void (async () => {
+        const SOLVE_CAP = 7;
+        try {
+          // The natural closure depths are `floor` and `floor + 2` (parity);
+          // start there, and only pay for the full depth-7 search if that misses.
+          const first = Math.min(Math.max(floor + 2, 2), SOLVE_CAP);
+          const tries = first < SOLVE_CAP ? [first, SOLVE_CAP] : [SOLVE_CAP];
+          let events: Array<{ history: string; depth: number; phase: string }> = [];
+          let searchedDepth = 0;
+          for (const w of tries) {
+            events = [];
+            const gen = qucalcSearch(scfg2.url, history, { mode: "events", maxDepth: w, limit: 3000, stream: true, listeners: "" });
+            let step: IteratorResult<{ history: string; depth: number; phase: string }, QucalcSearchDone>;
+            while (!(step = await gen.next()).done) {
+              events.push({ history: step.value.history, depth: step.value.depth, phase: step.value.phase });
+            }
+            searchedDepth = step.value.maxDepth || w;
+            if (events.length) break;
+            if (w < SOLVE_CAP) sSay(`  nothing closes at depth ≤ ${w} — widening the horizon…`);
+          }
+
+          if (!events.length) {
+            const reach = searchedDepth || SOLVE_CAP;
+            const need = residualToTwists(resid);
+            sSay(`  ✗ no closure within depth ${reach}`);
+            sSay(`  residual action (v,h,d,l) = (${resid.join(", ")}) — a completion must supply exactly this`);
+            if (floor > reach) {
+              sSay(`  the shortest possible completion is  ${need}  (${need.length} twists, depth ${floor}) — beyond this service's depth-${reach} limit`);
+              sSay(`  → on a path to closure, but a deep one; raise the deployment's --max-depth-cap to reach it`);
+            } else if (need) {
+              sSay(`  it count-balances with  ${need}  (depth ${floor}) but no ordering within depth ${reach} folds to a Pauli scalar`);
+              sSay(`  → no event on a short path from here`);
+            }
+            return;
+          }
+
+          // The cascade: least free action, then economy, then the trivial
+          // phase, then a total order so every peer agrees.
+          const phaseRank = (p: string) => (p === "+1" ? 0 : p === "-1" ? 1 : p === "+i" ? 2 : 3);
+          events.sort((a, b) =>
+            peakExcursion(a.history) - peakExcursion(b.history)
+            || a.depth - b.depth
+            || phaseRank(a.phase) - phaseRank(b.phase)
+            || (a.history < b.history ? -1 : a.history > b.history ? 1 : 0));
+
+          const best = events[0];
+          const bx = peakExcursion(best.history);
+          const bestTw = parseSymbolicTwists(best.history)!;
+          const cont = best.history.slice(history.length);
+          sSay(`  path:  ${cont}  →  ${best.history}`);
+          sSay(`  depth ${best.depth} · phase ${best.phase} · peak excursion ${bx}`
+            + ` · C(${bestTw.length},${bestTw.length / 2}) = ${zfaMultiplicity(bestTw.length / 2).toLocaleString()} arrangements`);
+          sSay(`  of ${events.length} closure${events.length === 1 ? "" : "s"} within depth ${searchedDepth}, the least-free-action path`
+            + ` (min peak excursion, then shortest, then phase +1)`);
+          if (showAll) {
+            sSay(`  ranked:`);
+            for (const e of events.slice(0, 10)) {
+              sSay(`    ${e.history.slice(history.length).padEnd(8)} → ${e.history}   x${peakExcursion(e.history)}  d${e.depth}  [${e.phase}]`);
+            }
+          }
+
+          if (!solveNoSave) {
+            inRoom(solveCtx, () => {
+              const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
+              const already = [...lemmaStore.entries()].find(([, en]) => en.twists === best.history);
+              if (already) { sSay(`  already recorded as @${already[0]}`); return; }
+              let n = nextEventNumber();
+              while (lemmaStore.has(String(n)) || isRetracted("lemma", String(n))) n++;
+              const name = String(n);
+              const cap = lemmaToCapToken(name, bestTw);
+              lemmaStore.set(name, { twists: best.history, who, cap, event: true });
+              saveLemmas();
+              renderLemmas();
+              signedBroadcast({ kind: "sync-lemmas", entries: [{ name, twists: best.history, who, cap, event: true }] });
+              sSay(`  saved @${name}  ·  /lemma @${name} to record it as the solution`);
+            });
+          }
+        } catch (e) {
+          if (e instanceof QucalcContractMismatch) sSay(`  ⚠ ${e.message}`);
+          else sSay(`  ✗ ${(e as Error)?.message ?? e}`);
+        } finally {
+          inRoom(solveCtx, () => {
+            if (qpeer && sOut.length) qpeer.broadcast({ kind: "qlf", cmd: "solve", arg: rawArg2, lines: sOut });
           });
         }
       })();
@@ -7370,7 +7574,7 @@ function send(): void {
     if (cmd !== "help" && cmd !== "dump") {
       sessionLog.push({ who: myName || "you", cmd, arg, summary: lines[0] ?? "" });
     }
-    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn" && cmd !== "search") {
+    if (lines.length > 0 && cmd !== "help" && cmd !== "grant" && cmd !== "lemma" && cmd !== "note" && cmd !== "rdv" && cmd !== "forget" && cmd !== "remove" && cmd !== "retract" && cmd !== "rm" && cmd !== "gov" && cmd !== "dyncap" && cmd !== "probe" && cmd !== "room" && cmd !== "share" && cmd !== "channel" && cmd !== "script" && cmd !== "persist" && cmd !== "rhoqu" && cmd !== "macro" && cmd !== "macros" && cmd !== "rholang" && cmd !== "estimate" && cmd !== "facil" && cmd !== "facilitator" && cmd !== "scribe" && cmd !== "skeptic" && cmd !== "greeter" && cmd !== "password" && cmd !== "login" && cmd !== "name" && cmd !== "render" && cmd !== "animate" && cmd !== "record" && cmd !== "ice" && cmd !== "conn" && cmd !== "search" && cmd !== "solve") {
       qpeer.broadcast({ kind: "qlf", cmd, arg, lines });
     }
     return;

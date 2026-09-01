@@ -76,6 +76,8 @@ export interface SearchDone {
   /** Did the enumeration hit `limit` before exhausting the depth? */
   truncated: boolean;
   mode: SearchMode;
+  /** The depth actually searched, after the deployment's `--max-depth-cap` clamp. */
+  maxDepth: number;
   seeds: string[];
   /** Per-seed closure counts on a concurrent search, else null. */
   perSeed: Record<string, number> | null;
@@ -178,6 +180,7 @@ export async function* qucalcSearch(
             elapsedS: (obj.elapsed_s as number) ?? 0,
             truncated: !!obj.truncated,
             mode: (obj.mode as SearchMode) ?? "possibilities",
+            maxDepth: (obj.max_depth as number) ?? 0,
             seeds: (obj.seeds as string[]) ?? [],
             perSeed: (obj.per_seed as Record<string, number> | null) ?? null,
             listeners: (obj.listeners as Record<string, unknown>) ?? {},

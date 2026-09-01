@@ -55,6 +55,15 @@ Markov-blanket sub-agents, the listeners the room's joint reading
 The rollup (closures per phase, per depth, per horizon) is the cheap score for step 3 when the
 candidates *are* closures.
 
+**Selecting one (`/solve`).** Where `/search` renders the whole possibility space, **`/solve` finds the
+solution, or the path to it** — it picks the single closure the substrate takes and hands you the
+continuation that reaches it. Selection is a deterministic least-free-action cascade (least peak
+excursion → shortest → phase `+1` → lexicographic), so every peer computes the same path with no
+coordinator — the automated form of step 4 for a twist-history problem, where `/facil optimize` is
+step 4 for objectives that aren't twist histories. `/solve` widens the search horizon until something
+closes; when nothing does within reach it returns the **residual** — the exact action a completion
+still owes — rather than a bare failure.
+
 **Let an agent run it for you.** With an AI facilitator in the room (see
 [Running agents](scripts/qos-cli/README.md)), `/facil optimize <objective + constraints>` proposes
 candidate solutions and suggests the next scoring step (`/estimate` or `/poll`); re-run it each round
