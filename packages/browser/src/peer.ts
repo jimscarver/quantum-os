@@ -98,21 +98,54 @@ const LEASE_STALE_MS = 20_000;
  * minting another. Two tabs open at once still differ, because both leases are
  * fresh and only an expired one can be taken.
  */
+/** This browser's dyncap anchor, read straight from the persisted state
+ *  (`qos-dyncap-state`, written by app.ts) so peer.ts needn't import dyncap.ts.
+ *  Null before the identity exists (very first launch) or if storage is off. */
+function myAnchor(): string | null {
+  try {
+    const raw = localStorage.getItem("qos-dyncap-state");
+    if (!raw) return null;
+    const a = (JSON.parse(raw) as { anchor?: unknown }).anchor;
+    return typeof a === "string" && a.length === 64 ? a : null;
+  } catch { return null; }
+}
+
+/** A lease records WHO holds the id, not just when it was last seen: a bare
+ *  timestamp is legacy (pre-anchor-scoping) and read as anchorless. */
+function readLease(raw: string | null): { at: number; anchor: string | null } {
+  if (!raw) return { at: 0, anchor: null };
+  try {
+    const o = JSON.parse(raw) as { at?: unknown; anchor?: unknown };
+    if (o && typeof o.at === "number") return { at: o.at, anchor: typeof o.anchor === "string" ? o.anchor : null };
+  } catch { /* legacy bare number */ }
+  return { at: Number(raw) || 0, anchor: null };
+}
+
 function claimPeerId(): string {
   try {
     const mine = sessionStorage.getItem("qos-peer-id");
     if (mine && validateCapability(mine)) { touchLease(mine); return mine; }
   } catch { /* storage unavailable */ }
 
+  // Reclaim an abandoned id rather than mint a new one — BUT only one this same
+  // identity held. A lease scoped to a different dyncap anchor belongs to a
+  // prior occupant of a recycled id (an identity recovery, a storage clear, an
+  // incognito session that leaked a key): taking it means every peer that
+  // TOFU-pinned that id refuses our signed `name`/`lemma`/… as an anchor
+  // mismatch, and we show up as a permanent hex id. Mint fresh in that case.
+  const anchor = myAnchor();
   let reclaimed: string | null = null;
   try {
     const now = Date.now();
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key?.startsWith(LEASE)) continue;
-      const at = Number(localStorage.getItem(key) ?? 0);
       const id = key.slice(LEASE.length);
-      if (now - at > LEASE_STALE_MS && validateCapability(id)) { reclaimed = id; break; }
+      if (!validateCapability(id)) continue;
+      const lease = readLease(localStorage.getItem(key));
+      if (now - lease.at <= LEASE_STALE_MS) continue;                 // still held
+      if (lease.anchor && anchor && lease.anchor !== anchor) continue; // a different identity's id
+      reclaimed = id; break;
     }
   } catch { /* ignore */ }
 
@@ -123,7 +156,7 @@ function claimPeerId(): string {
 }
 
 function touchLease(id: string): void {
-  try { localStorage.setItem(LEASE + id, String(Date.now())); } catch { /* ignore */ }
+  try { localStorage.setItem(LEASE + id, JSON.stringify({ at: Date.now(), anchor: myAnchor() })); } catch { /* ignore */ }
 }
 
 /// A QuantumOS browser peer.
@@ -243,9 +276,7 @@ export class QOSPeer {
     // Keep saying this id is live, so a tab that goes away stops saying it and
     // the next one can take it back.
     try {
-      this.leaseTimer = setInterval(() => {
-        try { localStorage.setItem(LEASE + this.peerId, String(Date.now())); } catch { /* ignore */ }
-      }, LEASE_TICK_MS);
+      this.leaseTimer = setInterval(() => touchLease(this.peerId), LEASE_TICK_MS);
     } catch { /* no storage, no lease */ }
   }
 
