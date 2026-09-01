@@ -2841,6 +2841,19 @@ function runInput(text: string): string[] {
   return handleCommand(t.startsWith("/") ? t : "/" + t);
 }
 
+/**
+ * In the `/help` list, make the leading `/command` a link to its own detail.
+ * Rendered as a `[/cmd](help:cmd)` markdown link; the click handler on #messages
+ * runs `/help cmd`. Only commands with a `CMD_HELP` entry are linked — the rest
+ * have no detail page to open.
+ */
+function linkifyHelp(line: string): string {
+  return line.replace(/^(\s*)(\/[a-z][a-z-]*)/i, (m, sp: string, tok: string) => {
+    const key = tok.slice(1).toLowerCase();
+    return CMD_HELP[key] ? `${sp}[${tok}](help:${key})` : m;
+  });
+}
+
 function handleCommand(raw: string): string[] {
   const body = raw.slice(1).trim();
   const parts = body.split(/\s+/);
@@ -2864,51 +2877,53 @@ function handleCommand(raw: string): string[] {
         else sys(`no help for '/${topic}' — type /help for the full list`);
         break;
       }
-      sys("QLF slash commands:  (type /help <command> for details on one)");
-      sys("  /help            — show this help");
-      sys("  /id              — your peer ID and ZFA proof");
-      sys("  /name [your name] — set the display name peers see (blank shows it)");
-      sys("  /password [show] — password-protect your identity (+ publish to your groups)");
-      sys("  /login [handle]  — restore a former identity (from a group, or a recovery string)");
-      sys("  /cap [label]     — generate a new ZFA capability");
-      sys("  /grant [label]   — generate and share a ZFA capability token");
-      sys("  /zfa [token]     — validate a capability token");
-      sys("  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)");
-      sys("  /qucalc [twists] — evaluate RhoQuCalc twist sequence");
-      sys("  /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint");
-      sys("  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n");
-      sys("  /qlf-action <tw> — propose a history string for the room to verify");
-      sys("  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)");
-      sys("  /coupling [tw …] — was the room's closure shared, or several side by side?");
-      sys("  /search [pos]    — the admissible next closures from a QuCalc position (QLF search service)");
-      sys("  /solve [pos]     — pick the one closure the substrate takes (least free action); residual if none");
-      sys("  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)");
-      sys("  /dump            — summary of all logic shared this session");
-      sys("  /lemma           — list named lemmas");
-      sys("  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name");
-      sys("  /request <n>     — request @n from whoever holds it");
-      sys("  /pass <n> <peer> — transfer @n directly to a named peer");
-      sys("  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)");
-      sys("  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)");
-      sys("  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list");
-      sys("  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list");
-      sys("  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · uri · say · status");
-      sys("  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)");
-      sys("  /probe [sub]     — discrepancy probe window state (status|clear)");
-      sys("  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)");
-      sys("  /share <sel> to <room>  — bridge a lemma/chat/note into another tab");
-      sys("  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)");
-      sys("  /render          — animate this room (perspectives, closures, groups)");
-      sys("  /script <c1>;…   — sequential command chain (// to skip a segment)");
-      sys("  /persist [sub]   — agreed-replication of public state (@lemma|currency …)");
-      sys("  /rholang locker  — your names and identity on chain: locker · register · bind · resolve · record · grant");
-      sys("  /macro [sub]     — write a +command: define · list · show · find · echo (a body of / commands, or of rholang)");
-      sys("  +name <args>     — run a command somebody here defined (++text to send a literal + line)");
-      sys("  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands");
-      sys("  /rholang <sub>   — run rholang on rnode: eval · deploy · echo · read · status · config (multi-line, end with a blank line)");
-      sys("  @name in args    — expand named lemma (e.g. /qucalc @major @minor)");
-      sys("  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]");
-      sys("  //message        — send a message starting with /");
+      sys("QLF slash commands:  (click a command, or type /help <command>, for details)");
+      for (const l of [
+        "  /help            — show this help",
+        "  /id              — your peer ID and ZFA proof",
+        "  /name [your name] — set the display name peers see (blank shows it)",
+        "  /password [show] — password-protect your identity (+ publish to your groups)",
+        "  /login [handle]  — restore a former identity (from a group, or a recovery string)",
+        "  /cap [label]     — generate a new ZFA capability",
+        "  /grant [label]   — generate and share a ZFA capability token",
+        "  /zfa [token]     — validate a capability token",
+        "  /braket <state>  — evaluate bra-ket (states: 0 1 + - i -i)",
+        "  /qucalc [twists] — evaluate RhoQuCalc twist sequence",
+        "  /conj <twists>   — Hermitian adjoint (reverse + parity-flip); flags self-adjoint",
+        "  /freq [n|twists] — ZFA frequency spectrum; C(2n,n) arrangements at level n",
+        "  /qlf-action <tw> — propose a history string for the room to verify",
+        "  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)",
+        "  /coupling [tw …] — was the room's closure shared, or several side by side?",
+        "  /search [pos]    — the admissible next closures from a QuCalc position (QLF search service)",
+        "  /solve [pos]     — pick the one closure the substrate takes (least free action); residual if none",
+        "  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)",
+        "  /dump            — summary of all logic shared this session",
+        "  /lemma           — list named lemmas",
+        "  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name",
+        "  /request <n>     — request @n from whoever holds it",
+        "  /pass <n> <peer> — transfer @n directly to a named peer",
+        "  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)",
+        "  /rdv [sub]       — n-party atomic rendezvous (swap|accept|reject|abort|list)",
+        "  /poll [sub]      — group vote: new <q> [| seeds] [ranked] · add <opt> · vote · status · lock · close · remove · list",
+        "  /forget <sub>    — remove an item: poll <id> · lemma <name> · note <token|cur denom> · group <name> · list",
+        "  /gov <sub>       — liquid-democracy groups: new · member · issue · delegate · trust · censure · vote · treasury · kudos · uri · say · status",
+        "  /dyncap [sub]    — hash-only dynamic capabilities (status|peers)",
+        "  /probe [sub]     — discrepancy probe window state (status|clear)",
+        "  /room [sub]      — multi-room tabs (list|join <cap>|leave|ref)",
+        "  /share <sel> to <room>  — bridge a lemma/chat/note into another tab",
+        "  /channel [sub]   — tagged messages (listen|unlisten|send <name> <text>|list)",
+        "  /render          — animate this room (perspectives, closures, groups)",
+        "  /script <c1>;…   — sequential command chain (// to skip a segment)",
+        "  /persist [sub]   — agreed-replication of public state (@lemma|currency …)",
+        "  /rholang locker  — your names and identity on chain: locker · register · bind · resolve · record · grant",
+        "  /macro [sub]     — write a +command: define · list · show · find · echo (a body of / commands, or of rholang)",
+        "  +name <args>     — run a command somebody here defined (++text to send a literal + line)",
+        "  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands",
+        "  /rholang <sub>   — run rholang on rnode: eval · deploy · echo · read · status · config (multi-line, end with a blank line)",
+        "  @name in args    — expand named lemma (e.g. /qucalc @major @minor)",
+        "  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]",
+        "  //message        — send a message starting with /",
+      ]) sys(linkifyHelp(l));
       break;
     }
 
@@ -7628,6 +7643,21 @@ copyBtn.addEventListener("click", () => {
 
 hideBtn.addEventListener("click", () => setHideRoom(!hideRoom));
 
+// A `[label](help:cmd)` link anywhere in the transcript (the /help list, mostly)
+// opens that command's detail — same as typing `/help cmd`. Delegated, so it
+// works for lines replayed on a room switch too.
+messagesEl.addEventListener("click", (e) => {
+  const a = (e.target as HTMLElement | null)?.closest?.("a.cmd-link") as HTMLElement | null;
+  if (!a) return;
+  e.preventDefault();
+  const cmd = a.dataset.help;
+  if (!cmd) return;
+  // Straight to handleCommand (not send()) so it works before a connection too —
+  // /help is local and broadcasts nothing.
+  addMessage("", `/help ${cmd}`, "self");
+  handleCommand(`/help ${cmd}`);
+});
+
 function toggleSidebar(open?: boolean): void {
   const isOpen = open ?? !sidebarEl.classList.contains("open");
   sidebarEl.classList.toggle("open", isOpen);
@@ -7662,6 +7692,10 @@ function renderMarkdown(src: string): string {
   });
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  // `[label](help:command)` — an in-app link to a command's detailed help.
+  // The delegated click handler on #messages turns it into `/help command`.
+  s = s.replace(/\[([^\]\n]+)\]\(help:([a-z][a-z-]*)\)/gi,
+    '<a href="#" class="cmd-link" data-help="$2">$1</a>');
   s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g,
