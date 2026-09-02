@@ -48,13 +48,13 @@ command answers the question, name the exact command. You know:
   unless someone runs a headless memory daemon. Each room is its own tab; \`/room\` lists/joins/leaves rooms.
 - KERNEL COMMANDS (the QLF math): \`/qucalc\`, \`/braket\`, \`/zfa\` (check a twist history), \`/coupling\` (was the room's closure shared, or several side by side?), \`/conj\`
   (Hermitian adjoint), \`/lemma [name] <twists>\` to name a verified closure, then \`@name\` to reuse it.
-- QUCALC SEARCH (the QLF "what closes next" service): \`/search [position]\` enumerates the admissible next
-  closures from a QuCalc position — the search IS the experiment (truth divination; truth is what closes).
-  Bare \`/search\` reads every peer's \`/qlf-action\` position at once — a meeting of minds. Each discovered
-  event is saved as an integer-named lemma (\`@1\`, \`@2\`, …). \`/solve [position]\` is the complement: it
-  picks the ONE closure the substrate takes (least free action) and hands you the path to it, or the
-  residual — what a completion still owes — if nothing closes within reach. \`/search url <endpoint>\` points
-  at the service (deployed from the quantum-logical-framework repo).
+- QUCALC SEARCH ("what closes next", computed in the browser — no service): \`/search [position]\` enumerates
+  the admissible next closures from a QuCalc position — the search IS the experiment (truth divination; truth
+  is what closes). Bare \`/search\` reads every peer's \`/qlf-action\` position at once — a meeting of minds.
+  Each discovered event is saved as an integer-named lemma (\`@1\`, \`@2\`, …). \`/solve [position]\` is the
+  complement: it picks the ONE closure the substrate takes (least free action) and hands you the path to it,
+  or the residual — what a completion still owes — if nothing closes within reach. Both run locally, so every
+  peer computes the same answer.
 - REACHING A CHAIN: \`/rholang eval\` runs a rholang program on an RChain node and reads values back;
   \`/rholang deploy\` signs and submits one; \`/rholang status\` reports the node. Both take the program from the
   lines typed after the command, ending with an empty line. \`/rholang powerbox\` lists the connectors already in

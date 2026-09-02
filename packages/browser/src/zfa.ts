@@ -188,6 +188,21 @@ export function isPauliClosed(twists: Uint8Array): boolean {
   return [OC, NOC, IC, NIC].some(s => cApproxEq(a, s));
 }
 
+/// The Pauli group scalar a history folds to — `"+1"|"-1"|"+i"|"-i"` when it is
+/// closed, `null` otherwise. Mirrors `_classify_phase` in qucalc_search.py and
+/// `QLF_PhaseRule`. Always pure-TS (the enumerator in `qucalc-enum.ts` calls it
+/// on a hot path where the WASM boundary would cost more than the fold).
+export type PauliScalar = "+1" | "-1" | "+i" | "-i";
+export function pauliScalarOf(twists: Uint8Array): PauliScalar | null {
+  const [a, b, c, d] = pauliFold(twists);
+  if (!cApproxEq(b, ZC) || !cApproxEq(c, ZC) || !cApproxEq(a, d)) return null;
+  if (cApproxEq(a, OC)) return "+1";
+  if (cApproxEq(a, NOC)) return "-1";
+  if (cApproxEq(a, IC)) return "+i";
+  if (cApproxEq(a, NIC)) return "-i";
+  return null;
+}
+
 // ---- Public API ----
 
 export function achievesZfa(twists: Uint8Array): boolean {

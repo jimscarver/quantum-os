@@ -41,10 +41,11 @@ Five steps, each one an existing room primitive. No new consensus machinery.
 That annealing schedule is the only genuinely new coordination — and a facilitator can run it.
 
 **Rendering the possibility space (`/search`).** When the objective can be posed as a QuCalc
-position — a twist history the room is trying to close — the [QLF QuCalc Search
-service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md)
-enumerates the admissible **next closures** from that position: every twist word you could append
-so the whole history is ZFA-balanced, shortest first. That is the generate step performed by the
+position — a twist history the room is trying to close — the browser enumerates the admissible
+**next closures** from that position: every twist word you could append so the whole history is
+ZFA-balanced, shortest first (`qucalc-enum.ts`, a port of the [QLF
+reference](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md);
+computed locally, no service). That is the generate step performed by the
 substrate rather than by proposal — *the search is the experiment*, **truth divination**: it asks
 which of the a-priori possibilities actually close from here, and in QLF truth is what closes (a
 closure receipt, not a standing proposition). `/search` with no argument co-reads every peer's
