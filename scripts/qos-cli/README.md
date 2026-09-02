@@ -352,7 +352,11 @@ proposes candidates and the next `/estimate`/`/poll` step (needs `--ai`; see
 reports diagnostics for a long-running daemon — uptime, RSS, CPU, signaling/channel
 state, present peers, posts used against the budget, trust standing, and the last
 error. CPU is given both as a lifetime average and as a delta since the previous
-check, because a lifetime average hides a runaway; `/facil off` /
+check, because a lifetime average hides a runaway; `/facil list [n]` dumps the
+room's screen history the agent has seen — chat lines and `/command → result`
+lines, oldest first, `n` in 1..500 (default 25) — as a 1:1 answer to the asker,
+for a peer whose own browser can't scroll back far enough or who joined late (the
+agent's own `/facil …` control chatter is left out); `/facil off` /
 `/facil on` mute and unmute it at runtime. These replies *answer a request*, so they're responsive
 (rate-limited only by a short per-command cooldown) and work even while muted.
 

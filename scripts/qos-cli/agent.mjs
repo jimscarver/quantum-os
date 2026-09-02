@@ -209,6 +209,22 @@ export async function run(args) {
   const joinedAt = new Map();
   const chatLog = [];              // {peer, at} for all chats (rolling)
   const recentMsgs = [];           // {name, text, at} for AI context (rolling)
+  // Screen history for `/<cmd> list [n]` — every chat line and command result the
+  // agent saw, oldest first, bounded by count (NOT time, unlike recentMsgs). A
+  // scribe's whole job is the record; this is the room's scrollback for a peer
+  // whose own browser can't scroll far enough (or joined late).
+  const TRANSCRIPT_MAX = 600;
+  const LIST_DEFAULT = 25, LIST_MAX = 500;
+  const transcript = [];           // {name, text, at}
+  const remember = (name, text) => {
+    const t = String(text ?? "").replace(/\s+/g, " ").trim();
+    if (!t) return;
+    // Control commands addressed to this agent (`/<cmd> …`) and its replies to
+    // them are lookup chatter, not room record — keep them out of the history.
+    if (cmdRe.test(t)) return;
+    transcript.push({ name, text: t.slice(0, 400), at: Date.now() });
+    if (transcript.length > TRANSCRIPT_MAX) transcript.shift();
+  };
   const realName = (n) => (typeof n === "string" && n.trim()) ? n.trim() : null;   // "" / blank ⇒ no name
   const nameOf = (id) => realName(peerNames.get(id)) ?? realName(known[id]?.name) ?? short(id);
   const hasName = (id) => !!(realName(peerNames.get(id)) ?? realName(known[id]?.name));
@@ -325,6 +341,7 @@ export async function run(args) {
     if (overFairShare())             { if (args.verbose) console.log(`${TAG} · held (fair-share): ${text}`); return false; }
     peer.broadcast({ kind: "chat", text });
     postLog.push(now); lastPostAt = now; if (key) cooldown.set(key, now);
+    remember(myName, text);
     console.log(`${TAG} → ${text}`);
     return true;
   }
@@ -335,12 +352,16 @@ export async function run(args) {
     if (key && !cooled(key, cooldownMs)) return false;
     peer.broadcast({ kind: "chat", text });
     postLog.push(Date.now()); lastPostAt = Date.now(); if (key) cooldown.set(key, Date.now());
+    // `ag*` keys are the fixed control replies (presence/help/trust/health/list/
+    // mute) — pure lookup chatter, kept out of the room record. Substantive
+    // replies (ask answers, chair syntheses; key null) are recorded.
+    if (!key || !key.startsWith("ag")) remember(myName, text);
     console.log(`${TAG} ↩ ${text}`);
     return true;
   }
 
   const askHint = advisor.enabled ? "" : " (needs --ai)";
-  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} chair <topic>\`${askHint} (chair a structured deliberation → define · alternatives · evaluate · disagreements · agreements · closure, then record the decision; \`/${CMD} next\`/\`back\`/\`close\`/\`cancel\` to steer) · \`/${CMD} trust\` (my standing) · \`/${CMD} health\` (uptime, peers, budget, CPU) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
+  const helpText = () => `I'm ${myName}, ${role.blurb} Commands: \`/${CMD}\` (am I here?) · \`/${CMD} help\` · \`/${CMD} ask <question>\`${askHint} · \`/${CMD} optimize <problem>\`${askHint} (facilitate an annealing-style optimization round) · \`/${CMD} chair <topic>\`${askHint} (chair a structured deliberation → define · alternatives · evaluate · disagreements · agreements · closure, then record the decision; \`/${CMD} next\`/\`back\`/\`close\`/\`cancel\` to steer) · \`/${CMD} list [n]\` (the room's screen history, oldest→newest — default 25, max 500) · \`/${CMD} trust\` (my standing) · \`/${CMD} health\` (uptime, peers, budget, CPU) · \`/${CMD} off\` / \`/${CMD} on\` (mute/unmute). I'm a full member — \`/gov trust\` me up or \`/gov censure\` me down. About this room (and how to make your own): ${ABOUT_URL}`;
   const statusText = () => `👋 Yes, I'm here — ${myName} (${role.name})${muted ? ` — currently muted (\`/${CMD} on\` to wake me)` : ""}.${standing.governed ? ` Trust ${standing.level}${standing.discredited ? " — stood down" : ` (≤${standing.budget}/5min)`}.` : ""} \`/${CMD} help\` · \`/${CMD} trust\`.`;
   const introText = () => `Hi — I'm ${myName}, ${role.blurb} Say \`/${CMD}\` or \`/${CMD} help\` to reach me${advisor.enabled ? `, or \`/${CMD} ask <q>\` to ask me anything` : ""}. I'm a full room member — \`/gov trust\`/\`/gov censure\` me; \`/${CMD} trust\` shows my standing. About this room: ${ABOUT_URL}`;
   // Self-introduce to a newly-identified human peer, once per peer per run (direct
@@ -530,6 +551,34 @@ export async function run(args) {
       }
       return true;
     };
+    // `/<cmd> list [n]` — the room's screen history, oldest→newest, n in [1,500]
+    // (default 25). A direct answer to the asker (like a presence check), so a
+    // long dump doesn't fill the room; falls back to a broadcast with no route.
+    const listReply = () => {
+      const key = `aglist:${fromId ?? "?"}`;
+      if (!cooled(key, 2_000)) return;
+      cooldown.set(key, Date.now());
+      const nRaw = parseInt((raw.match(/\b(?:list|log|history|transcript)\s+(\d+)/i) ?? [])[1] ?? "", 10);
+      const n = Math.min(Number.isFinite(nRaw) && nRaw > 0 ? nRaw : LIST_DEFAULT, LIST_MAX);
+      const total = transcript.length;
+      if (!total) { reply("📜 nothing recorded yet this session.", null, 0); return; }
+      const slice = transcript.slice(-n);
+      const hhmm = (t) => new Date(t).toTimeString().slice(0, 5);
+      let lines = slice.map((e) => `${hhmm(e.at)} ${e.name}: ${e.text}`);
+      // Stay under the signaling payload cap; drop oldest lines if the dump is huge.
+      let dropped = 0;
+      while (lines.join("\n").length > 55_000 && lines.length > 1) { lines.shift(); dropped++; }
+      const head = `📜 last ${slice.length - dropped} of ${total} line${total === 1 ? "" : "s"}` +
+        (dropped ? ` (${dropped} more trimmed to fit)` : "") + (n < total && !dropped ? `  ·  \`/${CMD} list ${Math.min(total, LIST_MAX)}\` for more` : "") + ":";
+      const txt = head + "\n" + lines.join("\n");
+      if (fromId && peer.send(fromId, { kind: "chat", text: txt })) {
+        postLog.push(Date.now()); lastPostAt = Date.now();
+        console.log(`${TAG} ↩ [list ${slice.length} lines → ${short(fromId)}]`);
+      } else {
+        reply(txt, null, 0);
+      }
+    };
+
     const m = cmdRe.exec(lc);
     if (m) {
       const sub = m[1] ?? "";
@@ -538,6 +587,7 @@ export async function run(args) {
       if (sub === "" || sub === "status" || sub === "here" || sub === "ping") return presenceReply();
       if (sub === "trust" || sub === "standing") { reply(standingText(), "agtrust", 15_000); return true; }
       if (sub === "health" || sub === "diag" || sub === "diagnostics") { reply(healthText(), "aghealth", 15_000); return true; }
+      if (sub === "list" || sub === "log" || sub === "history" || sub === "transcript") { listReply(); return true; }
       if (sub === "ask") { bg(handleAsk(raw.replace(askStripRe, "").trim()), "ask"); return true; }
       if (sub === "optimize" || sub === "opt") { bg(handleOptimize(raw.replace(optStripRe, "").trim()), "optimize"); return true; }
       if (sub === "chair" || sub === "deliberate") { bg(handleChair(raw.replace(chairStripRe, "").trim()), "chair"); return true; }
@@ -676,6 +726,7 @@ export async function run(args) {
         spokeAt.set(from, Date.now());
         chatLog.push({ peer: from, at: Date.now() });
         recentMsgs.push({ name: nameOf(from), text: String(d.text ?? "").slice(0, 280), at: Date.now() });
+        remember(nameOf(from), d.text);
         if (args.verbose) console.log(`[${nameOf(from)}] ${String(d.text).slice(0, 120)}`);
         introduceTo(from);   // covers a human who chats before announcing a name
         if (handleCommand(d.text, from)) break;
@@ -690,11 +741,14 @@ export async function run(args) {
       }
       case "state-discrepancy": bg(surfaceDiscrepancy(d), "discrepancy"); break;
       // Twist-bearing claims the room is about to build on — see checkClaim.
-      case "qlf":
+      case "qlf": {
+        const lines = Array.isArray(d.lines) ? d.lines.join(" · ") : "";
+        remember(nameOf(from), `/${d.cmd ?? "?"}${d.arg ? " " + d.arg : ""}${lines ? " → " + lines : ""}`);
         if (d.cmd === "qlf-action" || d.cmd === "zfa-check") {
           checkClaim(parseTwists(String(d.arg ?? "").trim()), d.cmd === "qlf-action" ? "proposal" : "history");
         }
         break;
+      }
       case "lemma":
         if (typeof d.twists === "string") checkClaim(parseTwists(d.twists), `lemma @${String(d.name ?? "").slice(0, 40)}`);
         break;
