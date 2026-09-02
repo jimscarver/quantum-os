@@ -86,3 +86,10 @@ jobs:
       # asserts which track ends up in the stream a joiner would be given.
       - name: Calls test
         run: node packages/browser/test/calls.test.mjs
+
+      # The local /search + /solve enumerator (#119) — possibilities/events
+      # shapes, the listener rollups, the /solve cascade, and a conformance
+      # block of digests captured from quantum-logical-framework's
+      # qucalc_search.py so the TS port cannot silently drift.
+      - name: QuCalc search test
+        run: node packages/browser/test/qucalc-search.test.mjs

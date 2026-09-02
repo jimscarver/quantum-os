@@ -32,7 +32,7 @@ The room URL encodes a ZFA capability token in the hash (`#room=cap:room:…`). 
 **A QuantumOS room optimizes the way a quantum annealer actually does — by relaxing toward a low-energy consensus, not by "trying every answer at once."** Many minds (human *and* AI) propose candidates in parallel; the room scores them cheaply and **trust-weighted**; a facilitator lowers the "temperature" each round — explore wide early, refine the leader late — until the room settles on a ZFA-balanced closure and records it with `/lemma` + `/persist`. That is a physically faithful metaheuristic: the [Quantum Logical Framework](https://github.com/rchain-community/quantum-logical-framework) says the substrate itself selects by closure / least free action (`ΔF = −log 2` per event), and the room realizes that same selection principle at the *logical* layer where human-meaningful problems live.
 
 - **`/facil optimize <objective + constraints>`** — an AI facilitator runs a round: proposes candidates, suggests the scoring step (`/estimate` or `/poll`), and on the next call refines the leaders (the *anneal*) toward `/probe` → `/lemma`.
-- **`/search [position]`** — the possibility step made literal, and **the search is the experiment**: the [QLF QuCalc Search service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md) enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over — and asks the substrate which of them close from *here* (truth divination; truth is what closes). Bare `/search` runs one enumeration over every peer's position with shared listeners — a **meeting of minds**, the room reading its own possibility space.
+- **`/search [position]`** — the possibility step made literal, and **the search is the experiment**: the browser enumerates the admissible **next closures** from the room's current QuCalc position — the a-priori possibility space the room is annealing over — and asks the substrate which of them close from *here* (truth divination; truth is what closes). A port of the [QLF reference](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md), run locally — no service. Bare `/search` runs one enumeration over every peer's position with shared listeners — a **meeting of minds**, the room reading its own possibility space.
 - **`/solve [position]`** — the selection step: **`/search` renders every way to close; `/solve` finds the solution, or the path to it.** It picks the one closure the substrate takes by a deterministic least-free-action cascade (so every peer agrees), widening the horizon until something closes; on a miss it reports the residual — what a completion still owes.
 - **Why a room, not a QPU:** runs in a browser with nothing to cool; takes the problem in plain language (no lossy QUBO/Ising encoding); handles soft, qualitative, evolving objectives an energy function can't express; and every step is explainable and dyncap-auditable — a trust-weighted decision trail, not a black-box bitstring.
 
@@ -65,7 +65,7 @@ QLF slash commands:
   /qlf-action <tw> — propose a history string for the room to verify
   /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)
   /coupling [tw …] — was the room's closure shared, or several side by side?
-  /search [pos]    — the admissible next closures from a QuCalc position (QLF QuCalc Search)
+  /search [pos]    — the admissible next closures from a QuCalc position (computed locally)
   /solve [pos]     — pick the one closure the substrate takes (least free action); the residual if none
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
@@ -304,9 +304,11 @@ Rust: [`crates/zfa-core/src/coupling.rs`](crates/zfa-core/src/coupling.rs) · ce
 ### `/search [position]` [shared]
 
 The admissible **next closures** from a QuCalc position — the twist words you can
-append so the whole history is a ZFA closure — via the [QLF **QuCalc Search**
-service](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md)
-(deployed from the QLF repo; point `/search url` at the running endpoint).
+append so the whole history is a ZFA closure — **computed in your browser**
+(`qucalc-enum.ts`, a port of the QLF reference
+[`qucalc_search.py`](https://github.com/rchain-community/quantum-logical-framework/blob/main/QucalcSearch.md),
+run in a Web Worker so a deep sweep doesn't hitch the UI). No server, no
+endpoint: every peer runs the same algebra.
 
 **The search is the experiment — truth divination.** It is not a lookup: all
 admissible histories exist *a priori* as pure possibility, and the enumeration is
@@ -324,8 +326,6 @@ literal.
 /search --possibilities     every closure within depth (default is --events: first per branch)
 /search --depth 6 --full    stream every continuation, not just the rollup
 /search --no-save           don't turn the events into lemmas
-/search url https://host:8765   point at the deployed service (no default)
-/search info                the service's contract version and caps
 ```
 
 **Discovered events are kept.** Each new closure an `events` search finds is
@@ -333,9 +333,8 @@ registered as a room **lemma named with an integer** in discovery order (`@1`,
 `@2`, …), so a re-run finds them already known rather than anonymous — the room
 accumulates the truths it has divined. Bounded (default 32 per search, raise with
 `--save-cap N`); `@N` works in any command (`/qucalc @7`), and they sync to peers
-like any lemma. Server-side persistence — the service remembering its own
-closures to speed later searches — is tracked separately in the QLF repo
-([QLF#153](https://github.com/rchain-community/quantum-logical-framework/issues/153)).
+like any lemma. The room's lemma store **is** the closure cache — a re-run finds
+its own past discoveries already named, with no service to hold them.
 
 Default output is a rollup — closures per Pauli phase, per appended-twist depth,
 and per **listening horizon** (`capacity:R` — how many closures a horizon of
@@ -349,10 +348,11 @@ distributed experiment ([QLF_as_Intelligence §8](https://github.com/rchain-comm
 peers as Markov-blanket sub-agents). `capacity:R` gives each peer's reach on the
 *same* census — one possibility structure, heard by horizons of different capacity.
 
-The service is read-only, stateless, and a pure function of the ZFA kernel — it
-holds no room state and nothing sent to it is signed. The client pins its
-contract version and aborts on a mismatch, so an upstream substrate change can't
-silently reshape the data. Client: [`packages/browser/src/qucalc-search.ts`](packages/browser/src/qucalc-search.ts).
+The enumerator is a pure function of the ZFA kernel — it holds no room state and
+nothing leaves your browser. It gates on QLF's per-axis count balance (the signed
+action vector vanishing), matching the reference exactly, not the app's weaker
+aggregate check. Core: [`packages/browser/src/qucalc-enum.ts`](packages/browser/src/qucalc-enum.ts);
+`test/qucalc-search.test.mjs` holds a conformance block against `qucalc_search.py`.
 
 ### `/solve [position]` [shared]
 
@@ -377,11 +377,11 @@ reading, the path an ordinary listening horizon can follow. `/solve` **widens th
 horizon** until something closes. If nothing does within reach, it reports the
 **residual**: the exact action vector `(v,h,d,l)` a completion still owes, a
 concrete continuation that count-balances it, and whether the closure is simply
-deeper than the service's limit or off any short path — *"on a path to closure,
+deeper than the depth-7 horizon or off any short path — *"on a path to closure,
 but a deep one"* rather than a bare failure.
 
 The chosen path is saved as an integer-named lemma (like a `/search` event) and
-broadcast. `/solve` shares the endpoint with `/search`.
+broadcast. Like `/search`, it runs locally — no service.
 
 ### `/grant [label]` [shared]
 Mints a fresh ZFA-balanced capability token with the given label, broadcasts it to all peers, and **automatically registers it as `@label` in your local lemma store** so you can immediately `/pass label peer` without any further setup.

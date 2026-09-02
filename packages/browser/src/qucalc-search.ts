@@ -1,239 +1,185 @@
-// qucalc-search.ts — consume the QLF QuCalc Search service from a browser peer.
+// qucalc-search.ts — "what closes next" from a QuCalc position, computed locally.
 //
-// The service (quantum-logical-framework/qucalc_search.py) answers one question
-// over the QLF substrate:
+// **#119: quantum-os runs no service for this.** `/search` and `/solve` were a
+// thin client over a Render-hosted Python service (`qucalc_search.py`); they now
+// compute in the browser, reusing the ZFA primitives the app already has. The
+// enumeration is cheap (`qucalc-enum.ts`), and every peer computing the same
+// answer from the same algebra is a *stronger* "meeting of minds" than a shared
+// service — the `/solve` determinism no longer depends on a service being up and
+// honest. No endpoint, no HTTP, no contract-version pin.
 //
-//   From this QuCalc position, what are the admissible next closures?
-//
-// Given a twist history `qc` it enumerates the continuations — twist words you
-// can append so the whole history is a ZFA closure (count-balanced ∧
-// Pauli-closed) — shortest first, and streams them as NDJSON.
-//
-// The search is the experiment, not a lookup. All admissible histories exist a
-// priori as possibility; the enumeration asks the substrate which of them close
-// from here (QucalcSearch.md § "What the search is"). `mode: "events"` makes
-// that literal — a closure IS an event, so each branch is reported only at its
-// first closure.
-//
-// The service is read-only, stateless and CORS-open, and holds no room state —
-// it is a pure function of twist_core.py. Nothing here is signed: there is
-// nothing to attribute and nothing to trust beyond the substrate itself.
-//
-// Contract: the service stamps every stream with a `version` on its `_meta`
-// line. CONTRACT_VERSION below is what this client was written against; a
-// mismatch throws loudly rather than reshaping the data silently (qos#117).
+// This module is the async front door: it runs the enumerator in a Web Worker
+// (`qucalc-worker.ts`) so a depth-7 sweep does not hitch the UI, and falls back
+// to running it inline where `Worker` is unavailable (Node, tests). The public
+// shapes — `qucalcSearch` as an async generator yielding `Closure` and
+// returning `SearchDone` — are unchanged from the HTTP-client era so `app.ts`
+// barely moved.
 
-export const CONTRACT_VERSION = "1.0";
+import {
+  runSearch, solvePosition,
+  DEFAULT_MAX_DEPTH, DEFAULT_LIMIT, MAX_DEPTH_CAP, MAX_LIMIT_CAP,
+  type Closure, type SearchMode, type Phase, type SearchReport, type SolveResult,
+} from "./qucalc-enum.js";
 
-const CONFIG_KEY = "qos-qucalc-config";
+export type { Closure, SearchMode, Phase, SolveResult } from "./qucalc-enum.js";
+export {
+  DEFAULT_MAX_DEPTH, DEFAULT_LIMIT, MAX_DEPTH_CAP, MAX_LIMIT_CAP,
+  MIN_ZFA_LENGTH, TWIST_ORDER, maxExcursion, actionOf, residualToTwists,
+} from "./qucalc-enum.js";
 
-export interface QucalcSearchConfig {
-  /** Base URL of the deployed qucalc_search service, e.g. `https://host:8765`.
-   *  Defaults to the public Render deployment (see the QLF repo's render.yaml);
-   *  `/search url <endpoint>` overrides it per browser. */
-  url: string;
-}
-
-/** The public qucalc_search deployment — a Render web service built from
- *  `render.yaml` in the quantum-logical-framework repo. Free plan: sleeps after
- *  ~15 min idle, ~50 s cold start, then sub-second. Override for a local
- *  service with `/search url http://…` (only reachable from a non-https page or
- *  a same-origin proxy — same mixed-content wall as rnode). */
-export const DEFAULT_SEARCH_URL = "https://quantum-os-qucalc-search.onrender.com";
-
-export const DEFAULT_SEARCH_CONFIG: QucalcSearchConfig = { url: DEFAULT_SEARCH_URL };
-
-export function loadSearchConfig(): QucalcSearchConfig {
-  try {
-    const raw = localStorage.getItem(CONFIG_KEY);
-    if (!raw) return { ...DEFAULT_SEARCH_CONFIG };
-    return { ...DEFAULT_SEARCH_CONFIG, ...(JSON.parse(raw) as Partial<QucalcSearchConfig>) };
-  } catch {
-    return { ...DEFAULT_SEARCH_CONFIG };
-  }
-}
-
-export function saveSearchConfig(cfg: QucalcSearchConfig): void {
-  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg)); } catch { /* private mode */ }
-}
-
-// --------------------------------------------------------------------------- //
-
-export type Phase = "+1" | "-1" | "+i" | "-i";
-export type SearchMode = "possibilities" | "events";
-
-/** One admissible next closure. */
-export interface Closure {
-  /** The twist word appended to `qc`. */
-  cont: string;
-  /** The full closed history (`qc + cont`). */
-  history: string;
-  len: number;
-  /** Appended twist count. */
-  depth: number;
-  /** The Pauli scalar the whole history folds to (always ±1 for a balanced seed). */
-  phase: Phase;
-  /** Which seed this closure came from — present only on a concurrent search. */
-  qc?: string;
-}
-
-/** The `_done` rollup that ends every stream. */
-export interface SearchDone {
-  found: number;
-  elapsedS: number;
-  /** Did the enumeration hit `limit` before exhausting the depth? */
-  truncated: boolean;
-  mode: SearchMode;
-  /** The depth actually searched, after the deployment's `--max-depth-cap` clamp. */
-  maxDepth: number;
-  seeds: string[];
-  /** Per-seed closure counts on a concurrent search, else null. */
-  perSeed: Record<string, number> | null;
-  /** Listener reports, keyed by listener name (`count` is always present). */
-  listeners: Record<string, unknown>;
-}
+/** The `_done` rollup that ends a search. Alias of the enumerator's report. */
+export type SearchDone = SearchReport;
 
 export interface SearchOpts {
-  /** Max appended twists (service clamps to its `--max-depth-cap`). */
+  /** Max appended twists (clamped to `MAX_DEPTH_CAP`). */
   maxDepth?: number;
-  /** Stop after this many closures (service clamps to 100 000). */
-  limit?: number;
+  /** Stop after this many closures (clamped to `MAX_LIMIT_CAP`); `null` = no limit. */
+  limit?: number | null;
   /** `possibilities` (every closure) or `events` (first closure per branch). */
   mode?: SearchMode;
   /** Rollup spec, e.g. `"phase,depth,capacity:2,capacity:3,head:20"`. */
   listeners?: string;
-  /** `false` suppresses the per-closure lines — only the `_done` rollup comes back. */
-  stream?: boolean;
+  /** Abort the run (terminates the worker). */
   signal?: AbortSignal;
 }
 
-/** Thrown when the service's contract version is not the one this client expects. */
-export class QucalcContractMismatch extends Error {
-  constructor(public serviceVersion: string) {
-    super(
-      `qucalc_search contract is "${serviceVersion}", this client expects "${CONTRACT_VERSION}" — ` +
-      `a substrate change may have reshaped the data; update packages/browser/src/qucalc-search.ts ` +
-      `before trusting the results`,
-    );
-    this.name = "QucalcContractMismatch";
+// --------------------------------------------------------------------------- //
+// worker plumbing
+
+type WorkerFactory = () => Worker;
+
+let makeWorker: WorkerFactory | null = null;
+try {
+  if (typeof Worker !== "undefined") {
+    makeWorker = () =>
+      new Worker(new URL("./qucalc-worker.ts", import.meta.url), { type: "module" });
   }
+} catch {
+  makeWorker = null;
 }
 
-/**
- * Stream the admissible next closures from a QuCalc position.
- *
- * `qc` may be a single history or an array — an array is a concurrent search
- * over several seeds (peers' individual positions), with the listeners
- * aggregating across all of them and each `Closure` carrying its `qc`.
- *
- * Yields `Closure` objects shortest-first; returns the final `SearchDone`.
- * Aborting the `signal` (or `.return()`ing the generator) closes the socket and
- * the service stops enumerating.
- */
-export async function* qucalcSearch(
-  base: string,
-  qc: string | string[],
-  opts: SearchOpts = {},
-): AsyncGenerator<Closure, SearchDone> {
-  if (!base) {
-    throw new Error("no qucalc_search endpoint — set one with /search url <endpoint>");
-  }
-  const u = new URL("/search", base);
-  u.searchParams.set("qc", Array.isArray(qc) ? qc.join(",") : qc);
-  if (opts.maxDepth != null) u.searchParams.set("max_depth", String(opts.maxDepth));
-  if (opts.limit != null) u.searchParams.set("limit", String(opts.limit));
-  if (opts.mode) u.searchParams.set("mode", opts.mode);
-  if (opts.listeners) u.searchParams.set("listeners", opts.listeners);
-  if (opts.stream === false) u.searchParams.set("stream", "0");
+let nextId = 1;
 
-  let res: Response;
-  try {
-    res = await fetch(u, { signal: opts.signal });
-  } catch (e) {
-    if ((e as Error)?.name === "AbortError") throw e;
-    throw new Error(`qucalc_search unreachable at ${base} — ${(e as Error)?.message ?? e}`);
-  }
-  if (!res.ok) {
-    let msg = String(res.status);
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not JSON */ }
-    throw new Error(`qucalc_search ${res.status}: ${msg}`);
-  }
-  if (!res.body) throw new Error("qucalc_search: response had no body to stream");
+interface SearchRequest {
+  kind: "search";
+  seeds: string[];
+  opts: { maxDepth?: number; limit?: number | null; mode?: SearchMode; listeners?: string; minTotalLen?: number };
+}
+interface SolveRequest {
+  kind: "solve";
+  qc: string;
+  opts: { maxDepth?: number; minTotalLen?: number };
+  shortlist?: boolean;
+}
 
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buf = "";
-  let sawMeta = false;
-  let done: SearchDone | null = null;
-  try {
-    for (;;) {
-      const { value, done: end } = await reader.read();
-      if (end) break;
-      buf += value;
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const obj = JSON.parse(line) as Record<string, unknown>;
-        if (obj._meta) {
-          sawMeta = true;
-          if (obj.version !== CONTRACT_VERSION) {
-            throw new QucalcContractMismatch(String(obj.version));
-          }
-          continue;
-        }
-        if (obj._done) {
-          done = {
-            found: (obj.found as number) ?? 0,
-            elapsedS: (obj.elapsed_s as number) ?? 0,
-            truncated: !!obj.truncated,
-            mode: (obj.mode as SearchMode) ?? "possibilities",
-            maxDepth: (obj.max_depth as number) ?? 0,
-            seeds: (obj.seeds as string[]) ?? [],
-            perSeed: (obj.per_seed as Record<string, number> | null) ?? null,
-            listeners: (obj.listeners as Record<string, unknown>) ?? {},
-          };
-          continue;
-        }
-        yield obj as unknown as Closure;
+/** Run one request on a fresh worker, streaming `onBatch` and resolving with the
+ *  terminal message. Rejects on worker error or abort. */
+function runOnWorker(
+  req: SearchRequest | SolveRequest,
+  onBatch: ((cs: Closure[]) => void) | null,
+  signal?: AbortSignal,
+): Promise<{ done?: SearchReport; result?: SolveResult }> {
+  return new Promise((resolve, reject) => {
+    const w = makeWorker!();
+    const id = nextId++;
+    const cleanup = () => {
+      w.terminate();
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => { cleanup(); reject(new DOMException("aborted", "AbortError")); };
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort);
+
+    w.onmessage = (ev: MessageEvent) => {
+      const m = ev.data;
+      if (m.id !== id) return;
+      if (m.error) { cleanup(); reject(new Error(m.error)); return; }
+      if (m.batch) { onBatch?.(m.batch as Closure[]); return; }
+      if (m.done) { cleanup(); resolve({ done: m.done as SearchReport }); return; }
+      if (m.result !== undefined) {
+        cleanup();
+        resolve({ result: m.result as SolveResult });
       }
-    }
-  } finally {
-    void reader.cancel().catch(() => {});
-  }
-  if (!sawMeta) {
-    throw new Error("qucalc_search: stream ended before the _meta line — is this the search service?");
-  }
-  if (!done) {
-    throw new Error("qucalc_search: stream ended before the _done line — response was truncated");
-  }
-  return done;
+    };
+    w.onerror = (e) => { cleanup(); reject(new Error(e.message || "qucalc worker crashed")); };
+    w.postMessage({ id, ...req });
+  });
 }
 
 // --------------------------------------------------------------------------- //
+// public API
 
-export interface ServiceInfo {
-  service: string;
-  version: string;
-  caps: { max_depth: number; max_limit: number };
-  alphabet: string[];
-  listeners?: string[];
-  /** Set by `qucalcSearchInfo` when the reported version is not CONTRACT_VERSION. */
-  contractMismatch?: boolean;
+/**
+ * Enumerate the admissible next closures from a QuCalc position.
+ *
+ * `qc` may be a single history or an array — an array is a concurrent search
+ * over several seeds (peers' positions) with the listeners aggregating across
+ * all of them and each `Closure` carrying its `qc`.
+ *
+ * Yields `Closure` objects shortest-first; returns the final `SearchDone`.
+ */
+export async function* qucalcSearch(
+  qc: string | string[],
+  opts: SearchOpts = {},
+): AsyncGenerator<Closure, SearchDone> {
+  const seeds = Array.isArray(qc) ? qc : [qc];
+  if (!seeds.length || seeds.some(s => !s)) {
+    throw new Error("qucalcSearch: no position to search from");
+  }
+  const maxDepth = clamp(opts.maxDepth ?? DEFAULT_MAX_DEPTH, 1, MAX_DEPTH_CAP);
+  const limit = opts.limit === undefined
+    ? DEFAULT_LIMIT
+    : opts.limit === null ? null : clamp(opts.limit, 1, MAX_LIMIT_CAP);
+  const runOpts = { maxDepth, limit, mode: opts.mode ?? "possibilities", listeners: opts.listeners ?? "" };
+
+  if (!makeWorker) {
+    // Inline fallback — blocks, but only where there is no Worker (Node/tests).
+    const gen = runSearch(seeds, runOpts);
+    let step = gen.next();
+    while (!step.done) {
+      if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
+      yield step.value;
+      step = gen.next();
+    }
+    return step.value;
+  }
+
+  // Worker path: buffer batches into a queue the generator drains.
+  const queue: Closure[] = [];
+  let done: SearchReport | null = null;
+  let err: unknown = null;
+  let wake: (() => void) | null = null;
+  const bump = () => { wake?.(); wake = null; };
+
+  const p = runOnWorker({ kind: "search", seeds, opts: runOpts }, (cs) => { queue.push(...cs); bump(); }, opts.signal)
+    .then(r => { done = r.done!; })
+    .catch(e => { err = e; })
+    .finally(bump);
+
+  for (;;) {
+    while (queue.length) yield queue.shift()!;
+    if (err) throw err;
+    if (done) { await p; return done; }
+    await new Promise<void>(r => { wake = r; });
+  }
 }
 
-/** Probe `GET /` — the service's version and per-deployment caps. */
-export async function qucalcSearchInfo(base: string, signal?: AbortSignal): Promise<ServiceInfo> {
-  if (!base) throw new Error("no qucalc_search endpoint — set one with /search url <endpoint>");
-  let res: Response;
-  try {
-    res = await fetch(new URL("/", base), { signal });
-  } catch (e) {
-    if ((e as Error)?.name === "AbortError") throw e;
-    throw new Error(`qucalc_search unreachable at ${base} — ${(e as Error)?.message ?? e}`);
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+/** The one closure the substrate takes from `qc` — least free action — or the
+ *  residual a completion still owes. Deterministic, so every peer agrees.
+ *  `withShortlist` also returns the ranked runners-up on `result.shortlist`. */
+export async function qucalcSolve(
+  qc: string,
+  opts: { maxDepth?: number; withShortlist?: boolean; signal?: AbortSignal } = {},
+): Promise<SolveResult> {
+  const runOpts = { maxDepth: clamp(opts.maxDepth ?? MAX_DEPTH_CAP, 1, MAX_DEPTH_CAP) };
+  if (!makeWorker) {
+    return solvePosition(qc, { ...runOpts, withShortlist: opts.withShortlist });
   }
-  if (!res.ok) throw new Error(`qucalc_search ${res.status}`);
-  const info = (await res.json()) as ServiceInfo;
-  info.contractMismatch = info.version !== CONTRACT_VERSION;
-  return info;
+  const r = await runOnWorker(
+    { kind: "solve", qc, opts: runOpts, shortlist: opts.withShortlist }, null, opts.signal);
+  return r.result!;
 }

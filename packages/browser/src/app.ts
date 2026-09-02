@@ -46,8 +46,7 @@ import { loadConfig as loadNodeConfig, saveConfig as saveNodeConfig, describeCon
          readResults, readName, deployFate, wrapProgram, powerboxNames, powerboxSpec,
          registryUriOf, powerboxUsed, DEFAULT_CONFIG as DEFAULT_NODE_CONFIG,
          readResult, syncResultNonce, type NodeConfig } from "./rholang.js";
-import { qucalcSearch, qucalcSearchInfo, loadSearchConfig, saveSearchConfig, DEFAULT_SEARCH_URL,
-         CONTRACT_VERSION as QUCALC_CONTRACT_VERSION, QucalcContractMismatch,
+import { qucalcSearch, qucalcSolve,
          type SearchDone as QucalcSearchDone } from "./qucalc-search.js";
 
 // ---------------------------------------------------------------------------
@@ -2894,7 +2893,7 @@ function handleCommand(raw: string): string[] {
         "  /qlf-action <tw> — propose a history string for the room to verify",
         "  /zfa-check <tw>  — verify ZFA closure locally (count-balanced ∧ pauli-closed)",
         "  /coupling [tw …] — was the room's closure shared, or several side by side?",
-        "  /search [pos]    — the admissible next closures from a QuCalc position (QLF search service)",
+        "  /search [pos]    — the admissible next closures from a QuCalc position (computed locally)",
         "  /solve [pos]     — pick the one closure the substrate takes (least free action); residual if none",
         "  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)",
         "  /dump            — summary of all logic shared this session",
@@ -3767,65 +3766,24 @@ function handleCommand(raw: string): string[] {
     }
 
     case "search": {
-      // The QLF QuCalc Search service (quantum-logical-framework/qucalc_search.py,
-      // QucalcSearch.md, qos#117): from a QuCalc position, the admissible next
-      // closures. The search is the room's shared experiment — it asks the
+      // "What closes next" from a QuCalc position — the admissible next closures
+      // (twist words you can append so the whole history is a ZFA closure),
+      // shortest first. #119: computed in the browser (qucalc-enum.ts, ported
+      // from quantum-logical-framework/qucalc_search.py, run in a Web Worker) —
+      // no service, no endpoint. The search IS the experiment: it asks the
       // substrate which a-priori possibilities close from here, not a lookup.
-      // Read-only and unsigned: the service holds no room state and is a pure
-      // function of twist_core.py. Its result IS broadcast to the room (the
-      // "meeting of minds" — peers' positions co-read through one set of
-      // listeners), so /search is excluded from the generic qlf rebroadcast and
-      // sends its own envelope when the async search completes.
-      const scfg = loadSearchConfig();
+      // Its result is broadcast to the room (the "meeting of minds" — peers'
+      // positions co-read through one set of listeners), so /search is excluded
+      // from the generic qlf rebroadcast and sends its own envelope when the
+      // async enumeration completes.
       const rawArg = arg.trim();
       const tokens = rawArg ? rawArg.split(/\s+/) : [];
       const sub = (tokens[0] ?? "").toLowerCase();
 
-      if (sub === "url") {
-        const u = tokens.slice(1).join(" ").trim();
-        if (!u) {
-          const isDefault = scfg.url === DEFAULT_SEARCH_URL;
-          sys(scfg.url
-            ? `qucalc_search endpoint: ${scfg.url}${isDefault ? "  (default)" : "  (override — /search url reset restores the default)"}`
-            : "no qucalc_search endpoint set");
-          sys(`  default is ${DEFAULT_SEARCH_URL}  (public Render deployment)`);
-          sys("  override with /search url <endpoint>   (e.g. a local  python3 qucalc_search.py --serve )");
-          break;
-        }
-        if (u.toLowerCase() === "reset" || u.toLowerCase() === "default") {
-          saveSearchConfig({ ...scfg, url: DEFAULT_SEARCH_URL });
-          sys(`✓ qucalc_search endpoint reset to the default  ${DEFAULT_SEARCH_URL}`);
-          break;
-        }
-        try { new URL(u); } catch { sys(`not a URL: ${u}`); break; }
-        const clean = u.replace(/\/+$/, "");
-        saveSearchConfig({ ...scfg, url: clean });
-        sys(`✓ qucalc_search endpoint set to ${clean}`);
-        break;
-      }
-
-      if (!scfg.url) {
-        sys("no qucalc_search endpoint set — /search url <endpoint> first");
-        sys("  the service is  python3 qucalc_search.py --serve  in quantum-logical-framework");
-        break;
-      }
-
-      if (sub === "info" || sub === "status") {
-        sys(`asking ${scfg.url}…`);
-        const infoCtx = activeRoom;
-        void (async () => {
-          const line = (t: string) => inRoom(infoCtx, () => addMessage("", t, "system"));
-          try {
-            const info = await qucalcSearchInfo(scfg.url);
-            line(`✓ ${info.service} ${info.version}`
-              + (info.contractMismatch ? `  ⚠ this client expects ${QUCALC_CONTRACT_VERSION}` : ""));
-            line(`  caps: max_depth ${info.caps?.max_depth} · max_limit ${info.caps?.max_limit}`);
-            if (info.alphabet) line(`  alphabet: ${info.alphabet.join(" ")}`);
-            if (info.listeners) line(`  listeners: ${info.listeners.join(", ")}`);
-          } catch (e) {
-            line(`✗ ${(e as Error)?.message ?? e}`);
-          }
-        })();
+      if (sub === "url" || sub === "info" || sub === "status") {
+        sys("/search runs locally now — there is no endpoint to configure (qos#119)");
+        sys("  the enumerator is packages/browser/src/qucalc-enum.ts, a port of");
+        sys("  quantum-logical-framework/qucalc_search.py — the same algebra on every peer");
         break;
       }
 
@@ -3909,16 +3867,16 @@ function handleCommand(raw: string): string[] {
       const posDesc = seeds.length === 1
         ? seeds[0]
         : `${seeds.length} positions (${seedLabels.join(" , ")})`;
-      sys(`/search ${mode} from ${posDesc} → ${scfg.url}…`);
+      sys(`/search ${mode} from ${posDesc} …`);
 
       void (async () => {
         try {
-          const gen = qucalcSearch(scfg.url, seeds.length === 1 ? seeds[0] : seeds, {
-            // Saving needs the events streamed; keep the request bounded so a
-            // deep search can't stall on tens of thousands of lines.
+          const gen = qucalcSearch(seeds.length === 1 ? seeds[0] : seeds, {
+            // Saving needs the events streamed; keep the run bounded so a deep
+            // search can't stall on tens of thousands of lines.
             maxDepth,
-            limit: limit ?? (save ? Math.max(EVENT_LEMMA_CAP * 6, 128) : undefined),
-            mode, listeners, stream: full || save,
+            limit: limit ?? (save ? Math.max(EVENT_LEMMA_CAP * 6, 128) : null),
+            mode, listeners,
           });
           say(`from ${posDesc} · ${mode}`);
           let shown = 0;
@@ -3949,7 +3907,7 @@ function handleCommand(raw: string): string[] {
                 if (saved >= EVENT_LEMMA_CAP) break;
                 if (known.has(hist)) { dup++; continue; }
                 const tw = parseSymbolicTwists(hist);
-                if (!tw || !achievesZfa(tw)) continue;   // service shouldn't return these; be safe
+                if (!tw || !achievesZfa(tw)) continue;   // enumerator gates on the stronger QLF predicate; be safe
                 while (lemmaStore.has(String(n)) || isRetracted("lemma", String(n))) n++;
                 const name = String(n);
                 const cap = lemmaToCapToken(name, tw);
@@ -3997,8 +3955,7 @@ function handleCommand(raw: string): string[] {
             say(`  next: ${hd.conts.slice(0, 20).join("  ")}`);
           }
         } catch (e) {
-          if (e instanceof QucalcContractMismatch) say(`  ⚠ ${e.message}`);
-          else say(`  ✗ ${(e as Error)?.message ?? e}`);
+          say(`  ✗ ${(e as Error)?.message ?? e}`);
         } finally {
           inRoom(searchCtx, () => {
             if (qpeer && out.length) qpeer.broadcast({ kind: "qlf", cmd: "search", arg: rawArg, lines: out });
@@ -4012,19 +3969,15 @@ function handleCommand(raw: string): string[] {
       // The complement of /search. /search renders every way to close from a
       // position; /solve picks the one the substrate takes and hands you that
       // path. Selection is a deterministic cascade — least free action first —
-      // so every peer computes the same winner (joiner-local, like /poll). When
-      // nothing closes within reach, it reports the residual: the exact action
-      // vector a completion still owes.
-      const scfg2 = loadSearchConfig();
+      // so every peer computes the same winner (joiner-local, like /poll).
+      // #119: computed locally (qucalc-enum.ts, in a worker). When nothing
+      // closes within reach, it reports the residual: the exact action vector a
+      // completion still owes.
       const rawArg2 = arg.trim();
       const solveTokens = rawArg2 ? rawArg2.split(/\s+/) : [];
 
       if (solveTokens[0]?.toLowerCase() === "url" || solveTokens[0]?.toLowerCase() === "info") {
-        sys("/solve shares the endpoint with /search — use /search url / /search info");
-        break;
-      }
-      if (!scfg2.url) {
-        sys("no qucalc_search endpoint set — /search url <endpoint> first");
+        sys("/solve runs locally now — there is no endpoint (qos#119)");
         break;
       }
 
@@ -4084,74 +4037,44 @@ function handleCommand(raw: string): string[] {
       const sOut: string[] = [];
       const sSay = (t: string) => { inRoom(solveCtx, () => addMessage("", t, "system")); sOut.push(t); };
 
-      if (achievesZfa(seedTw)) {
-        const st = twistStats(seedTw);
-        sSay(`/solve ${label}: ${history} is already a ZFA closure — no path needed  (${st.pos}+/${st.neg}-)`);
-        inRoom(solveCtx, () => { if (qpeer) qpeer.broadcast({ kind: "qlf", cmd: "solve", arg: rawArg2, lines: sOut }); });
-        break;
-      }
-
       const resid = signedAction(seedTw).map(x => -x);
       const floor = resid.reduce((s, x) => s + Math.abs(x), 0);
-      sys(`/solve ${label}  →  ${history}  ·  residual (${resid.join(",")})  ·  floor depth ${floor}  →  ${scfg2.url}…`);
+      sys(`/solve ${label}  →  ${history}  ·  residual (${resid.join(",")})  ·  floor depth ${floor} …`);
 
       void (async () => {
-        const SOLVE_CAP = 7;
         try {
-          // The natural closure depths are `floor` and `floor + 2` (parity);
-          // start there, and only pay for the full depth-7 search if that misses.
-          const first = Math.min(Math.max(floor + 2, 2), SOLVE_CAP);
-          const tries = first < SOLVE_CAP ? [first, SOLVE_CAP] : [SOLVE_CAP];
-          let events: Array<{ history: string; depth: number; phase: string }> = [];
-          let searchedDepth = 0;
-          for (const w of tries) {
-            events = [];
-            const gen = qucalcSearch(scfg2.url, history, { mode: "events", maxDepth: w, limit: 3000, stream: true, listeners: "" });
-            let step: IteratorResult<{ history: string; depth: number; phase: string }, QucalcSearchDone>;
-            while (!(step = await gen.next()).done) {
-              events.push({ history: step.value.history, depth: step.value.depth, phase: step.value.phase });
-            }
-            searchedDepth = step.value.maxDepth || w;
-            if (events.length) break;
-            if (w < SOLVE_CAP) sSay(`  nothing closes at depth ≤ ${w} — widening the horizon…`);
+          const r = await qucalcSolve(history, { withShortlist: showAll });
+
+          if (r.solved && r.alreadyClosed) {
+            const st = twistStats(seedTw);
+            sSay(`/solve ${label}: ${history} is already a ZFA closure — no path needed  (${st.pos}+/${st.neg}-)`);
+            return;
           }
 
-          if (!events.length) {
-            const reach = searchedDepth || SOLVE_CAP;
-            const need = residualToTwists(resid);
+          if (!r.solved) {
+            const reach = r.searchedDepth;
             sSay(`  ✗ no closure within depth ${reach}`);
-            sSay(`  residual action (v,h,d,l) = (${resid.join(", ")}) — a completion must supply exactly this`);
-            if (floor > reach) {
-              sSay(`  the shortest possible completion is  ${need}  (${need.length} twists, depth ${floor}) — beyond this service's depth-${reach} limit`);
-              sSay(`  → on a path to closure, but a deep one; raise the deployment's --max-depth-cap to reach it`);
-            } else if (need) {
-              sSay(`  it count-balances with  ${need}  (depth ${floor}) but no ordering within depth ${reach} folds to a Pauli scalar`);
+            sSay(`  residual action (v,h,d,l) = (${r.residual.join(", ")}) — a completion must supply exactly this`);
+            if (r.reason === "beyond max_depth" && r.completion) {
+              sSay(`  the shortest possible completion is  ${r.completion}  (${r.completion.length} twists, depth ${r.floorDepth}) — beyond the depth-${reach} horizon`);
+              sSay(`  → on a path to closure, but a deep one`);
+            } else if (r.completion) {
+              sSay(`  it count-balances with  ${r.completion}  (depth ${r.floorDepth}) but no ordering within depth ${reach} folds to a Pauli scalar`);
               sSay(`  → no event on a short path from here`);
             }
             return;
           }
 
-          // The cascade: least free action, then economy, then the trivial
-          // phase, then a total order so every peer agrees.
-          const phaseRank = (p: string) => (p === "+1" ? 0 : p === "-1" ? 1 : p === "+i" ? 2 : 3);
-          events.sort((a, b) =>
-            peakExcursion(a.history) - peakExcursion(b.history)
-            || a.depth - b.depth
-            || phaseRank(a.phase) - phaseRank(b.phase)
-            || (a.history < b.history ? -1 : a.history > b.history ? 1 : 0));
-
-          const best = events[0];
-          const bx = peakExcursion(best.history);
-          const bestTw = parseSymbolicTwists(best.history)!;
-          const cont = best.history.slice(history.length);
-          sSay(`  path:  ${cont}  →  ${best.history}`);
-          sSay(`  depth ${best.depth} · phase ${best.phase} · peak excursion ${bx}`
-            + ` · C(${bestTw.length},${bestTw.length / 2}) = ${zfaMultiplicity(bestTw.length / 2).toLocaleString()} arrangements`);
-          sSay(`  of ${events.length} closure${events.length === 1 ? "" : "s"} within depth ${searchedDepth}, the least-free-action path`
+          const bestTw = parseSymbolicTwists(r.history)!;
+          const cont = r.cont;
+          sSay(`  path:  ${cont}  →  ${r.history}`);
+          sSay(`  depth ${r.depth} · phase ${r.phase} · peak excursion ${r.peakExcursion}`
+            + ` · C(${bestTw.length},${bestTw.length / 2}) = ${r.arrangements.toLocaleString()} arrangements`);
+          sSay(`  of ${r.considered} closure${r.considered === 1 ? "" : "s"} within depth ${r.searchedDepth}, the least-free-action path`
             + ` (min peak excursion, then shortest, then phase +1)`);
-          if (showAll) {
+          if (showAll && r.shortlist && r.shortlist.length) {
             sSay(`  ranked:`);
-            for (const e of events.slice(0, 10)) {
+            for (const e of r.shortlist.slice(0, 10)) {
               sSay(`    ${e.history.slice(history.length).padEnd(8)} → ${e.history}   x${peakExcursion(e.history)}  d${e.depth}  [${e.phase}]`);
             }
           }
@@ -4159,22 +4082,21 @@ function handleCommand(raw: string): string[] {
           if (!solveNoSave) {
             inRoom(solveCtx, () => {
               const who = myName || (qpeer ? shortId(qpeer.peerId) : "local");
-              const already = [...lemmaStore.entries()].find(([, en]) => en.twists === best.history);
+              const already = [...lemmaStore.entries()].find(([, en]) => en.twists === r.history);
               if (already) { sSay(`  already recorded as @${already[0]}`); return; }
               let n = nextEventNumber();
               while (lemmaStore.has(String(n)) || isRetracted("lemma", String(n))) n++;
               const name = String(n);
               const cap = lemmaToCapToken(name, bestTw);
-              lemmaStore.set(name, { twists: best.history, who, cap, event: true });
+              lemmaStore.set(name, { twists: r.history, who, cap, event: true });
               saveLemmas();
               renderLemmas();
-              signedBroadcast({ kind: "sync-lemmas", entries: [{ name, twists: best.history, who, cap, event: true }] });
+              signedBroadcast({ kind: "sync-lemmas", entries: [{ name, twists: r.history, who, cap, event: true }] });
               sSay(`  saved @${name}  ·  /lemma @${name} to record it as the solution`);
             });
           }
         } catch (e) {
-          if (e instanceof QucalcContractMismatch) sSay(`  ⚠ ${e.message}`);
-          else sSay(`  ✗ ${(e as Error)?.message ?? e}`);
+          sSay(`  ✗ ${(e as Error)?.message ?? e}`);
         } finally {
           inRoom(solveCtx, () => {
             if (qpeer && sOut.length) qpeer.broadcast({ kind: "qlf", cmd: "solve", arg: rawArg2, lines: sOut });
