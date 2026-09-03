@@ -18,7 +18,19 @@ import { RTCPeerConnection } from "werift";
 import { generateCapability, validateCapability } from "./zfa.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
-const ICE = [{ urls: "stun:stun.l.google.com:19302" }];
+const DEFAULT_STUN = "stun:stun.l.google.com:19302";
+
+// Build the ICE server list from --stun / --turn flags (mirrors the browser's
+// /ice command). A relay (turn:) is what lets two peers behind restrictive NAT
+// connect at all — STUN alone can't cross that.
+function buildIce(a) {
+  const list = [{ urls: a.stun || DEFAULT_STUN }];
+  for (const t of a.turn) {
+    const [urls, username = "", credential = ""] = t.split(",").map((s) => s.trim());
+    if (urls) list.push(username ? { urls, username, credential } : { urls });
+  }
+  return list;
+}
 
 const USAGE = `qos-cli — headless QuantumOS room peer
 
@@ -32,6 +44,10 @@ Options:
   --message, -m <s>  Text to broadcast to the room.
   --name <s>         Display name shown to peers (default: "qos-cli").
   --signal <url>     Signaling server (default: ${DEFAULT_SIGNAL}).
+  --stun <url>       STUN server (default: ${DEFAULT_STUN}).
+  --turn <u,user,pw> TURN relay, repeatable: "turn:host:3478,user,pass" (or just
+                     "turn:host:3478"). Needed when both peers are behind a
+                     restrictive NAT — STUN alone can't cross that.
   --wait <ms>        Give up if no peer is reached in this long (default 15000).
   --linger <ms>      Stay this long after delivery before exiting (default 2000).
   --listen           Don't send; stay connected and print incoming messages.
@@ -40,7 +56,7 @@ Options:
 Note: rooms are p2p — a message only lands if someone is in the room now.`;
 
 function parseArgs(argv) {
-  const a = { signal: DEFAULT_SIGNAL, name: "qos-cli", waitMs: 15000, lingerMs: 2000, listen: false };
+  const a = { signal: DEFAULT_SIGNAL, name: "qos-cli", waitMs: 15000, lingerMs: 2000, listen: false, stun: "", turn: [] };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -50,6 +66,8 @@ function parseArgs(argv) {
     else if (x === "--name") a.name = argv[++i];
     else if (x === "--wait") a.waitMs = Number(argv[++i]);
     else if (x === "--linger") a.lingerMs = Number(argv[++i]);
+    else if (x === "--stun") a.stun = argv[++i];
+    else if (x === "--turn") a.turn.push(argv[++i]);
     else if (x === "--listen") a.listen = true;
     else if (x === "--help" || x === "-h") a.help = true;
     else rest.push(x);
@@ -84,10 +102,13 @@ async function main() {
   }
 
   const peerId = generateCapability("peer");
+  const iceServers = buildIce(args);
   console.log(`[qos-cli] peer ${peerId.slice(0, 18)}…  room ${roomId.slice(0, 18)}…  signal ${args.signal}`);
+  if (args.turn.length) console.log(`[qos-cli] ${iceServers.length} ICE server(s), incl. ${args.turn.length} relay`);
 
   const connections = new Map(); // remotePeerId -> RTCPeerConnection
   const channels = new Map();    // remotePeerId -> RTCDataChannel
+  const makingOffer = new Map(); // remotePeerId -> bool: we have an outstanding offer (perfect-negotiation glare)
   const knownPeers = new Set();
   const delivered = new Set();
   let finished = false;
@@ -158,7 +179,7 @@ async function main() {
 
   function newPeerConnection(remoteId) {
     try { connections.get(remoteId)?.close(); } catch {}
-    const pc = new RTCPeerConnection({ iceServers: ICE });
+    const pc = new RTCPeerConnection({ iceServers });
     onIceCandidate(pc, (candidate) => {
       if (!candidate) return;
       signal({ type: "ice", roomId, from: peerId, to: remoteId, candidate: candidate.toJSON ? candidate.toJSON() : candidate });
@@ -170,15 +191,39 @@ async function main() {
   }
 
   async function initiate(remoteId) {
+    if (connections.has(remoteId)) return; // already connecting / connected — don't glare with ourselves
     const pc = newPeerConnection(remoteId);
     const dc = pc.createDataChannel("qos");
     setupChannel(remoteId, dc);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    signal({ type: "offer", roomId, from: peerId, to: remoteId, sdp: pc.localDescription?.sdp ?? offer.sdp });
+    makingOffer.set(remoteId, true);
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      signal({ type: "offer", roomId, from: peerId, to: remoteId, sdp: pc.localDescription?.sdp ?? offer.sdp });
+    } finally {
+      makingOffer.set(remoteId, false);
+    }
   }
 
   async function handleOffer(fromId, sdp) {
+    // Perfect-negotiation glare handling (mirrors packages/browser/src/peer.ts).
+    // The peer with the smaller id is "polite". On a collision — our own offer is
+    // outstanding, or the existing connection isn't in a stable signalling state
+    // — the impolite peer ignores the incoming offer so its own negotiation
+    // wins. It also ignores a redundant re-offer while it already holds an open
+    // data channel: without this, each re-offer from a browser peer tore the
+    // working channel down, which is the connect→close→connect churn this CLI
+    // showed against live rooms.
+    const existing = connections.get(fromId);
+    const st = existing && (existing.connectionState ?? existing.iceConnectionState);
+    const dead = st === "closed" || st === "failed" || st === "disconnected";
+    const polite = peerId < fromId;
+    const collision = !dead && (
+      (makingOffer.get(fromId) ?? false) ||
+      (existing && existing.signalingState && existing.signalingState !== "stable"));
+    // A dead/failed connection must always be allowed to renegotiate, polite or not.
+    if (!polite && !dead && (collision || channels.has(fromId))) return;
+
     const pc = newPeerConnection(fromId);
     if (pc.onDataChannel?.subscribe) pc.onDataChannel.subscribe((ch) => setupChannel(fromId, ch));
     else pc.ondatachannel = (ev) => setupChannel(fromId, ev.channel);
@@ -204,13 +249,13 @@ async function main() {
     switch (msg.type) {
       case "peers":
         if (!msg.peers.length) { console.log("[qos-cli] no peers in room yet — waiting for someone to join…"); break; }
-        for (const p of msg.peers) { knownPeers.add(p); if (channels.get(p)) continue; initiate(p).catch((e) => console.error("[qos-cli] initiate:", e?.message ?? e)); }
+        for (const p of msg.peers) { knownPeers.add(p); if (connections.has(p)) continue; initiate(p).catch((e) => console.error("[qos-cli] initiate:", e?.message ?? e)); }
         break;
       case "joined": knownPeers.add(msg.peerId); console.log(`[qos-cli] peer joined ${msg.peerId.slice(0, 14)}… (they initiate)`); break;
       case "left":
         knownPeers.delete(msg.peerId);
         try { connections.get(msg.peerId)?.close(); } catch {}
-        connections.delete(msg.peerId); channels.delete(msg.peerId);
+        connections.delete(msg.peerId); channels.delete(msg.peerId); makingOffer.delete(msg.peerId);
         break;
       case "offer":  handleOffer(msg.from, msg.sdp).catch((e) => console.error("[qos-cli] offer:", e?.message ?? e)); break;
       case "answer": handleAnswer(msg.from, msg.sdp).catch((e) => console.error("[qos-cli] answer:", e?.message ?? e)); break;
