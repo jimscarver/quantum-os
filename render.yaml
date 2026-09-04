@@ -5,6 +5,18 @@ services:
     rootDir: packages/signaling
     buildCommand: npm install && npm run build
     startCommand: npm start
+    # Starter, not Free: the free instance sleeps after 15min idle, and a cold
+    # start on the next connect is what showed up in every peer's log as
+    # `signaling dropped (1006)` → reconnect churn — indistinguishable from a
+    # network problem until you know to look here. Starter is plenty for a
+    # small WebSocket relay; nothing here needs more.
+    #
+    # This line documents the intent for a future blueprint-recreate — it does
+    # NOT change the live service. quantum-os-signaling was hand-created, not
+    # deployed from this blueprint (see the autoDeploy note below), so Render
+    # ignores render.yaml's settings for it. The plan change has to be made in
+    # the dashboard: Settings -> Instance Type -> Starter.
+    plan: starter
     envVars:
       - key: PORT
         generateValue: false
