@@ -5,6 +5,18 @@ services:
     rootDir: packages/signaling
     buildCommand: npm install && npm run build
     startCommand: npm start
+    # Starter, not Free: the free instance sleeps after 15min idle, and a cold
+    # start on the next connect is what showed up in every peer's log as
+    # `signaling dropped (1006)` → reconnect churn — indistinguishable from a
+    # network problem until you know to look here. Starter is plenty for a
+    # small WebSocket relay; nothing here needs more.
+    #
+    # This line documents the intent for a future blueprint-recreate — it does
+    # NOT change the live service. quantum-os-signaling was hand-created, not
+    # deployed from this blueprint (see the autoDeploy note below), so Render
+    # ignores render.yaml's settings for it. The plan change has to be made in
+    # the dashboard: Settings -> Instance Type -> Starter.
+    plan: starter
     envVars:
       - key: PORT
         generateValue: false
@@ -18,6 +30,18 @@ services:
       # guard the server.
       - key: SIGNAL_RATE_LIMIT
         value: "200"
+      # Cloudflare Realtime TURN Service credentials — mint short-lived relay
+      # credentials for GET /turn (packages/signaling/src/turn.ts), which is
+      # what makes a call work between two peers who can't form a direct ICE
+      # pair (see CLAUDE.md "Calls must work across networks"). `sync: false`
+      # means the VALUE lives only in the Render dashboard (Environment tab),
+      # never in this file or the repo — these two lines document that the
+      # keys are required, not what they are. Missing entirely: /turn still
+      # answers (with no relay), it just can't help a cross-network call.
+      - key: TURN_KEY_ID
+        sync: false
+      - key: TURN_KEY_API_TOKEN
+        sync: false
     # On, but it must only fire for changes to this server.
     #
     # A deploy restarts signaling, and a restart drops every peer's socket at

@@ -58,17 +58,46 @@ export class QOSPeer {
     this._relayCounter = 0;
     this.lastHeardVia = new Map();        // peerId -> last relay-traffic timestamp, see isReachable
     this._presenceTimer = null;
+    this._autoTurn = [];                  // fetched relay, see _loadAutoTurn
   }
 
   connect() {
     this._disconnected = false;
     this._openSignaling().catch(() => this._scheduleReconnect());
+    void this._loadAutoTurn();
     // Keeps isReachable() honest for peers who are relay-only (past direct
     // reach) and otherwise never send anything themselves.
     if (!this._presenceTimer) {
       this._presenceTimer = setInterval(() => this.broadcast({ kind: "presence" }), PRESENCE_FLOOD_MS);
       this._presenceTimer.unref?.();
     }
+  }
+
+  /// Mirrors the browser's fetchAutoTurn (app.ts): a short-lived, Cloudflare-
+  /// minted TURN credential from the signaling server's own GET /turn — never
+  /// from Cloudflare directly, and the master API token never reaches this
+  /// process either. An agent's chat relay (the flood overlay) only works if
+  /// SOME agent actually holds a link to both sides of a NAT boundary, so
+  /// agents get the same relay browsers do. Skipped entirely when the caller
+  /// passed an explicit iceServers (tests, an override) — this only fills in
+  /// the default. Best-effort: any failure just leaves iceServers as-is.
+  async _loadAutoTurn() {
+    if (this.config.iceServers) return;
+    try {
+      const base = this.config.signalingUrl.replace(/^ws/, "http");
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      let res;
+      try { res = await fetch(`${base}/turn`, { signal: ctrl.signal }); }
+      finally { clearTimeout(t); }
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.iceServers)) this._autoTurn = data.iceServers;
+    } catch { /* best-effort — stays on DEFAULT_ICE alone */ }
+  }
+
+  _iceServers() {
+    return this.config.iceServers ?? [...DEFAULT_ICE, ...this._autoTurn];
   }
 
   /// Is this channel usable? Some transports (werift) don't always expose a
@@ -364,7 +393,7 @@ export class QOSPeer {
 
   _newPC(remoteId) {
     try { this.connections.get(remoteId)?.close(); } catch {}
-    const pc = new RTCPeerConnection({ iceServers: this.config.iceServers ?? DEFAULT_ICE });
+    const pc = new RTCPeerConnection({ iceServers: this._iceServers() });
     this._onIce(pc, (candidate) => {
       if (!candidate) return;
       this._signal({ type: "ice", roomId: this.config.roomId, from: this.peerId, to: remoteId, candidate: candidate.toJSON ? candidate.toJSON() : candidate });
@@ -499,9 +528,16 @@ export class QOSPeer {
     const sameSession = existing
       && _iceUfrag(existing.remoteDescription?.sdp) !== null
       && _iceUfrag(existing.remoteDescription?.sdp) === _iceUfrag(sdp);
-    if (existing && sameSession && this.channels.get(fromId)?.readyState === "open") {
+    // Only renegotiate on the live pc when it is actually idle. If we ALSO have an
+    // outstanding offer on it (renegotiation glare — both sides re-offered on the
+    // same tick, e.g. a call adding media), werift's setRemoteDescription throws
+    // "Cannot handle offer in signaling state have-local-offer" (no implicit
+    // rollback). Fall through to the glare tiebreak below instead of erroring.
+    const idle = !existing || (existing.signalingState ?? "stable") === "stable";
+    if (existing && sameSession && idle && this.channels.get(fromId)?.readyState === "open") {
       try {
         await existing.setRemoteDescription({ type: "offer", sdp });
+        this._rejectMedia(existing);
         const answer = await existing.createAnswer();
         await existing.setLocalDescription(answer);
         this._signal({ type: "answer", roomId: this.config.roomId, from: this.peerId, to: fromId, sdp: existing.localDescription?.sdp ?? answer.sdp });
@@ -527,9 +563,29 @@ export class QOSPeer {
     if (pc.onDataChannel?.subscribe) pc.onDataChannel.subscribe((ch) => this._setupChannel(fromId, ch));
     else pc.ondatachannel = (ev) => this._setupChannel(fromId, ev.channel);
     await pc.setRemoteDescription({ type: "offer", sdp });
+    this._rejectMedia(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this._signal({ type: "answer", roomId: this.config.roomId, from: this.peerId, to: fromId, sdp: pc.localDescription?.sdp ?? answer.sdp });
+  }
+
+  // A node agent is data-only. When a browser peer starts a call it renegotiates
+  // with EVERY peer — agents included — adding audio/video m-lines to the offer.
+  // werift otherwise auto-creates recvonly transceivers, registers SSRC receivers,
+  // and then decrypts + parses every inbound RTP packet in pure JS: ~20% of a core
+  // per active call PER agent, for media nothing here will ever use (measured live
+  // — three co-located agents pegged a machine on one call, RtpHeader/handleRTP/
+  // decryptRtp topping the profile). Forcing every media transceiver inactive
+  // before we answer makes werift emit a rejected m-line (port 0 / a=inactive), so
+  // a compliant peer sends us no RTP at all and the decrypt loop never runs.
+  _rejectMedia(pc) {
+    try {
+      for (const t of pc.getTransceivers?.() ?? []) {
+        if ((t.kind === "audio" || t.kind === "video") && t.direction !== "inactive") {
+          try { t.setDirection("inactive"); } catch {}
+        }
+      }
+    } catch {}
   }
 
   async _handleAnswer(fromId, sdp) {

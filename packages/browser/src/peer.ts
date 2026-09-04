@@ -26,15 +26,25 @@ export interface PeerConfig {
 }
 
 /**
- * STUN alone, which is enough for most pairs and not for all.
+ * STUN alone — this file's own fallback when nobody hands it `iceServers`.
  *
  * STUN only tells each side what its public address looks like; the connection
  * is still made directly. Two peers behind symmetric NAT — a corporate network,
- * a mobile carrier doing CGNAT — have no address pair that works, so the
- * handshake fails permanently and retrying cannot help. That case needs a TURN
- * relay, which is not defaulted because a relay carries the traffic: DTLS keeps
- * it unreadable, but whose machine it passes through is the user's decision to
- * make, not ours to make quietly. `/ice` is where it is made.
+ * a mobile carrier doing CGNAT, a NAT'd container — have no address pair that
+ * works, so the handshake fails permanently and retrying cannot help. That
+ * case needs a TURN relay, and **chat surviving over the flood overlay used to
+ * hide this**: a data-channel message can flood peer-to-agent-to-peer with no
+ * direct link, but a `MediaStreamTrack` cannot, so a call between two networks
+ * produced no video at all, silently (quantum-os#126).
+ *
+ * `peer.ts` itself still defaults to STUN-only — this constant is what a bare
+ * `new QOSPeer(...)` gets (tests, `qospeer.mjs`, anyone who doesn't ask for
+ * more). The **app** (`app.ts` `fetchAutoTurn`) is what supplies a relay by
+ * default for a real room: it fetches a short-lived, Cloudflare-minted TURN
+ * credential from the signaling server's own `GET /turn` (the master API
+ * token never leaves that server) and merges it into `iceServers` before
+ * `connect()`. "Whose machine your media passes through is a decision" still
+ * holds — `/ice auto off` opts out, `/ice turn ...` substitutes your own.
  */
 export const DEFAULT_ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -951,9 +961,24 @@ export class QOSPeer {
         return;
       }
       if (state === "failed" || state === "closed") {
-        // Hard failure — the peer is gone now. (Signaling reconnect will
-        // re-establish via the joined/offer flow if they come back.)
         this.clearDisconnectTimer(remotePeerId);
+        // "failed" means no candidate pair worked — we could not open a *direct*
+        // path to this peer. That is NOT the same as "they left". If signaling
+        // still lists them in the room they are present, and if there is a relay
+        // overlay (an agent, another peer we share) their chat still reaches us.
+        // Calling declarePeerGone here (→ onPeerLeft → the app drops them from
+        // the roster) is what makes a cross-network peer with no working TURN
+        // *vanish* for everyone they cannot dial directly, even while the room
+        // works over the relay. Keep them: tear down the dead pc so the sweep
+        // redials, back the retry off one cycle, and let the app mark them
+        // unreachable (⚠) instead of gone. The authoritative "they left" is the
+        // signaling "left" message; a peer we actually had a channel to also
+        // reports departure through the data-channel onclose path.
+        if (remotePeerId !== this.peerId && this.roster.has(remotePeerId)) {
+          this.cleanup(remotePeerId);
+          this.retryAt.set(remotePeerId, Date.now() + QOSPeer.RETRY_MIN_MS);
+          return;
+        }
         this.declarePeerGone(remotePeerId);
         return;
       }
@@ -965,6 +990,13 @@ export class QOSPeer {
             this.disconnectTimers.delete(remotePeerId);
             const cur = this.connections.get(remotePeerId)?.connectionState;
             if (cur === "connected") return;   // recovered
+            // Same reasoning as "failed" above: a peer still in the signaling
+            // roster is unreachable, not gone.
+            if (this.roster.has(remotePeerId)) {
+              this.cleanup(remotePeerId);
+              this.retryAt.set(remotePeerId, Date.now() + QOSPeer.RETRY_MIN_MS);
+              return;
+            }
             this.declarePeerGone(remotePeerId);
           }, QOSPeer.DISCONNECT_GRACE_MS);
           this.disconnectTimers.set(remotePeerId, t);

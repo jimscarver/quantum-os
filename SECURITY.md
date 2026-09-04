@@ -28,6 +28,7 @@
 | Sybil attacks | Anyone with the room URL can join; the signaling server imposes no per-identity limit |
 | Signaling server operator | The operator can observe room membership (who joined when) and disrupt signaling; they cannot read peer data |
 | STUN server IP disclosure | ICE candidate gathering uses `stun.l.google.com`; Google observes peer IPs. Use a self-hosted STUN/TURN server to avoid this. |
+| Default TURN relay IP/metadata disclosure | When a call falls back to the default relay (`/ice auto`, on by default — see above), Cloudflare observes that call's traffic metadata (IPs, timing, volume) but not content (DTLS/SRTP end-to-end). `/ice auto off` or `/ice turn` substitutes a relay you trust more, or none. |
 | Physical link intercept | Signaling channel uses WSS (TLS) in production; a CA compromise could allow MITM of signaling (but not WebRTC data channels) |
 | Bearer-note exfiltration | Held `cap:note-<currency>:…` tokens are pure bearer; URL leakage, clipboard exfil, screen recording, or browser-extension scraping is full compromise |
 | Issuer impersonation across sessions | Anyone can `/note declare <currency>`. The room trusts that "Alice's USD" was declared by the peer named Alice; a compromised peer session can mint forgeable authorities |
@@ -166,6 +167,8 @@ All peer-to-peer data channel traffic is protected by the WebRTC security stack:
 - ICE candidates are gathered via STUN (`stun.l.google.com:19302` by default)
 
 The signaling server's SDP relay cannot be used to MITM the WebRTC connection — each peer's DTLS certificate fingerprint is included in the SDP and verified during the DTLS handshake.
+
+**Default TURN relay (quantum-os#126).** A call between two peers who cannot form a direct ICE pair (symmetric NAT, mobile CGNAT, a NAT'd container) needs a TURN relay — a data-channel message can flood through the room's peer-relay overlay with no direct link, a `MediaStreamTrack` cannot. The browser fetches a short-lived credential from the signaling server's `GET /turn` (`app.ts` `fetchAutoTurn`, on by default, `/ice auto off` opts out), which mints it from Cloudflare Realtime's TURN Service using `TURN_KEY_ID`/`TURN_KEY_API_TOKEN` — environment variables on the signaling deployment, never committed, never sent to the browser (`packages/signaling/src/turn.ts`). What the relay operator (Cloudflare) can see: connection metadata (IP addresses, timing, volume) for any call that actually routes through it — most calls do not, since a relay is only used when a direct path fails. What it cannot see: content — DTLS/SRTP encryption is end-to-end between the two peers, unaffected by a relay in the path. The credential itself is short-lived (minted for 24h, the signaling server re-mints hourly) and scoped to relaying, nothing else. `/ice turn` lets a user substitute a relay they trust more (or run themselves) instead.
 
 ### `/search` and `/solve` — computed in the browser
 

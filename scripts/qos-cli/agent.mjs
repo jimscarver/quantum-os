@@ -627,7 +627,7 @@ export async function run(args) {
       `${TAG} signaling dropped` + (code ? ` (${code}${reason ? " " + reason : ""})` : "")),
     onReconnectScheduled: (ms) => console.warn(`${TAG} reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => { if (args.verbose) console.log(`${TAG} ${short(id)}… joining`); },
-    onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); nameAnnouncedAt.delete(id); },
+    onPeerLeft: (id) => { present.delete(id); introduced.delete(id); agents.delete(id); nameAnnouncedAt.delete(id); mem?.forgetPeer?.(id); },
     onError: (e) => noteError("peer", e),
     onChannelOpen: (id) => { onChannelOpen(id); mem?.serveStateTo(id); },
     onMessage: (from, d) => { onMessage(from, d); void mem?.ingest(from, d); },

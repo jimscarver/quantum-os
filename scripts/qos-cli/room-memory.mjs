@@ -105,18 +105,38 @@ const transcribe = (from, msg) => { try { fs.mkdirSync(roomDir, { recursive: tru
   }
   if (seeded) persistLemmas();
 
-const _servedAt = new Map();   // peerId -> last full-state serve; a re-open within the window is a no-op
+const _servedAt = new Map();   // peerId -> last full-state serve
+const _servedSig = new Map();   // peerId -> signature of the state last served to them
 const SERVE_COOLDOWN_MS = 15_000;
+
+// A cheap fingerprint of everything serveStateTo would send. Two serves with the
+// same signature carry identical (idempotent, first-write-wins) payloads, so the
+// second is pure cost.
+function stateSignature() {
+  const lem = [...lemmas.entries()].map(([n, e]) => `${n}=${e.twists}`).sort().join(",");
+  const cur = [...currencies.keys()].sort().join(",");
+  const ser = [...seriesTerms.keys()].sort().join(",");
+  const gov = [...groups.values()].map((g) => `${g.id}:${JSON.stringify(g).length}`).sort().join(",");
+  return `${lem}|${cur}|${ser}|${gov}`;
+}
 
 function serveStateTo(peerId) {
   // The whole payload is idempotent (first-write-wins on the receiver), so
   // re-serving it because a data channel briefly flapped is pure cost — and
   // when a connection is unstable that flap repeats, which is how one bad link
-  // turned into thousands of "serving state" lines and a pegged core. Once per
-  // peer per window is plenty; a real new joiner is always past the window.
+  // turned into thousands of "serving state" lines and a pegged core.
+  //
+  // Two guards: a short cooldown absorbs a rapid reconnect burst, and — because a
+  // genuinely flapping peer would still earn one full serve every window forever —
+  // we also skip any re-serve whose payload is byte-for-byte what this peer last
+  // got. A real new joiner has no signature on file; a peer whose only "change" is
+  // that its channel bounced has the same one, and gets nothing.
   const now = Date.now();
   if (now - (_servedAt.get(peerId) ?? 0) < SERVE_COOLDOWN_MS) return;
+  const sig = stateSignature();
+  if (_servedSig.get(peerId) === sig) { _servedAt.set(peerId, now); return; }
   _servedAt.set(peerId, now);
+  _servedSig.set(peerId, sig);
   log(`serving state to ${peerId.slice(0, 12)}…`);
   // Only announce a name when the carrier has no announce of its own. A role
   // agent's announce carries `agent: <role>`, which is what puts the 🤖 AI badge
@@ -339,6 +359,7 @@ async function ingest(from, d) {
     counts: () => ({ lemmas: lemmas.size, currencies: currencies.size, series: seriesTerms.size, groups: groups.size }),
     summary: () => `${lemmas.size} lemma(s), ${currencies.size} curr/ies, ${seriesTerms.size} terms-series, ${groups.size} group(s)`,
     serveStateTo,
+    forgetPeer: (id) => { _servedAt.delete(id); _servedSig.delete(id); },
     ingest,
     transcribe,
     setPeerName: (id, name) => peerNames.set(id, name),

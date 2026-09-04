@@ -1,6 +1,7 @@
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { Room, type Peer } from "./room.js";
+import { getTurnCredentials, turnConfigured } from "./turn.js";
 
 /// Wire message types for WebRTC signaling.
 type SignalMsg =
@@ -72,7 +73,7 @@ const RATE_BURST = parseInt(process.env.SIGNAL_RATE_BURST ?? String(RATE_LIMIT *
 
 // Build marker — surfaced at GET / so a deploy can be confirmed from outside
 // (`curl https://…/` shows the live build). Bump this string on each meaningful deploy.
-const BUILD = "2026-08-28-default-200";
+const BUILD = "2026-09-04-turn-relay";
 
 export class SignalingServer {
   private wss: WebSocketServer;
@@ -85,16 +86,37 @@ export class SignalingServer {
   private rateMap = new Map<WebSocket, { tokens: number; last: number }>();
 
   constructor(private port: number) {
-    // HTTP server handles both health checks (GET /) and WS upgrades.
+    // HTTP server handles health checks (GET /), TURN credential minting
+    // (GET /turn), and WS upgrades.
     const http = createServer((req, res) => {
+      if (req.url === "/turn") {
+        // A browser fetches this directly (not over the WS) — cross-origin
+        // from GitHub Pages, so it needs its own CORS header. The response is
+        // a short-lived Cloudflare-minted credential, not a secret to guard
+        // per-origin: anyone who already knows this signaling URL can reach
+        // this endpoint the same way they reach the room.
+        getTurnCredentials()
+          .then((server) => {
+            res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+            res.end(JSON.stringify({ iceServers: server ? [server] : [] }));
+          })
+          .catch(() => {
+            res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+            res.end(JSON.stringify({ iceServers: [] }));
+          });
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       // The limit is reported because it is the room ceiling and it comes from
       // the environment: a deploy proves the code shipped, and proves nothing
       // about the env it shipped into. Inferring it by tripping the limiter
-      // from outside works and should not be necessary.
+      // from outside works and should not be necessary. `turn` is the same
+      // idea applied to the relay: whether a call can survive two different
+      // networks depends on env vars a deploy doesn't prove were set.
       res.end(JSON.stringify({
         status: "ok", build: BUILD, rooms: this.rooms.size,
         limit: RATE_LIMIT, burst: RATE_BURST, windowMs: RATE_WINDOW_MS,
+        turn: turnConfigured(),
       }));
     });
     this.wss = new WebSocketServer({ server: http, maxPayload: 65_536 });
