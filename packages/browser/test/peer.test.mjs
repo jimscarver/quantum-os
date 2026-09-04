@@ -256,6 +256,43 @@ await tick(); await tick();
 check("replacing our own connection does not report the peer as gone",
       left.length === 0, JSON.stringify(left));
 
+// --- an ICE failure to a peer still in the room is unreachable, not gone ------
+// A cross-network peer with no working TURN never completes a direct handshake.
+// Firing "failed" used to call declarePeerGone → onPeerLeft → the app drops them
+// from the roster, so the peer VANISHES for everyone who cannot dial them — even
+// while their chat still relays through an agent (reported live: "chat works but
+// peer not listed"). A peer the signaling server still lists is present: keep
+// them (the app marks them ⚠ unreachable) and keep retrying.
+left.length = 0;
+deliver({ type: "peers", peers: ["aaa", "zzz"] });
+await new Promise((r) => setTimeout(r, 700));
+made.forEach((pc) => {
+  if (pc.connectionState !== "closed") { pc.connectionState = "failed"; pc.onconnectionstatechange?.(); }
+});
+await tick(); await tick();
+check("a peer still in the roster is not reported gone when its connection fails",
+      left.length === 0, JSON.stringify(left));
+const retryFrom = offersTo("zzz");
+advance(600_000);
+peer.sweep();
+await tick(); await tick();
+check("the sweep keeps retrying a failed-but-still-present peer",
+      offersTo("zzz") > retryFrom, `${offersTo("zzz")} vs ${retryFrom}`);
+
+// --- but once the server drops them, a failure does declare them gone --------
+left.length = 0;
+peer.roster = new Set(["zzz"]);
+advance(600_000);
+peer.sweep();                        // dial zzz → one fresh live pc
+await tick(); await tick();
+peer.roster.delete("zzz");           // now the server has forgotten zzz
+made.forEach((pc) => {
+  if (pc.connectionState !== "closed") { pc.connectionState = "failed"; pc.onconnectionstatechange?.(); }
+});
+await tick(); await tick();
+check("a peer no longer in the roster IS reported gone on connection failure",
+      left.includes("zzz"), JSON.stringify(left));
+
 // --- both sides retry, and neither waits on the other -------------------------
 // Deferring entirely to the lower id assumed the other side also retries, which
 // is false whenever builds are mixed — and then nobody dials at all.

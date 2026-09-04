@@ -951,9 +951,24 @@ export class QOSPeer {
         return;
       }
       if (state === "failed" || state === "closed") {
-        // Hard failure — the peer is gone now. (Signaling reconnect will
-        // re-establish via the joined/offer flow if they come back.)
         this.clearDisconnectTimer(remotePeerId);
+        // "failed" means no candidate pair worked — we could not open a *direct*
+        // path to this peer. That is NOT the same as "they left". If signaling
+        // still lists them in the room they are present, and if there is a relay
+        // overlay (an agent, another peer we share) their chat still reaches us.
+        // Calling declarePeerGone here (→ onPeerLeft → the app drops them from
+        // the roster) is what makes a cross-network peer with no working TURN
+        // *vanish* for everyone they cannot dial directly, even while the room
+        // works over the relay. Keep them: tear down the dead pc so the sweep
+        // redials, back the retry off one cycle, and let the app mark them
+        // unreachable (⚠) instead of gone. The authoritative "they left" is the
+        // signaling "left" message; a peer we actually had a channel to also
+        // reports departure through the data-channel onclose path.
+        if (remotePeerId !== this.peerId && this.roster.has(remotePeerId)) {
+          this.cleanup(remotePeerId);
+          this.retryAt.set(remotePeerId, Date.now() + QOSPeer.RETRY_MIN_MS);
+          return;
+        }
         this.declarePeerGone(remotePeerId);
         return;
       }
@@ -965,6 +980,13 @@ export class QOSPeer {
             this.disconnectTimers.delete(remotePeerId);
             const cur = this.connections.get(remotePeerId)?.connectionState;
             if (cur === "connected") return;   // recovered
+            // Same reasoning as "failed" above: a peer still in the signaling
+            // roster is unreachable, not gone.
+            if (this.roster.has(remotePeerId)) {
+              this.cleanup(remotePeerId);
+              this.retryAt.set(remotePeerId, Date.now() + QOSPeer.RETRY_MIN_MS);
+              return;
+            }
             this.declarePeerGone(remotePeerId);
           }, QOSPeer.DISCONNECT_GRACE_MS);
           this.disconnectTimers.set(remotePeerId, t);
