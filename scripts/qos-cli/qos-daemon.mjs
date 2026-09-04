@@ -149,7 +149,7 @@ async function main() {
     onSignalingClose: () => console.warn("[daemon] signaling dropped"),
     onReconnectScheduled: (ms) => console.warn(`[daemon] reconnecting in ${(ms / 1000).toFixed(1)}s`),
     onPeerJoined: (id) => console.log(`[daemon] peer ${id.slice(0, 12)}… joined`),
-    onPeerLeft: (id) => console.log(`[daemon] peer ${id.slice(0, 12)}… left`),
+    onPeerLeft: (id) => { console.log(`[daemon] peer ${id.slice(0, 12)}… left`); mem.forgetPeer?.(id); },
     onError: (e) => console.error("[daemon]", e?.message ?? e),
     onChannelOpen: (id) => mem.serveStateTo(id),
     onMessage: (from, d) => { void mem.ingest(from, d); },

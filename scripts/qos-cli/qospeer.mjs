@@ -499,9 +499,16 @@ export class QOSPeer {
     const sameSession = existing
       && _iceUfrag(existing.remoteDescription?.sdp) !== null
       && _iceUfrag(existing.remoteDescription?.sdp) === _iceUfrag(sdp);
-    if (existing && sameSession && this.channels.get(fromId)?.readyState === "open") {
+    // Only renegotiate on the live pc when it is actually idle. If we ALSO have an
+    // outstanding offer on it (renegotiation glare — both sides re-offered on the
+    // same tick, e.g. a call adding media), werift's setRemoteDescription throws
+    // "Cannot handle offer in signaling state have-local-offer" (no implicit
+    // rollback). Fall through to the glare tiebreak below instead of erroring.
+    const idle = !existing || (existing.signalingState ?? "stable") === "stable";
+    if (existing && sameSession && idle && this.channels.get(fromId)?.readyState === "open") {
       try {
         await existing.setRemoteDescription({ type: "offer", sdp });
+        this._rejectMedia(existing);
         const answer = await existing.createAnswer();
         await existing.setLocalDescription(answer);
         this._signal({ type: "answer", roomId: this.config.roomId, from: this.peerId, to: fromId, sdp: existing.localDescription?.sdp ?? answer.sdp });
@@ -527,9 +534,29 @@ export class QOSPeer {
     if (pc.onDataChannel?.subscribe) pc.onDataChannel.subscribe((ch) => this._setupChannel(fromId, ch));
     else pc.ondatachannel = (ev) => this._setupChannel(fromId, ev.channel);
     await pc.setRemoteDescription({ type: "offer", sdp });
+    this._rejectMedia(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this._signal({ type: "answer", roomId: this.config.roomId, from: this.peerId, to: fromId, sdp: pc.localDescription?.sdp ?? answer.sdp });
+  }
+
+  // A node agent is data-only. When a browser peer starts a call it renegotiates
+  // with EVERY peer — agents included — adding audio/video m-lines to the offer.
+  // werift otherwise auto-creates recvonly transceivers, registers SSRC receivers,
+  // and then decrypts + parses every inbound RTP packet in pure JS: ~20% of a core
+  // per active call PER agent, for media nothing here will ever use (measured live
+  // — three co-located agents pegged a machine on one call, RtpHeader/handleRTP/
+  // decryptRtp topping the profile). Forcing every media transceiver inactive
+  // before we answer makes werift emit a rejected m-line (port 0 / a=inactive), so
+  // a compliant peer sends us no RTP at all and the decrypt loop never runs.
+  _rejectMedia(pc) {
+    try {
+      for (const t of pc.getTransceivers?.() ?? []) {
+        if ((t.kind === "audio" || t.kind === "video") && t.direction !== "inactive") {
+          try { t.setDirection("inactive"); } catch {}
+        }
+      }
+    } catch {}
   }
 
   async _handleAnswer(fromId, sdp) {

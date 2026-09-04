@@ -193,12 +193,18 @@ The dyncap suite proves the signing port matches the browser byte-for-byte
 (so the daemon's signatures verify there).
 
 ```bash
-npm install && node loopback.mjs   # werift↔werift WebRTC round-trip over a local relay
+npm install && node loopback.mjs            # werift↔werift WebRTC round-trip over a local relay
+node media-reject.selftest.mjs              # a data-only agent rejects a call's audio/video, keeps the data channel
 ```
 
 The loopback test spins an in-process signaling relay and two peers that
 connect and exchange a chat — exercising the full handshake + data channel
 locally (needs `ws` + `werift`).
+
+`media-reject.selftest.mjs` drives an inbound offer that carries audio + video
+(what a browser sends when someone starts a call) and asserts the agent answers
+with every media m-line rejected — so werift never spins up an RTP receiver and
+never burns a core decrypting call media it will never use.
 
 ```bash
 node optimize-demo.mjs   # collective-annealing demo on a classic problem (TSP)
