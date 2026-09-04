@@ -195,6 +195,7 @@ The dyncap suite proves the signing port matches the browser byte-for-byte
 ```bash
 npm install && node loopback.mjs            # werift↔werift WebRTC round-trip over a local relay
 node media-reject.selftest.mjs              # a data-only agent rejects a call's audio/video, keeps the data channel
+node turn-relay.selftest.mjs                # the default-relay auto-fetch (GET /turn) merges, falls back, and never overrides an explicit config
 ```
 
 The loopback test spins an in-process signaling relay and two peers that
@@ -205,6 +206,12 @@ locally (needs `ws` + `werift`).
 (what a browser sends when someone starts a call) and asserts the agent answers
 with every media m-line rejected — so werift never spins up an RTP receiver and
 never burns a core decrypting call media it will never use.
+
+`turn-relay.selftest.mjs` drives `QOSPeer._loadAutoTurn`/`_iceServers` against a
+stand-in HTTP server (not the real signaling server, not Cloudflare) — see
+CLAUDE.md "Calls must work across networks" for why an agent needs this too:
+the flood relay only works if some agent actually holds a direct link to both
+sides of a NAT boundary.
 
 ```bash
 node optimize-demo.mjs   # collective-annealing demo on a classic problem (TSP)

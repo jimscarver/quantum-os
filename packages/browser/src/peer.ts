@@ -26,15 +26,25 @@ export interface PeerConfig {
 }
 
 /**
- * STUN alone, which is enough for most pairs and not for all.
+ * STUN alone — this file's own fallback when nobody hands it `iceServers`.
  *
  * STUN only tells each side what its public address looks like; the connection
  * is still made directly. Two peers behind symmetric NAT — a corporate network,
- * a mobile carrier doing CGNAT — have no address pair that works, so the
- * handshake fails permanently and retrying cannot help. That case needs a TURN
- * relay, which is not defaulted because a relay carries the traffic: DTLS keeps
- * it unreadable, but whose machine it passes through is the user's decision to
- * make, not ours to make quietly. `/ice` is where it is made.
+ * a mobile carrier doing CGNAT, a NAT'd container — have no address pair that
+ * works, so the handshake fails permanently and retrying cannot help. That
+ * case needs a TURN relay, and **chat surviving over the flood overlay used to
+ * hide this**: a data-channel message can flood peer-to-agent-to-peer with no
+ * direct link, but a `MediaStreamTrack` cannot, so a call between two networks
+ * produced no video at all, silently (quantum-os#126).
+ *
+ * `peer.ts` itself still defaults to STUN-only — this constant is what a bare
+ * `new QOSPeer(...)` gets (tests, `qospeer.mjs`, anyone who doesn't ask for
+ * more). The **app** (`app.ts` `fetchAutoTurn`) is what supplies a relay by
+ * default for a real room: it fetches a short-lived, Cloudflare-minted TURN
+ * credential from the signaling server's own `GET /turn` (the master API
+ * token never leaves that server) and merges it into `iceServers` before
+ * `connect()`. "Whose machine your media passes through is a decision" still
+ * holds — `/ice auto off` opts out, `/ice turn ...` substitutes your own.
  */
 export const DEFAULT_ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },

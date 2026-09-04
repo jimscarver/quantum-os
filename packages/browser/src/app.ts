@@ -1066,6 +1066,53 @@ function iceServersFor(stun: string): RTCIceServer[] {
 }
 
 /**
+ * Whether `connect()` fetches a relay from the signaling server by default.
+ *
+ * Chat surviving over the flood overlay used to hide that calls need this: a
+ * data-channel message can flood peer-to-agent-to-peer with no direct link,
+ * but a MediaStreamTrack cannot — a call between two peers who can't form a
+ * direct connection (symmetric NAT, mobile CGNAT, a NAT'd container) produced
+ * no video at all, silently (quantum-os#126). Default on, because that is the
+ * common case this tool is actually for, not the exception. `/ice auto off`
+ * opts out — the credential is short-lived and Cloudflare-minted per fetch
+ * (see fetchAutoTurn), but whose machine your media passes through even
+ * briefly is still a decision, same reasoning as `/ice turn` never being
+ * silently defaulted before this.
+ */
+const ICE_AUTO_KEY = "qos-ice-auto";
+function autoTurnEnabled(): boolean {
+  return localStorage.getItem(ICE_AUTO_KEY) !== "off";
+}
+
+/**
+ * Fetch a short-lived TURN relay from the signaling server's own `GET /turn`
+ * — never from Cloudflare directly, and the master API token never reaches
+ * this browser, only a credential Cloudflare itself mints and expires (see
+ * `packages/signaling/src/turn.ts`). Same-origin as the room's own signaling
+ * connection, so no separate config; derived by swapping the ws(s):// scheme
+ * for http(s)://.
+ *
+ * Best-effort and bounded: any failure (offline, CORS, a signaling deploy with
+ * no TURN_KEY_* set, a slow cold start) returns `[]` rather than throwing or
+ * hanging `connect()` — a room with no relay configured must still connect
+ * peers who don't need one, which is most peers most of the time.
+ */
+async function fetchAutoTurn(signalingUrl: string): Promise<RTCIceServer[]> {
+  if (!autoTurnEnabled()) return [];
+  let base: string;
+  try { base = new URL(signalingUrl.replace(/^ws/, "http")).origin; } catch { return []; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(`${base}/turn`, { signal: ctrl.signal });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { iceServers?: RTCIceServer[] };
+    return Array.isArray(data.iceServers) ? data.iceServers : [];
+  } catch { return []; }
+  finally { clearTimeout(timer); }
+}
+
+/**
  * Put later output back where the command was typed.
  *
  * `activeRoom` is aliased state: an inbound callback swaps it while it works,
@@ -5660,12 +5707,22 @@ function handleCommand(raw: string): string[] {
           const urls = Array.isArray(srv.urls) ? srv.urls.join(", ") : srv.urls;
           sys(`  ${urls}${srv.username ? "   (with credentials)" : ""}`);
         }
+        sys(`  auto relay: ${autoTurnEnabled() ? "on — a short-lived Cloudflare TURN credential is fetched at every connect" : "off (/ice auto on)"}`);
         const last = (() => { try { return localStorage.getItem(ICE_TEST_KEY); } catch { return null; } })();
         if (last) { sys("last test:"); sys("```\n" + last + "\n```"); }
-        if (!list.some((srv) => String(srv.urls).includes("turn:"))) {
+        if (!list.some((srv) => String(srv.urls).includes("turn:")) && !autoTurnEnabled()) {
           sys("  no relay (turn:) — two peers behind restrictive NAT cannot connect without one");
-          sys("  /ice turn turn:host:3478 <user> <pass>   ·   /ice test  to see what your network allows");
+          sys("  /ice auto on   ·   /ice turn turn:host:3478 <user> <pass>   ·   /ice test  to see what your network allows");
         }
+        break;
+      }
+
+      if (isub === "auto") {
+        const on = (iParts[1] ?? "").toLowerCase();
+        if (on !== "on" && on !== "off") { sys(`auto relay is ${autoTurnEnabled() ? "on" : "off"} — /ice auto on|off`); break; }
+        if (on === "on") localStorage.removeItem(ICE_AUTO_KEY); else localStorage.setItem(ICE_AUTO_KEY, "off");
+        sys(`✓ auto relay ${on} — reconnect for it to take effect (Disconnect, then Connect)`);
+        if (on === "off") sys("  calls between peers who can't form a direct connection will have no video until you add your own /ice turn");
         break;
       }
 
@@ -5696,14 +5753,18 @@ function handleCommand(raw: string): string[] {
 
       if (isub === "test") {
         // Ask the network what it will give us. Only a relay candidate answers
-        // "can I reach somebody whose network is as awkward as mine".
+        // "can I reach somebody whose network is as awkward as mine". Probed
+        // with the SAME servers a real connect would use — including the
+        // auto-fetched relay, if on — so "relay ✓/✗" answers "will MY next
+        // call actually cross a hard NAT", not just "is a STUN server up".
         sys("gathering candidates… (5 seconds)");
         const iceCtx = activeRoom;
         void (async () => {
           const seen = new Set<string>();
           let pc: RTCPeerConnection | null = null;
           try {
-            pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
+            const autoTurn = await fetchAutoTurn(signalUrlEl.value.trim() || DEFAULT_SIGNAL);
+            pc = new RTCPeerConnection({ iceServers: [...iceServersFor(stunUrlEl.value.trim()), ...autoTurn] });
             pc.createDataChannel("probe");
             pc.onicecandidate = (e) => {
               if (!e.candidate) return;
@@ -5751,56 +5812,11 @@ function handleCommand(raw: string): string[] {
         break;
       }
 
-      if (isub === "last") {
-        const last = (() => { try { return localStorage.getItem(ICE_TEST_KEY); } catch { return null; } })();
-        if (last) sys("```\n" + last + "\n```");
-        else sys("no test on this device yet — /ice test");
-        break;
-      }
-
-      if (isub === "reset") { saveIceServers(null); sys("ice servers back to the default (stun only) — reconnect to apply"); break; }
-
-      if (isub === "test") {
-        // Ask the network what it will give us. Only a relay candidate answers
-        // "can I reach somebody whose network is as awkward as mine".
-        sys("gathering candidates… (5 seconds)");
-        const iceCtx = activeRoom;
-        void (async () => {
-          const seen = new Set<string>();
-          const pc = new RTCPeerConnection({ iceServers: iceServersFor(stunUrlEl.value.trim()) });
-          pc.createDataChannel("probe");
-          pc.onicecandidate = (e) => {
-            if (!e.candidate) return;
-            const type = /\btyp (\w+)/.exec(e.candidate.candidate)?.[1];
-            if (type) seen.add(type);
-          };
-          await pc.setLocalDescription(await pc.createOffer());
-          await new Promise((r) => setTimeout(r, 5000));
-          pc.close();
-          const kinds = [...seen];
-          // One message, not five: a single block survives a scroll, copies in
-          // one gesture, and cannot be half-lost.
-          const report = [
-            `candidates: ${kinds.join(", ") || "none"}`,
-            kinds.includes("host") ? "host ✓ same machine or same LAN" : "host ✗ no host candidate, which is unusual",
-            kinds.includes("srflx") ? "srflx ✓ STUN answered: reachable from outside this NAT"
-                                    : "srflx ✗ STUN did not answer; a firewall may be blocking UDP",
-            kinds.includes("relay") ? "relay ✓ a TURN server is available, so even a hard NAT can be crossed"
-                                    : "relay ✗ no TURN, so a peer behind a restrictive NAT cannot be reached (/ice turn …)",
-          ].join("\n");
-          try { localStorage.setItem(ICE_TEST_KEY, report); } catch { /* not worth failing over */ }
-          inRoom(iceCtx, () => {
-            addMessage("", "```\n" + report + "\n```", "system");
-            addMessage("", "  /ice last  shows this again — paste it to whoever is helping", "system");
-          });
-        })();
-        break;
-      }
-
       sys(`unknown subcommand: /ice ${isub}`);
       sys("  /ice list                          — what a connection may use");
+      sys("  /ice auto on|off                   — the default relay, fetched fresh per connect (on by default)");
       sys("  /ice stun stun:host:3478           — add a STUN server");
-      sys("  /ice turn turn:host:3478 <u> <p>   — add a relay, for networks direct connection cannot cross");
+      sys("  /ice turn turn:host:3478 <u> <p>   — add your own relay instead, for networks direct connection cannot cross");
       sys("  /ice test                          — what your network actually allows");
       sys("  /ice last                          — show the last test again");
       sys("  /ice reset                         — back to the default");
@@ -6167,7 +6183,7 @@ function webrtcMissing(): boolean {
   return typeof RTCPeerConnection === "undefined";
 }
 
-function connect(): void {
+async function connect(): Promise<void> {
   if (webrtcMissing()) {
     addMessage("", "✗ this browser has no WebRTC (RTCPeerConnection is missing), so it cannot connect to anybody here.", "system");
     addMessage("", "  · a privacy extension or shield blocking WebRTC — allow it for this site", "system");
@@ -6205,11 +6221,18 @@ function connect(): void {
 
   setStatus("connecting", "connecting… (first connect may take ~30s to wake server)");
   connectBtn.textContent = "Disconnect";
+  // Guard the gap below: fetchAutoTurn awaits an HTTP round trip, and qpeer
+  // stays null (the `if (qpeer)` guard above is the only re-entrancy check)
+  // until setQpeer(newPeer) at the very end of this function — a second click
+  // during that window would pass the guard and start a duplicate connection.
+  connectBtn.disabled = true;
+  const autoTurn = await fetchAutoTurn(signalingUrl);
+  connectBtn.disabled = false;
 
   const newPeer = new QOSPeer({
     signalingUrl,
     roomId,
-    iceServers: iceServersFor(stunUrl),
+    iceServers: [...iceServersFor(stunUrl), ...autoTurn],
     onSignalingOpen() {
       const prev = activeRoom; setActiveRoom(ctx);
       try {

@@ -58,17 +58,46 @@ export class QOSPeer {
     this._relayCounter = 0;
     this.lastHeardVia = new Map();        // peerId -> last relay-traffic timestamp, see isReachable
     this._presenceTimer = null;
+    this._autoTurn = [];                  // fetched relay, see _loadAutoTurn
   }
 
   connect() {
     this._disconnected = false;
     this._openSignaling().catch(() => this._scheduleReconnect());
+    void this._loadAutoTurn();
     // Keeps isReachable() honest for peers who are relay-only (past direct
     // reach) and otherwise never send anything themselves.
     if (!this._presenceTimer) {
       this._presenceTimer = setInterval(() => this.broadcast({ kind: "presence" }), PRESENCE_FLOOD_MS);
       this._presenceTimer.unref?.();
     }
+  }
+
+  /// Mirrors the browser's fetchAutoTurn (app.ts): a short-lived, Cloudflare-
+  /// minted TURN credential from the signaling server's own GET /turn — never
+  /// from Cloudflare directly, and the master API token never reaches this
+  /// process either. An agent's chat relay (the flood overlay) only works if
+  /// SOME agent actually holds a link to both sides of a NAT boundary, so
+  /// agents get the same relay browsers do. Skipped entirely when the caller
+  /// passed an explicit iceServers (tests, an override) — this only fills in
+  /// the default. Best-effort: any failure just leaves iceServers as-is.
+  async _loadAutoTurn() {
+    if (this.config.iceServers) return;
+    try {
+      const base = this.config.signalingUrl.replace(/^ws/, "http");
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      let res;
+      try { res = await fetch(`${base}/turn`, { signal: ctrl.signal }); }
+      finally { clearTimeout(t); }
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.iceServers)) this._autoTurn = data.iceServers;
+    } catch { /* best-effort — stays on DEFAULT_ICE alone */ }
+  }
+
+  _iceServers() {
+    return this.config.iceServers ?? [...DEFAULT_ICE, ...this._autoTurn];
   }
 
   /// Is this channel usable? Some transports (werift) don't always expose a
@@ -364,7 +393,7 @@ export class QOSPeer {
 
   _newPC(remoteId) {
     try { this.connections.get(remoteId)?.close(); } catch {}
-    const pc = new RTCPeerConnection({ iceServers: this.config.iceServers ?? DEFAULT_ICE });
+    const pc = new RTCPeerConnection({ iceServers: this._iceServers() });
     this._onIce(pc, (candidate) => {
       if (!candidate) return;
       this._signal({ type: "ice", roomId: this.config.roomId, from: this.peerId, to: remoteId, candidate: candidate.toJSON ? candidate.toJSON() : candidate });
