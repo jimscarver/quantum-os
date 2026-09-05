@@ -132,11 +132,11 @@ Both faces are checked uniformly in `crates/zfa-core/src/pauli.rs`, `packages/br
 
 Named logical claims shared across peers, persisted to `localStorage` per room URL.
 
-- `/lemma name` — auto-allocate twists deterministically from the name (same result on every client, no server needed)
-- `/lemma name twists` — explicit twists (symbolic, hex, `cap:token`, or `@ref1 @ref2`)
+- **Grammar** (`packages/browser/src/lemma-parse.ts` `parseLemmaDecl` — pure, `test/lemma-parse.test.mjs`; also holds the moved `canonLemma` / `parseRefTokens` / `splitLemmaNameArg`): `/lemma <statement> [| <twists>]`. The statement, in order: `[bracket name]` (legacy); legacy `<word> <twists-like>` (so `/lemma concl @a @b` still composes); **one `@handle` marked in a sentence** — `/lemma All men are @mortal` → name `mortal`, `LemmaEntry.text` = "All men are mortal" (issue #128); a **leading** `@handle` followed by words is a handle not in the sentence (`/lemma @concl Socrates is mortal | …`); otherwise the **whole statement is the name** (bare multi-word names now work). `>1 @word` → error.
+- Twists after `|` (or the legacy space form): symbolic / hex / `cap:token` / `@ref1 @ref2` — via `expandLemmaRefs` + `resolveLemmaToBytes`, unchanged. Omitted → `allocateTwists(name)` from the handle.
 - `@name` in any command arg — expands to the stored twist sequence
 - Auto-mints `cap:name:hex` when the result is ZFA-balanced
-- Broadcasts `{kind: "lemma", name, twists, cap, who}` to all peers on register
+- Broadcasts `{kind: "lemma", name, twists, cap, who, text?}` to all peers on register (`text` also rides `sync-lemmas`). `text` is cosmetic — first-write-wins like `who`, **never** part of the immutability check (only `twists` is); `renderLemmas` shows `@handle — "text"`.
 - `allocateTwists(name)`: each character yields one pos twist `(code & 3)*2` and one neg twist `((code>>2)&3)*2+1` — always balanced, always deterministic
 - **Event lemmas** (`LemmaEntry.event`): `/search` (events mode) registers each discovered closure as a lemma named with the next free integer (`nextEventNumber()`), so a re-run finds it already known. Same machinery as any lemma — synced, tombstone-able, `@N` refs, cap auto-mint — just marked and sorted last in `renderLemmas`. See the QuCalc Search section.
 
@@ -387,7 +387,7 @@ Headless **agent daemons** join a room as full peers (Node; `werift` + `ws`), re
 | `/qucalc [twists]` | Evaluate RhoQuCalc twist sequence; accepts `@name` refs |
 | `/conj <twists>` | Hermitian adjoint (reverse + parity-flip); flags self-adjoint inputs. The QLF "negation" operator; fixed locus Σ_sa is the operator-side counterpart of the Riemann ξ critical line (see `ReverseMathematics.md` §4.9). |
 | `/freq [n\|twists]` | ZFA frequency spectrum (C(2n,n) arrangements) |
-| `/lemma [name [tw]]` | Register/list named lemmas; omit twists to auto-allocate |
+| `/lemma <claim> [\| tw]` | Register/list named lemmas. Mark the handle: `/lemma All men are @mortal`. Bare multi-word names, leading `@handle`, and legacy `/lemma [name] tw` all work. Omit twists to auto-allocate from the handle |
 | `/request <name>` | Broadcast that you need `@name`; holder sees a `/pass` prompt |
 | `/pass <name> <peer>` | Transfer `@name` directly to a peer; removes from sender's store, auto-registers on recipient's |
 | `/note <sub>` | Promissory notes — `declare`, `grant`, `pass`, `redeem`, `split`, `merge`, `list`, `balance` |
@@ -523,6 +523,7 @@ On failure: `gh run view <run-id> --log-failed`
 | `packages/browser/src/dyncap.ts` | Dyncap protocol (signEnvelope, verifyEnvelope, anchor / witness derivation) |
 | `packages/browser/src/probe.ts` | Discrepancy probe types + `findDiscrepancies` + supermajority constants + `losingPeersIn` |
 | `packages/browser/src/polls.ts` | Pure poll-tally module — `optionId`, `tallyApproval`, `tallyRanked` (IRV), `tally`, `liveCounts`, `sortedOptions`, `summarizeWinners` (no DOM/storage). Tallies take an optional `weights` map for liquid-democracy weighting (no change at weight 1) |
+| `packages/browser/src/lemma-parse.ts` | Pure `/lemma` grammar (issue #128) — `parseLemmaDecl` (`<statement> [\| twists]`, `@handle` marking, bare multi-word names), plus `canonLemma` / `parseRefTokens` / `splitLemmaNameArg` moved here. No DOM/storage; `test/lemma-parse.test.mjs` |
 | `packages/browser/src/gov.ts` | Pure governance module — `Group`/`Issue`/`Member` types + **`resolveWeights`** (transitive delegation → per-voter weight, with override + cycle abstention, optional `trustWeights`), **`trustLevels`** (admin-rooted hierarchy + ⅔-quorum censure accountability, 2-phase fixed point), `trustWeightsFor`, `discreditedMembers`, `delegationMapFor`, `issueId`, `delegatorsOf`. Drives `/gov`; see `Governance.md` |
 | `packages/browser/src/macro-lang.js` | **The `$` macro language (Interact2).** Plain JS, no imports, node-runnable: `parseDefinition`, `parseInvocation`, `bindArgs`, `substitute`, `expandCallSites`, `expandCommand`, `splitBody`, `findMacros`. Carries BOTH lexers — a rholang body skips string literals and comments, a command body does not (see [docs/rholang.md](docs/rholang.md)). `node packages/browser/src/macro-lang.js --selftest` covers it |
 | `packages/browser/src/rholang-macros.js` | **The `%` capability macro registry — one source for both halves.** Plain JS, no imports, ZFA kernel injected via `createMacroEngine(kernel)`. Registry + arg validators + templates + the rholang call-site scanner (`expandProgram`). Edit macros here and nowhere else; `node scripts/qos-cli/rholang-macros.mjs --selftest` covers it |

@@ -19,7 +19,7 @@ Peer-to-peer QuantumOS running in the browser. ZFA kernel in Rust/WASM, WebRTC d
 5. The **Room Process** panel shows the combined `parallel(you, peer)` process — ZFA-balanced across all peers.
 6. Run QLF slash commands (`/braket +`, `/qucalc ^v`) — output broadcasts to every peer in the room.
 7. Click a peer's name to instantly evaluate their ZFA process with `/qucalc`.
-8. Use `/lemma name` to name a logical claim — twists are auto-allocated from the name, or supply them explicitly (`/lemma mortality ^v`). Reference with `@name` in any command (`/qucalc @mortality @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
+8. Use `/lemma` to name a logical claim — write it as a sentence and mark the handle with `@` (`/lemma All men are @mortal`); twists auto-allocate from the handle, or supply them after a pipe (`/lemma All men are @mortal | ^v`). Reference with `@mortal` in any command (`/qucalc @mortal @socrates` deduces from both). Lemmas sync to all peers and persist across page reloads.
 9. Use `/grant [label]` to mint a random ZFA capability token and share it as a proof object.
 10. Use `/request name` to signal you need a named lemma; the holder sees a prompt and can `/pass name peer` to transfer it directly — no token strings to copy.
 
@@ -69,7 +69,8 @@ QLF slash commands:
   /solve [pos]     — pick the one closure the substrate takes (least free action); the residual if none
   /dump            — summary of all logic shared this session
   /lemma           — list named lemmas
-  /lemma <n> [tw]  — register @n; omit twists to auto-allocate (multi-word: /lemma [all men are mortal])
+  /lemma <claim>   — register a claim; mark the handle: /lemma All men are @mortal  →  @mortal
+  /lemma <c> | <tw> — with explicit twists (else auto-allocated from the handle)
   /request <n>     — request @n from whoever holds it
   /pass <n> <peer> — transfer @n directly to a named peer
   /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)
@@ -86,7 +87,7 @@ QLF slash commands:
   /script <c1>;…   — sequential command chain (// to skip a segment)
   /persist [sub]   — agreed-replication of public state (@lemma|currency …)
   /rhoqu <text>    — RhoQu macro: process / new / | / if / on / for over /commands
-  @name in args    — expand named lemma (e.g. /qucalc @major @minor; @[multi word] for spaced names)
+  @name in args    — expand named lemma (e.g. /qucalc @major @minor; @[multi word] for a spaced name)
   //message        — send a message starting with /
 ```
 
@@ -401,57 +402,62 @@ Output (peers see):
 ·   run /zfa cap:fork-b:… to verify
 ```
 
-### `/lemma [name [twists]]` [shared]
+### `/lemma <claim> [| <twists>]` [shared]
 Names a logical claim so peers can reference it by `@name` in any command. Lemmas sync to all peers when registered and persist to `localStorage` per room URL — they survive page reloads.
 
 - `/lemma` — list all registered lemmas in the room
-- `/lemma name` — register `@name` with auto-allocated twists derived deterministically from the name (any peer typing the same command gets the same twists — no server needed)
-- `/lemma name twists` — register `@name` with explicit twists (symbolic, `cap:token`, or `@ref1 @ref2`)
+- `/lemma <claim>` — write the claim as a sentence and mark one word as the handle with `@`: `/lemma All men are @mortal` registers `@mortal`, keeps the sentence as the shown text, and auto-allocates twists deterministically from the handle (every peer gets the same twists — no server)
+- `/lemma <claim> | <twists>` — supply twists explicitly after a pipe (symbolic `^v<>/\+-`, hex `0-7`, `cap:token`, or `@ref1 @ref2` to compose)
+- Also works: a bare multi-word name (`/lemma socrates is a man` → `@[socrates is a man]`), a leading handle (`/lemma @concl Socrates is mortal | @mortal @man`), and the older forms `/lemma name twists` and `/lemma [name with spaces] twists`
 - `@name` anywhere in `/qucalc` args — expand and compose named lemmas
 
-When the twist sequence is ZFA-balanced, a `cap:name:hex` capability token is auto-minted and shown. The Lemmas panel in the sidebar lists all names as clickable items — click `@name` to prefill `/qucalc @name`.
+When the twist sequence is ZFA-balanced, a `cap:name:hex` capability token is auto-minted and shown. The Lemmas panel in the sidebar lists each handle (with its claim text) as a clickable item — click `@name` to prefill `/qucalc @name`.
 
-Auto-allocate twists from the name (simplest form):
+Write the claim as a sentence, mark the handle (simplest form):
 ```
-/lemma mortality
+/lemma All men are @mortal
 ```
 Output:
 ```
-· lemma registered: @mortality  =  <auto>  (auto-allocated)
-·   twists: 18  (9+/9-)  ZFA: ✓
-·   cap: cap:mortality:…  (share with /zfa to verify)
+· lemma registered: @mortal  =  <auto>  (auto-allocated)
+·   “All men are mortal”
+·   twists: 12  (6+/6-)  ZFA: ✓
+·   cap: cap:mortal:…  (share with /zfa to verify)
 ```
 
-Or supply explicit twists when you want a specific encoding:
+Or supply explicit twists after a pipe:
 ```
-/lemma mortality ^v
+/lemma All men are @mortal | ^v
 ```
 Output:
 ```
-· lemma registered: @mortality  =  ^v
+· lemma registered: @mortal  =  ^v
+·   “All men are mortal”
 ·   twists: 2  (1+/1-)  ZFA: ✓
-·   cap: cap:mortality:01  (share with /zfa to verify)
+·   cap: cap:mortal:01  (share with /zfa to verify)
 ```
 
 ```
-/lemma socrates +-
+/lemma @socrates Socrates is a man | +-
 ```
 Output:
 ```
 · lemma registered: @socrates  =  +-
+·   “Socrates is a man”
 ·   twists: 2  (1+/1-)  ZFA: ✓
 ·   cap: cap:socrates:67  (share with /zfa to verify)
 ```
 
-Chain lemmas to prove the conclusion ("Socrates is Mortal") from the two named premises:
+Chain lemmas to prove the conclusion from the two named premises:
 ```
-/lemma mortal @mortality @socrates
+/lemma @concl Socrates is mortal | @mortal @socrates
 ```
 Output:
 ```
-· lemma registered: @mortal  =  ^v+-
+· lemma registered: @concl  =  ^v+-
+·   “Socrates is mortal”
 ·   twists: 4  (2+/2-)  ZFA: ✓
-·   cap: cap:mortal:0167  (share with /zfa to verify)
+·   cap: cap:concl:0167  (share with /zfa to verify)
 ```
 
 List the full proof vocabulary:

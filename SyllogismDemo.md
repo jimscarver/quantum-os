@@ -7,6 +7,8 @@ A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [qua
 Each step shows both browser windows side by side. The room URL is shared; both peers are connected. Lemmas registered by either peer appear in the **Lemmas** sidebar panel and persist across page reloads for the same room.
 
 > **Tip:** You can omit the twist argument — `/lemma mortality` auto-allocates a deterministic ZFA-balanced sequence from the name, giving the same twists on every client without any coordination. The steps below supply explicit twists to show the logical encoding; both forms produce identical results for `/qucalc` and `/zfa`.
+>
+> **Tip:** Write the claim as a sentence and mark one word as the handle with `@` — `/lemma All men are @mortal` registers `@mortal` and keeps the sentence as its shown text. Add explicit twists after a pipe (`/lemma All men are @mortal | ^v`). This demo uses terse single-word names (`mortality`, `socrates`) for compactness; the `@handle` form reads better for real claims.
 
 ---
 

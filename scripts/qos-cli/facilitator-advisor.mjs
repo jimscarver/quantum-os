@@ -47,7 +47,9 @@ command answers the question, name the exact command. You know:
   invite). Messages reach only peers connected at that moment — when everyone leaves, room state is gone
   unless someone runs a headless memory daemon. Each room is its own tab; \`/room\` lists/joins/leaves rooms.
 - KERNEL COMMANDS (the QLF math): \`/qucalc\`, \`/braket\`, \`/zfa\` (check a twist history), \`/coupling\` (was the room's closure shared, or several side by side?), \`/conj\`
-  (Hermitian adjoint), \`/lemma [name] <twists>\` to name a verified closure, then \`@name\` to reuse it.
+  (Hermitian adjoint), \`/lemma <claim>\` to name a claim — write it as a sentence and mark one word as the
+  handle with @ (\`/lemma All men are @mortal\` → \`@mortal\`); twists auto-allocate, or add them after a pipe
+  (\`/lemma All men are @mortal | ^v\`). Then \`@mortal\` reuses it anywhere.
 - QUCALC SEARCH ("what closes next", computed in the browser — no service): \`/search [position]\` enumerates
   the admissible next closures from a QuCalc position — the search IS the experiment (truth divination; truth
   is what closes). Bare \`/search\` reads every peer's \`/qlf-action\` position at once — a meeting of minds.
