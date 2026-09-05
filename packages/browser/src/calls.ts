@@ -33,6 +33,18 @@ export interface CallHost {
    * caller's ring neighbors.
    */
   roomPeers(): string[];
+  /**
+   * Room peers (non-agent) whose *direct* peer connection has failed or is
+   * still stuck — `failed`/`disconnected` always, and `checking`/`connecting`
+   * only once `strict` is set (a slow mobile handshake needs the grace).
+   *
+   * A call needs a direct ICE pair or a working TURN relay; when neither forms,
+   * chat still reaches the peer (it floods through the overlay) but a
+   * `MediaStreamTrack` cannot, so the call is silently one-way. This is checked
+   * a short time after a call starts because that is exactly when it is wrong
+   * with nothing on screen to say so (quantum-os#126).
+   */
+  mediaBlocked(strict: boolean): string[];
 }
 
 export interface CallElements {
@@ -80,6 +92,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
   const screens = new Set<string>();
   /** The one tile currently shown big, if any. */
   let expanded: string | null = null;
+  /** Timers for the post-start media-reach check; cleared on end(). */
+  const reachTimers: ReturnType<typeof setTimeout>[] = [];
+  /** Peers already named as unreachable for this call — each is said once. */
+  const reachWarned = new Set<string>();
 
   const showBar = () => { if (els.bar) els.bar.hidden = false; };
   const hideBarIfIdle = () => {
@@ -194,6 +210,24 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     }
   }
 
+  /**
+   * A call is up locally but a participant's connection may never carry media —
+   * a direct pair that can't form (symmetric NAT, mobile CGNAT) and no relay
+   * that crosses. Chat keeps working over the flood overlay, so nothing else
+   * says it. Checked twice: once early for an outright `failed`, once later
+   * (`strict`) to also catch a handshake still stuck — long enough that a slow
+   * but fine mobile path isn't accused.
+   */
+  function checkMediaReach(strict: boolean): void {
+    if (!inCall) return;
+    for (const id of host.mediaBlocked(strict)) {
+      if (reachWarned.has(id)) continue;
+      reachWarned.add(id);
+      host.say(`⚠ ${host.label(id)} can't get the call — your networks need a relay to cross and `
+        + `none did. Chat still reaches them. Try \`/ice turn …\` (your own relay) or \`/ice test\`.`);
+    }
+  }
+
   async function start(): Promise<void> {
     const peer = host.peer();
     if (!peer) { host.say("connect to a room before starting a call"); return; }
@@ -246,6 +280,10 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
     peer.broadcast({ kind: "call-start" });
     host.say("📞 you started a call");
     updateControls();
+    reachTimers.push(
+      setTimeout(() => checkMediaReach(false), 12_000),
+      setTimeout(() => checkMediaReach(true), 35_000),
+    );
   }
 
   function end(): void {
@@ -265,6 +303,8 @@ export function createCalls(host: CallHost, els: CallElements): Calls {
       // silently break that separate, permanent guarantee.
       for (const id of host.roomPeers()) if (!host.isAgent(id)) peer.unpinNeighbor(id);
     }
+    reachTimers.splice(0).forEach(clearTimeout);
+    reachWarned.clear();
     stopScreenTracks();
     cameraTrack = null;
     localStream?.getTracks().forEach((t) => t.stop());

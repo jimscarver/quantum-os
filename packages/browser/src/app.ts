@@ -7906,6 +7906,17 @@ function initUx(): void {
       label: (id) => peerLabel(id),
       isAgent: (id) => peerAgents.has(id),
       roomPeers: () => [...peers],
+      mediaBlocked: (strict) => {
+        const p = qpeer;
+        if (!p) return [];
+        const stuck = strict
+          ? new Set(["failed", "disconnected", "checking", "connecting", "new", "none"])
+          : new Set(["failed", "disconnected"]);
+        return p.connectionReport()
+          .filter((r) => peers.has(r.peerId) && !peerAgents.has(r.peerId)
+            && (stuck.has(r.connection) || r.ice === "failed"))
+          .map((r) => r.peerId);
+      },
     },
     {
       bar:   document.getElementById("call-bar"),

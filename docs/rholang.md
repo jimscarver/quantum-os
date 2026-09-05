@@ -1,0 +1,97 @@
+# Rholang & macros
+
+Detail split out of [CLAUDE.md](../CLAUDE.md). Covers the Interact2 `$`/`+` macro
+language, the `%` capability-macro registry, and the `/rholang` chain client.
+Reference docs: [RChain_Macros.md](../RChain_Macros.md).
+
+---
+
+## Macros — Interact2 (`/macro`, `+name` — `macro-lang.js` + `app.ts`)
+
+User-written commands. EIES let a user write a command, share it, and watch a
+group adopt it; that was the point of the system rather than a feature of it
+(`EIES_Legacy.md`). The direct predecessor is **MacRhoLang / @RHO-bot**, which
+already had `$` sites, `define:`/`echo:`/`find:` and command-form invocation.
+Full reference in [RChain_Macros.md](../RChain_Macros.md); summary for code work:
+
+**`/` is what the app ships, `+` is what a person wrote.** The verbs that manage
+definitions are built in (`/macro define|list|show|find|echo|remove`); what they
+produce is invoked `+name args`. `++text` escapes a literal `+` line to chat, and
+only an identifier-shaped name is read as an invocation — so `+1` is agreement,
+not a call.
+
+**Two halves, decided by the body.** `bodyKind()` reads the first non-blank
+line: starting with `/` or `+` makes a **command** macro (invokable as `+name`);
+anything else makes a **rholang** fragment, invokable only as a `$name(…)` call
+site inside `/rholang eval|deploy|echo`. Nothing declares the kind — and
+`macroFromWire` re-derives it from the body rather than believing the sender, so
+peers cannot disagree about what one definition is. A `+command` reaches the
+chain by having `/rholang eval` in its body, so the two halves compose with no
+third mechanism.
+
+**The two halves have different lexical rules, and this is the subtle part.**
+`substitute` and `expandCallSites` take `lexical: "rholang" | "text"`:
+
+- *rholang body* — `"$topic"` is a string literal and `$topic` is text (the
+  language's own rule); a call-site argument is a **term**, so `$print("hello")`
+  must expand to `stdout!("hello")` with the quotes intact.
+- *command body* — there are no string literals. `/gov say on "$topic" now` is a
+  line somebody typed and `$topic` **substitutes**; an argument is a **word**, so
+  `+standup "Q4 budget"` binds `Q4 budget`. Treating command text as rholang
+  produced a command with a literal `$topic` in it, which is the worst kind of
+  wrong: it runs.
+
+`bindArgs(def, args, plain)` carries the same split (`plain` = command line).
+A nested macro is expanded under **its own** body's rules, not its caller's.
+
+**Binding is textual**, which is what makes quantum-os#65's `match [$height] { [height] =>
+… }` work rather than something separate from it — the argument lands in the
+match subject and rholang's own `match` binds it, so a body stays ordinary
+rholang. Positional by default; if *every* argument is `name=value` they bind by
+name; mixing is refused.
+
+**`splitBody`**: a line beginning with `/` or `+` at column 0 starts a command,
+anything else continues the one before it — so a multi-line rholang program is
+the argument to `/rholang eval` with no terminator.
+
+**Errors never abort.** Every site is attempted and a failed one is left exactly
+as written. `$` being lexically illegal in rholang is what makes that safe: an
+unexpanded site is a hard error at rnode, never something that quietly means
+the wrong thing. (`%` is rholang's modulo operator, so it carries no such guarantee.)
+
+**Storage is the room, not the chain.** `macroStore` is per-`RoomContext`,
+persisted `qos-macros-<room>`, broadcast as a dyncap-signed `macro-define`,
+replayed to joiners via `sync-macros`, and tombstoned through the existing
+`retract` machinery (kind `"macro"`). **First writer wins a name and only that
+author may redefine or retract it, matched by dyncap `anchor`** — `MacroDef`
+stores the anchor rather than a chain step, because a reload mints a new peerId
+and would otherwise cost you your own commands. That is the room ("group") tier
+of EIES's personal → group → system hierarchy; the on-chain dictionary (public /
+federated tier, behind a capability) is designed and not built.
+
+Recursion is bounded twice: `MAX_DEPTH` inside expansion, and `MACRO_RUN_DEPTH`
+in `runMacroLine` for a body that invokes another body at runtime. `runInput()`
+is the router — `+` to `runMacroLine`, anything else to `handleCommand` — and is
+what `/script` and `/rhoqu` call so their segments can be `+commands` too.
+
+## Reaching a chain (`/rholang` — `rholang.ts` + `rholang-macros.js` + `rholang-pipeline.ts` + `rholang-agent.mjs`)
+
+Bridges a room to an RChain chain: a room's state is ephemeral, a deploy is not.
+
+**`/rholang` is the current command** (`packages/browser/src/rholang.ts`). Three verbs over rnode's HTTP API: `status`, `eval` (exploratory deploy — runs read-only over finalized state; pure rholang and the system processes both return values), and `deploy` (secp256k1 over blake2b256 of the protobuf encoding of `DeployDataProto` — the encoding must match rnode's byte for byte, proto3 default-omission included). `eval`/`deploy` open a syntax-highlighted, live-linted editor (`rholang-editor.ts`) whose header carries **the node and its live status** — version, shard (flagging a mismatch with yours), block height and phlo floor, checked when the editor opens and again on click, because the answer goes stale while the editor is open and pressing Evaluate is the wrong way to find out — and that offers four actions: **Explain** (what the program will do: where it goes, what it costs, which powerbox names it reaches and what each answers, which macro sites expand, and a warning when nothing is sent to `return` so the run would look empty — assembled from what the app knows, never a reading of the program's meaning. What explaining actually wants is somebody who can **read** the program, which is an **AI agent in the room** and not an rnode — so the agent leads: **`/rholang explain [program]`** is the verb, and asking is what it does: the program and the question ("explain this rholang program and any security concerns, briefly") go to the room, where the agent reads them and answers where everyone can see. The editor's **Explain** button gives the same account *without* asking the room, and prefills `/rholang explain …` instead — the difference is who decided to publish the program, which should stay the person rather than the button, and when none is, it says so, because that is the missing piece rather than a missing node. Whether the rnode answers is a footnote after it, since Explain is useful with no rnode at all; a shard mismatch is still flagged, because it rejects a deploy), **Show** (the expanded program in the form it would be sent, sending nothing — the answer to *should I sign this*; `/rholang show` is accepted alongside `echo`, after MacRhoLang's own name for it), Evaluate (Ctrl+Enter) and Sign-and-deploy (Ctrl+Shift+Enter), the typed verb only deciding which is primary, so the choice between running a program and paying to land it in a block is made once you can see the program; it resolves `{source, mode}`, Esc cancels, and it loads a `.rho` from disk, accepts one dropped on it, or saves the program back out; a program written inline runs as typed. Every program is wrapped in `new return, stdout, zfa, grant, verify, fuse in { … }`; a deploy additionally writes what `return` answered to the deployer's own registry slot (`rho:registry:insertSigned:secp256k1`, at the uri `registryUriOf` derives from the key) and to stdout, because a deploy otherwise answers only into rnode's log. `/rholang read` looks that slot up; the nonce advances per write and `/rholang nonce` re-syncs it from the slot. `bin/rnode` ships with the repo and `scripts/localnet/run-node.sh` starts it — no build, no rchain-rust checkout. A deploy executes and is charged there, and both `eval` and `deploy` reach the qucalc powerbox — verified against rchain-rust `dev` at `0a2141be1`. `match` selects the branch it should — first written branch wins, `_` is reached only when nothing before it matches — and a runaway term returns `reduction step budget exceeded (10000 steps)` with rnode still serving, the ceiling nowhere near ordinary work (a terminating recursion returns at depth 2560). **One shape to avoid** ([rchain-rust#19](https://github.com/rchain-community/rchain-rust/issues/19)): a one-binder persistent receive inside a nested `new` does not terminate, so every `contract` takes at least two parameters — `contract c(_, ret) = { … }` where a verb genuinely takes only a return channel. Note the budget error arrives as a bare JSON string where success is a `{expr, block}` object, so a client written for the success shape renders a runaway as an empty result. Several sends to `return` all come back but in no dependable order (`eval` reverses source order; the deploy read path differs) — encode order in the program if it matters, and `/rholang eval` says so whenever it prints more than one value. `renderExpr` turns rnode's wire shape into rholang: `ExprPar` reads as `12 | 14 | 16` (the program's own `|`), and an expression a future build names differently renders its contents rather than printing raw JSON at whoever ran the program (`test/render-expr.test.mjs`, payloads taken from a live node).
+
+**Macro call sites expand before a program is linted or signed.** Two libraries, one pass, built-ins first: `%name(…)` from the approved capability library that ships with the app, `$name(…)` from what the room defined with `/macro` (see the Interact2 section above). `/rholang macros` lists the built-ins, `/rholang macro <name> <args…>` runs one on its own when the whole program is that macro, and `/rholang echo` shows the expansion — which is what answers *should I sign this*. Full reference in [RChain_Macros.md](../RChain_Macros.md).
+
+**The body is rholang, not a command line.** A program is one line or many, with call sites written `%name(arg, …)`. The rholang is **not parsed**: `expandProgram` scans only far enough to find call sites that are really call sites (skips string literals and both comment forms, balances `()[]{}`, splits args on top-level commas), expands each in place, and passes every other byte through as written. A sigil is what makes that safe without a grammar — a bare `ballot(…)` is indistinguishable from a real contract call. Errors never abort: every site is attempted, each error carries its line, and a failed site is left exactly as typed. **Note the asymmetry between the sigils:** a leftover `$` is a hard error at rnode, `$` being lexically illegal in rholang; a leftover `%` is rholang's modulo operator and will not be, so the error report is the only thing that catches it. That is why a room's own macros use `$`.
+
+**Single source of truth.** `packages/browser/src/rholang-macros.js` is plain JS with no imports, consumed by **both** halves — `scripts/qos-cli/rholang-macros.mjs` (18-line binding, node) and `packages/browser/src/rholang-pipeline.ts` (browser). The ZFA kernel is *injected* (`createMacroEngine(kernel)`) because each side has its own build (`zfa.mjs` / `zfa.ts`). They were once separate copies; a macro edited in one and not the other meant the rholang a user reviewed in chat was not the rholang their browser signed, and both copies independently carried the same `Number()` precision bug.
+
+**Zero-trust split.** The agent only *expands*, in the open, into room chat. The browser lints (`crates/zfa-core/src/lint.rs` via WASM), signs (key generated locally, wrapped by a passphrase-derived AES key in IndexedDB), and deploys. A compromised agent can post misleading chat text and nothing more.
+
+**20 macros**, mirroring the `qucalc/examples/*.rho` in rchain-rust: proofs (`grant`, `fuse` → `rho:qucalc:*`), group decisions (`trust`, `weights`, `tally`, `censure` → `rho:gov:*`, plus `ballot`/`delegate`), bearer capabilities (`issuer`, `note`, `redeem`, `directory`, `mailbox`, `group`, `transfer`), and structural patterns (`swap`, `philosophers`, `multisig`). Arg types: `string`, `twists`, `list`, `cap`, `int` (BigInt decimal digits), and `term` (a rholang term passed through verbatim — the `rho:gov:*` maps; program-form only, since the bare form splits on whitespace).
+
+**What is not enforced.** There is no forbidden rholang and no forbidden name. The expander does not content-police arguments and the linter checks only delimiter balance. Capability security decides what a deploy can reach; a denylist decided nothing rnode does not already decide while rejecting ordinary input ("New York", `for(`). What *is* enforced: every string reaches rholang through `JSON.stringify` into a literal so it cannot escape its position, and amounts are BigInt so the value approved is the value signed.
+
+**Known gaps.** The browser signs **ECDSA P-256** where RChain needs secp256k1 (Web Crypto has no secp256k1) — a pipeline placeholder, nothing signed today is valid on a real network. Macros expand to *standalone* programs (`new ret in { … }`), so embedding one mid-expression yields rholang the linter rejects. The agent and browser halves are not yet a closed loop.
+
+**Local testing.** A single standalone node runs everything: `rnode run -s --autopropose --no-upnp --host 127.0.0.1 …` (`--host` matters — without it the node guesses an external IP and Kademlia fails to bind). Ports 40401 external gRPC / 40402 internal (eval, propose, repl) / 40403 HTTP. `rnode --grpc-port 40402 eval f.rho` runs rholang with no signing and no block — the fastest loop. `No value set for `rho:qucalc:zfa`` means the node is running a build from before the QuCalc processes landed; a running node keeps its binary image after the file on disk is replaced.
