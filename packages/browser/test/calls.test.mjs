@@ -108,6 +108,22 @@ provide("navigator", {
   getDisplayMedia: async () => new Stream([screen]),
 } });
 
+// Long-delay timers (the post-start media-reach check) are captured so the test
+// can fire them without waiting; short ones (settle) stay real.
+const realSetTimeout = globalThis.setTimeout;
+const longTimers = [];
+provide("setTimeout", (fn, ms) => {
+  if (ms <= 1000) return realSetTimeout(fn, ms);
+  longTimers.push(fn);
+  return -longTimers.length;
+});
+provide("clearTimeout", (id) => {
+  if (typeof id === "number" && id < 0) longTimers[-id - 1] = null;
+});
+const fireLong = () => {
+  while (longTimers.length) { const f = longTimers.shift(); if (f) { f(); return; } }
+};
+
 // --- the room: one person, nobody connected ---------------------------------
 
 const sentToJoiners = [];      // what addLocalMedia was handed, by track label
@@ -126,7 +142,7 @@ const tilesEl = el();
 // in for other peers directly), so roomPeers stays empty here — the pin
 // loop it drives is exercised at the unit level in peer.test.mjs instead.
 const calls = mod.createCalls(
-  { peer: () => peer, say: (t) => said.push(t), label: () => "peer", isAgent: () => false, roomPeers: () => [] },
+  { peer: () => peer, say: (t) => said.push(t), label: () => "peer", isAgent: () => false, roomPeers: () => [], mediaBlocked: () => [] },
   { bar: el(), tiles: tilesEl, mute: el(), cam: el(), share: el() },
 );
 const tileFor = (key) => tilesEl.children.find((c) => c.dataset.key === key);
@@ -259,7 +275,7 @@ permission = "prompt";
   const freshCalls = mod.createCalls(
     {
       peer: () => freshPeer, say: () => {}, label: () => "peer", isAgent: () => false,
-      roomPeers: () => ["r1", "r2", "r3"],
+      roomPeers: () => ["r1", "r2", "r3"], mediaBlocked: () => [],
     },
     { bar: el(), tiles: el(), mute: el(), cam: el(), share: el() },
   );
@@ -291,7 +307,7 @@ permission = "prompt";
     {
       peer: () => endPeer, say: () => {}, label: () => "peer",
       isAgent: (id) => id === "the-agent",
-      roomPeers: () => ["r1", "r2", "the-agent"],
+      roomPeers: () => ["r1", "r2", "the-agent"], mediaBlocked: () => [],
     },
     { bar: el(), tiles: el(), mute: el(), cam: el(), share: el() },
   );
@@ -302,6 +318,53 @@ permission = "prompt";
         unpinnedAtEnd.includes("r1") && unpinnedAtEnd.includes("r2"), JSON.stringify(unpinnedAtEnd));
   check("...but never unpins an agent — that pin is permanent, not call-scoped",
         !unpinnedAtEnd.includes("the-agent"), JSON.stringify(unpinnedAtEnd));
+}
+
+// --- a call the media can't cross to a peer says so, once ------------------
+// Chat floods through the overlay so it keeps working; a MediaStreamTrack
+// can't, so a call between two networks with no relay that crosses is silently
+// one-way. Checked a short time after start, because that is when it is wrong
+// with nothing on screen to say so (quantum-os#126).
+{
+  const saidR = [];
+  let blocked = ["r1"];
+  const rPeer = {
+    peerId: "r0", addLocalMedia() {}, removeLocalMedia() {}, broadcast() {},
+    videoSenders() { return []; }, pinNeighbor() {}, unpinNeighbor() {},
+  };
+  const rCalls = mod.createCalls(
+    {
+      peer: () => rPeer, say: (t) => saidR.push(t), label: (id) => id,
+      isAgent: () => false, roomPeers: () => ["r1"], mediaBlocked: () => blocked,
+    },
+    { bar: el(), tiles: el(), mute: el(), cam: el(), share: el() },
+  );
+  const crossings = () => saidR.filter((t) => t.includes("can't get the call")).length;
+
+  longTimers.length = 0;        // drop any stale timers from earlier instances
+  rCalls.toggle();              // start
+  await settle();
+  fireLong();                   // the early check
+  check("a call participant the media can't reach is named, with a fix to try",
+        saidR.some((t) => t.includes("r1") && t.includes("/ice turn")), saidR.join(" | "));
+  const once = crossings();
+  fireLong();                   // the later check — still blocked, already warned
+  check("and is named only once per call", crossings() === once, saidR.join(" | "));
+
+  rCalls.toggle();              // end
+  blocked = [];                 // everyone connects this time
+  rCalls.toggle();              // start again
+  await settle();
+  fireLong(); fireLong();
+  check("a call where everyone connects says nothing",
+        crossings() === once, saidR.join(" | "));
+
+  rCalls.toggle();              // end
+  blocked = ["r1"];
+  rCalls.toggle();              // a third call — the once-per-call set cleared on end
+  await settle();
+  fireLong();
+  check("a fresh call re-checks", crossings() === once + 1, saidR.join(" | "));
 }
 
 console.log(failed === 0 ? "\ncalls: all passed" : `\ncalls: ${failed} FAILED`);
