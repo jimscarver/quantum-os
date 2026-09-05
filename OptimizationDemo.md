@@ -41,7 +41,7 @@ Facilitator: Scored (trust-weighted). Leader: 213.4 — Ben.
   ... everyone converges on 213.4 ...
 Facilitator: No one's improved on 213.4 for two rounds — looks converged.
 
-Facilitator: Converged. `/probe` it… ✓  Recording: `/lemma best-tour = 0→7→2→3→5→8→1→4→6→0`  `/persist`
+Facilitator: Converged. `/probe` it… ✓  Recording: `/lemma The best @tour is 0→7→2→3→5→8→1→4→6→0 (213.4)`  `/persist`
 Facilitator: Length 213.4 — brute-force optimum is 213.4 (gap 0.00%)  ✓ the room found the optimal tour.
 ```
 

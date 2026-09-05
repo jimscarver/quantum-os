@@ -198,6 +198,8 @@ Output:
 ·   rho_process_always_zfa: ✓ (Lean-verified)
 ```
 
+`/qucalc` *shows* the composition; **`/solve @mortality @socrates`** asks the substrate what it concludes — a valid argument is one whose premises already **close** (`/solve` returns the empty continuation), an invalid one comes back with the exact action still owed. **`/search`** enumerates every way to close from a position. Both compute in the browser — no service.
+
 Input (unbalanced — invalid argument):
 ```
 /qucalc ^v^v^

@@ -6,9 +6,9 @@ A step-by-step walkthrough of two peers — **Alice** and **Bob** — using [qua
 
 Each step shows both browser windows side by side. The room URL is shared; both peers are connected. Lemmas registered by either peer appear in the **Lemmas** sidebar panel and persist across page reloads for the same room.
 
-> **Tip:** You can omit the twist argument — `/lemma mortality` auto-allocates a deterministic ZFA-balanced sequence from the name, giving the same twists on every client without any coordination. The steps below supply explicit twists to show the logical encoding; both forms produce identical results for `/qucalc` and `/zfa`.
+> **Tip:** Write the claim as a sentence and mark one word as the handle with `@` — `/lemma All men are @mortal` registers `@mortal`, keeps the sentence as its shown text, and auto-allocates a deterministic ZFA-balanced twist sequence from the handle (the same on every client, no coordination). Add explicit twists after a pipe (`/lemma All men are @mortal | ^v`) when you want to show the encoding, as the steps below do.
 >
-> **Tip:** Write the claim as a sentence and mark one word as the handle with `@` — `/lemma All men are @mortal` registers `@mortal` and keeps the sentence as its shown text. Add explicit twists after a pipe (`/lemma All men are @mortal | ^v`). This demo uses terse single-word names (`mortality`, `socrates`) for compactness; the `@handle` form reads better for real claims.
+> **Tip:** Once the premises are named, `/solve @mortal @man` asks the substrate what it concludes — a valid syllogism is one whose premises already **close** (no further action needed); an invalid one comes back with the exact action still owed.
 
 ---
 
@@ -56,19 +56,20 @@ Both peers see each other in the **Peers** list. The **Room Process** panel show
 
 ## Step 1 — Alice names the Major Premise
 
-Alice types `/lemma mortality ^v`. The `^v` sequence encodes **"All Men are Mortal"**: `^` (Up, action) asserts the universal category; `v` (Down, lift) closes it — the minimal balanced logical container. Naming it `@mortality` gives both peers a shared, reusable reference to this claim.
+Alice types `/lemma All men are @mortal | ^v`. She writes the claim as a sentence and marks the handle with `@`. The `^v` sequence encodes **"All men are mortal"**: `^` (Up, action) asserts the universal category; `v` (Down, lift) closes it — the minimal balanced logical container. The handle `@mortal` gives both peers a shared, reusable reference; the sentence is kept as the lemma's shown text.
 
 ```
-ALICE TYPES:  /lemma mortality ^v
+ALICE TYPES:  /lemma All men are @mortal | ^v
 ```
 
 **Alice's window:**
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  · lemma registered: @mortality  =  ^v                       │
+│  · lemma registered: @mortal  =  ^v                          │
+│  ·   “All men are mortal”                                    │
 │  ·   twists: 2  (1+/1-)  ZFA: ✓                             │
-│  ·   cap: cap:mortality:01  (share with /zfa to verify)      │
+│  ·   cap: cap:mortal:01  (share with /zfa to verify)         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,37 +77,39 @@ ALICE TYPES:  /lemma mortality ^v
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Alice  /lemma mortality ^v                                   │
-│  ·   @mortality registered from Alice  [cap: cap:mortality:01]│
+│  Alice  /lemma All men are mortal                             │
+│  ·   @mortal registered from Alice  “All men are mortal”      │
+│        [cap: cap:mortal:01]                                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 Both sidebars now show:
 
 ```
-│ Lemmas (1)      │
-│ @mortality  ←   │   ← click to prefill /qucalc @mortality
+│ Lemmas (1)                       │
+│ @mortal — “All men are mortal” ← │   ← click to prefill /qucalc @mortal
 ```
 
-**Result:** "All Men are Mortal" is ZFA-balanced (gap = 0), stored as `@mortality`, and auto-minted as `cap:mortality:01` — an unforgeable proof object for this claim.
+**Result:** "All men are mortal" is ZFA-balanced (gap = 0), stored as `@mortal`, and auto-minted as `cap:mortal:01` — an unforgeable proof object for this claim.
 
 ---
 
 ## Step 2 — Bob names the Minor Premise
 
-Bob types `/lemma socrates +-`. The `+-` sequence encodes **"Socrates is a Man"**: `+` (Plus, action) asserts the identity; `-` (Minus, lift) grounds it. Naming it `@socrates` completes the shared premise vocabulary.
+Bob types `/lemma Socrates is a @man | +-`. The `+-` sequence encodes **"Socrates is a man"**: `+` (Plus, action) asserts the identity; `-` (Minus, lift) grounds it. The handle `@man` completes the shared premise vocabulary.
 
 ```
-BOB TYPES:  /lemma socrates +-
+BOB TYPES:  /lemma Socrates is a @man | +-
 ```
 
 **Bob's window:**
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  · lemma registered: @socrates  =  +-                        │
+│  · lemma registered: @man  =  +-                             │
+│  ·   “Socrates is a man”                                     │
 │  ·   twists: 2  (1+/1-)  ZFA: ✓                             │
-│  ·   cap: cap:socrates:67  (share with /zfa to verify)       │
+│  ·   cap: cap:man:67  (share with /zfa to verify)            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -114,29 +117,30 @@ BOB TYPES:  /lemma socrates +-
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Bob  /lemma socrates +-                                      │
-│  ·   @socrates registered from Bob  [cap: cap:socrates:67]   │
+│  Bob  /lemma Socrates is a man                                │
+│  ·   @man registered from Bob  “Socrates is a man”            │
+│        [cap: cap:man:67]                                      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 Both sidebars now show:
 
 ```
-│ Lemmas (2)      │
-│ @mortality  ←   │
-│ @socrates   ←   │
+│ Lemmas (2)                        │
+│ @mortal — “All men are mortal”  ← │
+│ @man — “Socrates is a man”      ← │
 ```
 
-**Result:** "Socrates is a Man" registered as `@socrates`. The shared positive action `+` with Alice's `^` is the **Middle Term** ("Man") — the bridge that will fuse both premises into the conclusion.
+**Result:** "Socrates is a man" registered as `@man`. The shared positive action `+` with Alice's `^` is the **Middle Term** ("Man") — the bridge that will fuse both premises into the conclusion.
 
 ---
 
 ## Step 3 — Alice deduces from named premises
 
-Alice types `/qucalc @mortality @socrates`. The system expands each `@ref` to its twist sequence, concatenates them, and shows the deduction composition label-by-label.
+Alice types `/qucalc @mortal @man`. The system expands each `@ref` to its twist sequence, concatenates them, and shows the deduction composition label-by-label.
 
 ```
-ALICE TYPES:  /qucalc @mortality @socrates
+ALICE TYPES:  /qucalc @mortal @man
 ```
 
 **Both windows** show:
@@ -144,10 +148,10 @@ ALICE TYPES:  /qucalc @mortality @socrates
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  · RhoQuCalc process:                                        │
-│  ·   composed: @mortality @socrates                          │
+│  ·   composed: @mortal @man                                  │
 │  ·   deduction composition:                                  │
-│  ·     @mortality  →  ^v  (1+/1-)  ZFA: ✓                   │
-│  ·     @socrates   →  +-  (1+/1-)  ZFA: ✓                   │
+│  ·     @mortal  →  ^v  (1+/1-)  ZFA: ✓                      │
+│  ·     @man     →  +-  (1+/1-)  ZFA: ✓                      │
 │  ·   composed: ^v+-  (4 total)                               │
 │  ·   action (pos): count=2   lift (neg): count=2             │
 │  ·   spectral gap: 0  ZFA-balanced: ✓                        │
@@ -158,7 +162,30 @@ ALICE TYPES:  /qucalc @mortality @socrates
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Result:** `@mortality` (^v) + `@socrates` (+-) = `^v+-`, gap = 0. The Middle Term cancels internally. **The syllogism is valid** — shown by name, not by raw twist string.
+**Result:** `@mortal` (^v) + `@man` (+-) = `^v+-`, gap = 0. The Middle Term cancels internally. **The syllogism is valid** — shown by name, not by raw twist string.
+
+---
+
+## Step 4 — Bob asks the substrate for the conclusion
+
+Bob types `/solve @mortal @man`. Where `/qucalc` *shows* the composition, `/solve` asks the substrate which closure it takes from here — computed locally, so every peer gets the same answer with no service.
+
+```
+BOB TYPES:  /solve @mortal @man
+```
+
+**Both windows** show:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  · /solve  @mortal @man   (^v+-)                             │
+│  ·   already a closure — no further action                   │
+│  ·   phase: +1   peak excursion: 1   depth: 0                │
+│  ·   the premises close on their own: the syllogism is valid │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Result:** the composed premises are *already* a ZFA closure — `/solve` returns the empty continuation. That is exactly what "the syllogism is valid" means: nothing more has to be asserted for it to close. An **invalid** argument would come back with a residual — the precise action vector a completion still owes — and `/search @mortal @man` would enumerate every way (if any) to reach closure from there.
 
 The Room Process panel confirms the joint state:
 
@@ -178,9 +205,9 @@ The Room Process panel confirms the joint state:
 
 ---
 
-## Step 4 — Bob evaluates the Conclusion as a quantum state
+## Step 5 — Bob evaluates the Conclusion as a quantum state
 
-Bob evaluates **"Socrates is Mortal"** as a bra-ket superposition. The conclusion synthesises the universal (`|0⟩`) and the particular (`|1⟩`).
+Bob evaluates **"Socrates is mortal"** as a bra-ket superposition. The conclusion synthesises the universal (`|0⟩`) and the particular (`|1⟩`).
 
 ```
 BOB TYPES:  /braket 0 1
@@ -206,21 +233,22 @@ BOB TYPES:  /braket 0 1
 
 ---
 
-## Step 5 — Alice seals the conclusion as a named lemma
+## Step 6 — Alice seals the conclusion as a named lemma
 
-Alice registers the proved conclusion as `@mortal` — composing it directly from the two named premises. The system resolves the chain, validates ZFA balance, and mints `cap:mortal:0167` as the unforgeable proof object for "Socrates is Mortal."
+Alice registers the proved conclusion as `@concl` — composing it directly from the two named premises. The system resolves the chain, validates ZFA balance, and mints `cap:concl:0167` as the unforgeable proof object for "Socrates is mortal."
 
 ```
-ALICE TYPES:  /lemma mortal @mortality @socrates
+ALICE TYPES:  /lemma @concl Socrates is mortal | @mortal @man
 ```
 
 **Alice's window:**
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  · lemma registered: @mortal  =  ^v+-                        │
+│  · lemma registered: @concl  =  ^v+-                         │
+│  ·   “Socrates is mortal”                                    │
 │  ·   twists: 4  (2+/2-)  ZFA: ✓                             │
-│  ·   cap: cap:mortal:0167  (share with /zfa to verify)       │
+│  ·   cap: cap:concl:0167  (share with /zfa to verify)        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -228,22 +256,23 @@ ALICE TYPES:  /lemma mortal @mortality @socrates
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Alice  /lemma mortal ^v+-                                    │
-│  ·   @mortal registered from Alice  [cap: cap:mortal:0167]   │
+│  Alice  /lemma Socrates is mortal                             │
+│  ·   @concl registered from Alice  “Socrates is mortal”       │
+│        [cap: cap:concl:0167]                                  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Bob verifies by clicking `@mortal` in the Lemmas sidebar (prefills `/qucalc @mortal`), or directly:
+Bob verifies by clicking `@concl` in the Lemmas sidebar (prefills `/qucalc @concl`), or directly:
 
 ```
-BOB TYPES:  /zfa cap:mortal:0167
+BOB TYPES:  /zfa cap:concl:0167
 ```
 
 **Bob's window:**
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  · token: cap:mortal:0167                                     │
+│  · token: cap:concl:0167                                      │
 │  ·   valid: ✓  spectral gap: 0                               │
 │  ·   twists: 4  (2 positive, 2 negative)                     │
 └──────────────────────────────────────────────────────────────┘
@@ -252,13 +281,13 @@ BOB TYPES:  /zfa cap:mortal:0167
 Both sidebars now show the complete proof vocabulary:
 
 ```
-│ Lemmas (3)      │
-│ @mortality  ←   │   cap:mortality:01   — "All Men are Mortal"
-│ @socrates   ←   │   cap:socrates:67    — "Socrates is a Man"
-│ @mortal     ←   │   cap:mortal:0167    — "Socrates is Mortal" (proved)
+│ Lemmas (3)                          │
+│ @mortal — “All men are mortal”   ←  │   cap:mortal:01
+│ @man    — “Socrates is a man”    ←  │   cap:man:67
+│ @concl  — “Socrates is mortal”   ←  │   cap:concl:0167   (proved)
 ```
 
-**Result:** `cap:mortal:0167` is a valid ZFA-balanced token. Possessing it — or referencing `@mortal` — is proof that the syllogism reached ZFA closure. An invalid argument produces a non-zero spectral gap and cannot be named as a balanced lemma.
+**Result:** `cap:concl:0167` is a valid ZFA-balanced token. Possessing it — or referencing `@concl` — is proof that the syllogism reached ZFA closure. An invalid argument produces a non-zero spectral gap and cannot be named as a balanced lemma.
 
 ---
 
@@ -267,28 +296,28 @@ Both sidebars now show the complete proof vocabulary:
 Both windows at the end of the session:
 
 ```
-┌──────────────────────────────────┬──────────────────────────────────┐
-│  ALICE'S WINDOW                  │  BOB'S WINDOW                    │
-├──────────────┬───────────────────┼──────────────┬───────────────────┤
-│ Peers (1)    │ · joined room 024…│ Peers (1)    │ · joined room 024…│
-│ Alice (you)  │                   │ Bob (you)    │                   │
-│ Bob      →   │ · @mortality=^v ✓ │ Alice    →   │ · @mortality from │
-│              │                   │              │   Alice ✓         │
-│ Lemmas (3)   │ · @socrates from  │ Lemmas (3)   │ · @socrates=+- ✓ │
-│ @mortality ← │   Bob ✓           │ @mortality ← │                   │
-│ @socrates  ← │                   │ @socrates  ← │ · @mortality      │
-│ @mortal    ← │ · @mortality      │ @mortal    ← │   @socrates:      │
-│              │   @socrates:      │              │ ·  ^v ✓  +- ✓    │
-│ Room Process │ ·  ^v ✓  +- ✓   │ Room Process │ ·  ^v+- ZFA: ✓   │
-│ parallel(    │ ·  ^v+- ZFA: ✓  │ parallel(    │                   │
-│  Alice (you) │                   │  Bob (you)   │ · braket 0 1:    │
-│   16+/16-    │ · braket 0 1:    │   16+/16-    │ ·  ⎡ 1  0 ⎤      │
-│  Bob         │ ·  ⎡ 1  0 ⎤      │  Alice       │ ·  ⎣ 0  1 ⎦      │
-│   16+/16-    │ ·  ⎣ 0  1 ⎦      │   16+/16-    │                   │
-│ )            │                   │ )            │ · token valid ✓   │
-│ ZFA: ✓ gap:0 │ · @mortal from   │ ZFA: ✓ gap:0 │   cap:mortal:0167 │
-│ twists: 64   │   Alice ✓         │ twists: 64   │                   │
-└──────────────┴───────────────────┴──────────────┴───────────────────┘
+┌──────────────────────────────────────┬──────────────────────────────────────┐
+│  ALICE'S WINDOW                      │  BOB'S WINDOW                        │
+├──────────────────┬───────────────────┼──────────────────┬───────────────────┤
+│ Peers (1)        │ · joined room 024…│ Peers (1)        │ · joined room 024…│
+│ Alice (you)      │                   │ Bob (you)        │                   │
+│ Bob          →   │ · @mortal = ^v ✓  │ Alice        →   │ · @mortal from    │
+│                  │                   │                  │   Alice ✓         │
+│ Lemmas (3)       │ · @man from Bob ✓ │ Lemmas (3)       │ · @man = +- ✓     │
+│ @mortal — “All … │                   │ @mortal — “All … │                   │
+│ @man   — “Socr…  │ · /solve @mortal  │ @man   — “Socr…  │ · @mortal @man:   │
+│ @concl — “Socr…  │   @man → already  │ @concl — “Socr…  │ ·  ^v ✓  +- ✓     │
+│                  │   closed, +1      │                  │ ·  ^v+- ZFA: ✓    │
+│ Room Process     │                   │ Room Process     │                   │
+│ parallel(        │ · braket 0 1:     │ parallel(        │ · /solve → closed │
+│  Alice (you)     │ ·  ⎡ 1  0 ⎤       │  Bob (you)       │ · braket 0 1:     │
+│   16+/16-        │ ·  ⎣ 0  1 ⎦       │   16+/16-        │ ·  ⎡ 1  0 ⎤       │
+│  Bob             │                   │  Alice           │ ·  ⎣ 0  1 ⎦       │
+│   16+/16-        │ · @concl from     │   16+/16-        │ · token valid ✓   │
+│ )                │   Alice ✓         │ )                │   cap:concl:0167  │
+│ ZFA: ✓ gap:0     │                   │ ZFA: ✓ gap:0     │                   │
+│ twists: 64       │                   │ twists: 64       │                   │
+└──────────────────┴───────────────────┴──────────────────┴───────────────────┘
 ```
 
 ---
@@ -299,22 +328,23 @@ The room was the coprocessor. Neither peer needed a shared server, a database, o
 
 | Step | Who | Command | Lemma | Meaning |
 |------|-----|---------|-------|---------|
-| 1 | Alice | `/lemma mortality ^v` | `@mortality` | "All Men are Mortal" — gap 0 ✓ |
-| 2 | Bob | `/lemma socrates +-` | `@socrates` | "Socrates is a Man" — gap 0 ✓ |
-| 3 | Alice | `/qucalc @mortality @socrates` | — | Deduction: Middle Term cancels, gap 0 ✓ |
-| 4 | Bob | `/braket 0 1` | — | Conclusion: `\|0⟩ + \|1⟩ = I` (completeness) |
-| 5 | Alice | `/lemma mortal @mortality @socrates` | `@mortal` | Proof sealed: `cap:mortal:0167` unforgeable |
+| 1 | Alice | `/lemma All men are @mortal \| ^v` | `@mortal` | "All men are mortal" — gap 0 ✓ |
+| 2 | Bob | `/lemma Socrates is a @man \| +-` | `@man` | "Socrates is a man" — gap 0 ✓ |
+| 3 | Alice | `/qucalc @mortal @man` | — | Deduction: Middle Term cancels, gap 0 ✓ |
+| 4 | Bob | `/solve @mortal @man` | — | The substrate: premises **already close**, phase +1 — valid |
+| 5 | Bob | `/braket 0 1` | — | Conclusion: `\|0⟩ + \|1⟩ = I` (completeness) |
+| 6 | Alice | `/lemma @concl Socrates is mortal \| @mortal @man` | `@concl` | Proof sealed: `cap:concl:0167` unforgeable |
 
-Steps 1 and 2 use explicit twist sequences to illustrate the ZFA encoding. The same proof works with auto-allocation — just omit the twists:
+Steps 1 and 2 supply explicit twists after a pipe to illustrate the ZFA encoding. The same proof works with auto-allocation — just drop the ` | ^v`:
 
 ```
-/lemma mortality     ← same as /lemma mortality ^v (or any balanced sequence)
-/lemma socrates      ← same as /lemma socrates +-
+/lemma All men are @mortal     ← twists auto-allocated from the @mortal handle
+/lemma Socrates is a @man
 ```
 
-Both peers always derive the same twists for the same name, so the cap tokens match without any coordination.
+Both peers always derive the same twists for the same handle, so the cap tokens match without any coordination.
 
-The Lemmas panel gives both peers a shared, navigable vocabulary of proved claims — click any `@name` to expand it with `/qucalc`. Lemmas persist in localStorage per room, so the proof survives a page reload. An invalid syllogism would produce a non-zero spectral gap at step 3, and the auto-minted capability token would fail `/zfa` verification — unbalanced tokens are algebraically impossible to construct.
+The Lemmas panel gives both peers a shared, navigable vocabulary of proved claims — each `@handle` shown with its sentence; click one to expand it with `/qucalc`. Lemmas persist in localStorage per room, so the proof survives a page reload. An invalid syllogism would produce a non-zero spectral gap at step 3, `/solve` at step 4 would report the residual action a completion still owes instead of "already closed", and the auto-minted capability token would fail `/zfa` verification — unbalanced tokens are algebraically impossible to construct.
 
 The ZFA filter — `full_zeno_prune` — is the same operation that selects physical reality from the space of all possible logical histories.
 
