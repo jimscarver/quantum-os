@@ -42,9 +42,9 @@ facilitator:  /estimate confidence-in-A  →  median 0.4, wide spread (the split
 skeptic:      B with A's form named explicitly — "same structural condition; proven in physics,
               empirically supported but not derived socially." That survives refutation.
 facilitator:  /probe …  ✓ converged on B.
-scribe:       /lemma cross-scale-complementarity = "Distinguishable closures bind where identical ones
-              are Pauli-blocked — a theorem in physics (pauli_exclusion), the same structural condition
-              empirically supported but not yet derived at the group scale."  /persist
+scribe:       /lemma @xscale Distinguishable closures bind where identical ones are Pauli-blocked — a
+              theorem in physics (pauli_exclusion), the same structural condition empirically supported
+              but not yet derived at the group scale.   /persist   (cite it later as @xscale)
 ```
 
 The room closed on the **scoped** framing — stronger than the bare claim because it survived the
@@ -69,7 +69,7 @@ intuition* to *the Skeptic's check* — distinguishable roles producing a closur
 | Track status | `/scribe` + `/note` — mark `claim` / `verified` / `suggestive` |
 | Score | `/estimate confidence`, `/poll ranked` (trust-weighted) |
 | Converge | `/probe` (supermajority consensus) |
-| Record the decision | `/lemma <claim> = …` + `/persist` — the decision of record |
+| Record the decision | `/lemma <claim>` (write it as a sentence, mark the handle: `/lemma … structural @condition …`) + `/persist` — the decision of record |
 | Don't deadlock | single-lead election (agents) + rule 6 — no two co-leaders |
 
 ## The first real run — the α residual

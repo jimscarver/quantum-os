@@ -38,7 +38,7 @@ closure the clones could not form.
 | Open the proposal | `/channel proposal` — the claim (a ket / open obligation) |
 | **Skeptic (required)** | `/probe proposal@skeptic` — a discharge (bra) that **must precede closure** ◄ the closure gate |
 | Evidence keeper | `/note proposal@evidence` — status marked `claim` / `verified` / `speculation` |
-| Integrator closes | `/lemma proposal` + `/persist` — the decision of record (the receipt) |
+| Integrator closes | `/lemma <the decision>` (a sentence, with the handle marked — `/lemma Ship the v2 @proposal now`) + `/persist` — the decision of record (the receipt) |
 | Dissent before closure | structural: a `lift …@skeptic` must appear before the closing `action /lemma` |
 
 The **closure gate** turns `Room_Best_Practices.md`'s rule ("no proposal closes unrefuted") from prose into

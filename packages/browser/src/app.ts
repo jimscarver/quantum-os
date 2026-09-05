@@ -20,6 +20,7 @@ import { findDiscrepancies, losingPeersIn, normalizeValue,
 import { transpile as rhoquTranspile, RhoQuError, type RhoQuContext, type OnHandler as RhoQuOnHandler } from "./rhoqu.js";
 import { tally, liveCounts, summarizeWinners, optionId, sortedOptions,
          type Poll, type PollMethod, type PollOption } from "./polls.js";
+import { canonLemma, parseRefTokens, parseLemmaDecl, splitLemmaNameArg } from "./lemma-parse.js";
 import { issueId, isMember, isAdmin, memberLabel, findIssue, resolveWeights, delegatorsOf,
          delegationMapFor, trustWeightsFor, trustLevels, discreditedMembers, TRUST_MAX, govCurrency,
          rekeyMember, type Group, type Issue, type Role, type VaultRecord } from "./gov.js";
@@ -159,6 +160,11 @@ let signQueue: Promise<void> = Promise.resolve();      // serializes outbound si
 
 // Per-room types.
 interface LemmaEntry { twists: string; who: string; cap?: string; dyncap?: DyncapField;
+  /** The claim as a sentence, when the name is only a handle within it
+   *  (`/lemma All men are @mortal` → name "mortal", text "All men are mortal").
+   *  Absent when the name is the whole claim. Cosmetic — first-write-wins like
+   *  `who`, never part of the immutability check (only `twists` is). */
+  text?: string;
   /** True when this lemma is a closure discovered by `/search`, not a named claim
    *  someone wrote. Integer-named, so a re-run of the same search finds it already
    *  known rather than anonymous. Cosmetic only — otherwise a lemma like any other. */
@@ -1704,10 +1710,11 @@ function renderLemmas(): void {
     const li = document.createElement("li");
     li.className = "row-item";
     const label = document.createElement("span");
-    label.textContent = (entry.event ? "⌁ " : "") + lemmaRefStr(name);
+    const shortText = entry.text && entry.text.length > 40 ? entry.text.slice(0, 39) + "…" : entry.text;
+    label.textContent = (entry.event ? "⌁ " : "") + lemmaRefStr(name) + (shortText ? ` — “${shortText}”` : "");
     label.className = "row-label";
     label.addEventListener("click", () => insertRef(lemmaRefStr(name)));
-    li.title = `${lemmaRefStr(name)}${entry.event ? "  (closure discovered by /search)" : ""}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
+    li.title = `${lemmaRefStr(name)}${entry.text ? `  “${entry.text}”` : ""}${entry.event ? "  (closure discovered by /search)" : ""}\n${entry.twists}${entry.cap ? `  cap: ${entry.cap}` : ""}  (by ${entry.who})`;
     li.appendChild(label);
     appendRemoveBtn(li, "forget this lemma", () => forgetLemma(name));
     lemmaListEl.appendChild(li);
@@ -1932,14 +1939,7 @@ function resolveLemmaToBytes(twistsStr: string): Uint8Array | null {
   return parseSymbolicTwists(twistsStr);
 }
 
-// A lemma name may contain spaces ("all men are mortal"). It is referenced as
-// @[name with spaces] (bare @name still works for single-word names) and stored
-// under a canonical key: trimmed, with inner whitespace collapsed to one space.
-// canonLemma is idempotent and a no-op for single-word names, so applying it at
-// every store boundary is safe and leaves existing lemmas unchanged.
-function canonLemma(name: string): string {
-  return name.trim().replace(/\s+/g, " ");
-}
+// canonLemma / parseRefTokens live in lemma-parse.ts (pure, unit-tested).
 // Reference token for display / input prefill: @name or @[name with spaces].
 function lemmaRefStr(name: string): string {
   return /\s/.test(name) ? `@[${name}]` : `@${name}`;
@@ -1949,21 +1949,6 @@ function lemmaArgStr(name: string): string {
   return /\s/.test(name) ? `[${name}]` : name;
 }
 
-type RefTok = { kind: "ref"; name: string } | { kind: "lit"; text: string };
-// Tokenize a command arg into lemma references (@word or @[multi word]) and
-// literal twist tokens, preserving order. Multi-word refs survive the
-// whitespace split that bare tokenization would otherwise break.
-function parseRefTokens(arg: string): RefTok[] {
-  const out: RefTok[] = [];
-  const re = /@\[([^\]]*)\]|@(\S+)|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(arg)) !== null) {
-    if (m[1] !== undefined) out.push({ kind: "ref", name: canonLemma(m[1]) });
-    else if (m[2] !== undefined) out.push({ kind: "ref", name: canonLemma(m[2]) });
-    else if (m[3] !== undefined) out.push({ kind: "lit", text: m[3] });
-  }
-  return out;
-}
 // First @ref in `arg` not in the store, formatted for display (or null).
 function firstUnknownRef(arg: string): string | null {
   for (const t of parseRefTokens(arg))
@@ -1979,17 +1964,6 @@ function parseLemmaNameArg(s: string): string {
   if (br) t = br[1];
   return canonLemma(t);
 }
-// Split a `<name> <rest>` argument into [canonicalName, rest], honoring a
-// leading [bracketed name] so multi-word names don't eat the rest.
-function splitLemmaNameArg(arg: string): [string, string] {
-  const t = arg.trim();
-  const br = t.match(/^\[([^\]]*)\]\s*([\s\S]*)$/);
-  if (br) return [canonLemma(br[1]), br[2].trim()];
-  const sp = t.search(/\s/);
-  if (sp === -1) return [canonLemma(t), ""];
-  return [canonLemma(t.slice(0, sp)), t.slice(sp + 1).trim()];
-}
-
 function expandLemmaRefs(arg: string): {
   expanded: string;
   components: Array<{ label: string | null; twists: string }>;
@@ -2945,7 +2919,8 @@ function handleCommand(raw: string): string[] {
         "  /estimate [sub]  — group numeric estimate: new <q> · <number> · status · close (median)",
         "  /dump            — summary of all logic shared this session",
         "  /lemma           — list named lemmas",
-        "  /lemma <n> [tw]  — register @n; omit twists to auto-allocate from name",
+        "  /lemma <claim>   — register a claim; mark the handle: /lemma All men are @mortal  →  @mortal",
+        "  /lemma <c> | <tw> — with explicit twists (else auto-allocated from the handle)",
         "  /request <n>     — request @n from whoever holds it",
         "  /pass <n> <peer> — transfer @n directly to a named peer",
         "  /note [sub]      — promissory notes (declare|grant [| terms]|pass|redeem|terms|accept|split|merge|balance)",
@@ -2967,7 +2942,7 @@ function handleCommand(raw: string): string[] {
         "  /rhoqu <src>     — RhoQu macro: process/new/parallel/call → /commands",
         "  /rholang <sub>   — run rholang on rnode: eval · deploy · echo · read · status · config (multi-line, end with a blank line)",
         "  @name in args    — expand named lemma (e.g. /qucalc @major @minor)",
-        "  [multi word]      — multi-word names: /lemma [all men are mortal] ^v<>  →  @[all men are mortal]",
+        "  [multi word]      — a spaced name: /lemma [all men are mortal]  ·  cite as @[all men are mortal]",
         "  //message        — send a message starting with /",
       ]) sys(linkifyHelp(l));
       break;
@@ -3502,27 +3477,25 @@ function handleCommand(raw: string): string[] {
       if (!arg) {
         if (lemmaStore.size === 0) {
           sys("no lemmas registered yet");
-          sys("  usage: /lemma <name> <twists|@ref1 @ref2|cap:token>");
+          sys("  usage: /lemma <statement> [| <twists>]   (mark the handle: /lemma All men are @mortal)");
         } else {
           sys(`lemmas (${lemmaStore.size}):`);
           for (const [name, entry] of lemmaStore) {
-            sys(`  ${lemmaRefStr(name)}  =  ${entry.twists}${entry.cap ? `  [cap: ${entry.cap}]` : ""}  (by ${entry.who})`);
+            sys(`  ${lemmaRefStr(name)}  =  ${entry.twists}${entry.text ? `  “${entry.text}”` : ""}${entry.cap ? `  [cap: ${entry.cap}]` : ""}  (by ${entry.who})`);
           }
         }
         break;
       }
-      // Name may be bracketed for multi-word: /lemma [all men are mortal] <tw>.
-      const [lemmaName, lemmaTwistsArg] = splitLemmaNameArg(arg);
-      if (!lemmaName) {
-        sys("usage: /lemma <name> [twists|@ref1 @ref2|cap:token]");
-        sys("  multi-word name: /lemma [all men are mortal] ^v<>  (reference as @[all men are mortal])");
-        sys("  omit twists to auto-allocate from the name");
+      // /lemma <statement> [| <twists>] — the statement may mark one word as the
+      // @handle (/lemma All men are @mortal), be a bare multi-word name, or use
+      // the legacy [brackets] / `<word> <twists>` forms. See lemma-parse.ts.
+      const decl = parseLemmaDecl(arg);
+      if ("error" in decl) {
+        sys(decl.error);
+        sys("  e.g.  /lemma All men are @mortal   ·   /lemma @concl Socrates is mortal | @mortal @man");
         break;
       }
-      if (/[\[\]:]/.test(lemmaName)) {
-        sys(`invalid lemma name: '${lemmaName}'  (no brackets or colons; spaces OK via [name])`);
-        break;
-      }
+      const { name: lemmaName, twistsArg: lemmaTwistsArg, text: lemmaText } = decl;
       const isAutoAlloc = !lemmaTwistsArg;
       let resolvedTwistsStr: string;
       if (isAutoAlloc) {
@@ -3559,11 +3532,14 @@ function handleCommand(raw: string): string[] {
       const { pos: lPos, neg: lNeg, balanced: lBal } = twistStats(checkTw);
       const lemWho = myName || (qpeer ? shortId(qpeer.peerId) : "local");
       const lemCap = lBal ? lemmaToCapToken(lemmaName, checkTw) : undefined;
-      lemmaStore.set(lemmaName, { twists: resolvedTwistsStr, who: lemWho, cap: lemCap });
+      // Keep `text` only when the name is a handle within a longer claim.
+      const lemText = lemmaText && canonLemma(lemmaText) !== lemmaName ? canonLemma(lemmaText) : undefined;
+      lemmaStore.set(lemmaName, { twists: resolvedTwistsStr, who: lemWho, cap: lemCap, text: lemText });
       sys(`lemma registered: ${lemmaRefStr(lemmaName)}  =  ${resolvedTwistsStr}${isAutoAlloc ? "  (auto-allocated)" : ""}`);
+      if (lemText) sys(`  “${lemText}”`);
       sys(`  twists: ${checkTw.length}  (${lPos}+/${lNeg}-)  ZFA: ${lBal ? "✓" : "✗"}`);
       if (lemCap) sys(`  cap: ${lemCap}  (share with /zfa to verify)`);
-      signedBroadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho });
+      signedBroadcast({ kind: "lemma", name: lemmaName, twists: resolvedTwistsStr, cap: lemCap, who: lemWho, text: lemText });
       saveLemmas();
       renderLemmas();
       break;
@@ -6350,11 +6326,13 @@ async function connect(): Promise<void> {
           if (isRetracted("lemma", name)) return;                  // tombstoned — don't heal back
           const twists = String(d.twists ?? "").trim();
           const cap = d.cap ? String(d.cap) : undefined;
+          const text = d.text ? canonLemma(String(d.text)) : undefined;
           const who = peerLabel(from);
           const dyncap = (d.dyncap as DyncapField | undefined);
           // Lemmas are content-addressed by name. First-write-wins: if we
           // already have @name with different twists, refuse the new claim
           // and surface the disagreement; the consensus probe will catch up.
+          // `text` is cosmetic — first-write-wins, not part of this check.
           const existing = lemmaStore.get(name);
           if (existing && existing.twists !== twists) {
             addMessage(from, `/lemma ${lemmaArgStr(name)} ${twists}`, "peer", who);
@@ -6365,9 +6343,9 @@ async function connect(): Promise<void> {
             return;   // idempotent re-broadcast, silent
           }
           if (name && twists) {
-            lemmaStore.set(name, { twists, who, cap, dyncap });
-            addMessage(from, `/lemma ${lemmaArgStr(name)} ${twists}`, "peer", who);
-            addMessage("", `  ${lemmaRefStr(name)} registered from ${who}${cap ? `  [cap: ${cap}]` : ""}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
+            lemmaStore.set(name, { twists, who, cap, dyncap, text: text && text !== name ? text : undefined });
+            addMessage(from, `/lemma ${text ?? lemmaArgStr(name)}${text ? "" : ` ${twists}`}`, "peer", who);
+            addMessage("", `  ${lemmaRefStr(name)} registered from ${who}${text ? `  “${text}”` : ""}${cap ? `  [cap: ${cap}]` : ""}${dyncap ? `  [signed seq=${dyncap.seq}]` : ""}`, "system");
             saveLemmas();
             renderLemmas();
           }
@@ -6572,7 +6550,7 @@ async function connect(): Promise<void> {
             addMessage("", `  · dropped sync-lemmas from ${peerLabel(from)} (ignored: losing observer)`, "system");
             return;
           }
-          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField; event?: boolean }>;
+          const entries = raw as Array<{ name?: string; twists?: string; who?: string; cap?: string; dyncap?: DyncapField; event?: boolean; text?: string }>;
           const who = peerLabel(from);
           // Record observations for the probe window even when we also apply.
           // Pair with sync-currencies if it arrives in the same handshake.
@@ -6586,7 +6564,8 @@ async function connect(): Promise<void> {
             if (lemmaStore.has(name) || isRetracted("lemma", name)) continue;
             const tw = resolveLemmaToBytes(twists);
             if (!tw || !achievesZfa(tw)) continue;
-            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap, event: e.event });
+            const text = e.text ? canonLemma(String(e.text)) : undefined;
+            lemmaStore.set(name, { twists, who: e.who || who, cap: e.cap, dyncap: e.dyncap, event: e.event, text: text && text !== name ? text : undefined });
             added++;
             if (e.event) addedEvents++;
           }
@@ -7383,7 +7362,7 @@ async function connect(): Promise<void> {
         signedSend(peerId, { kind: "name", name: myName });
         if (lemmaStore.size > 0) {
           const entries = Array.from(lemmaStore.entries()).map(([name, e]) => ({
-            name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap, event: e.event,
+            name, twists: e.twists, who: e.who, cap: e.cap, dyncap: e.dyncap, event: e.event, text: e.text,
           }));
           signedSend(peerId, { kind: "sync-lemmas", entries });
         }

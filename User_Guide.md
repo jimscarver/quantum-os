@@ -62,13 +62,16 @@ solutions, score them (trust-weighted) with `/estimate` or `/poll`, lower the "t
 (explore wide early, refine the leader late), then `/probe` to converge and `/lemma`+`/persist` the
 winner. An AI facilitator can run the rounds for you — **`/facil optimize <objective + constraints>`**
 proposes candidates and the next step. When the problem is a QuCalc position, **`/search`** renders the
-admissible possibility space straight from the substrate — the generate step done by the kernel.
+admissible possibility space straight from the substrate — the generate step done by the kernel — and
+**`/solve`** picks the one closure it takes (or the exact action a completion still owes). Both compute
+in the browser, so every peer agrees with no service.
 → **[Collective Optimization](Collective_Optimization.md)** (the method, and why a room beats a QPU on
 real problems), with a runnable room-session **[demo](OptimizationDemo.md)** (`node scripts/qos-cli/optimize-demo.mjs`).
 
 ## 5. Record the decision
-A decision only outlives the session if it's written down: `/lemma <statement>` mints it;
-`/persist` keeps it so late joiners (and an always-on memory daemon) still see it.
+A decision only outlives the session if it's written down: `/lemma <statement>` mints it — write it as a
+sentence and mark one word as the handle with `@` (`/lemma Ship v2 on @friday`), so you cite it as
+`@friday` later. `/persist` keeps it so late joiners (and an always-on memory daemon) still see it.
 → **[Group Decisions](Group_Decisions.md)**.
 
 ## 6. Work across rooms
