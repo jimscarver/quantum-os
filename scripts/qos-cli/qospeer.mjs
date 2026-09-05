@@ -8,7 +8,9 @@
 // server re-sends the peers list after a reconnect.
 
 import WebSocket from "ws";
-import { RTCPeerConnection } from "werift";
+// werift, plus the RTCCertificate.getFingerprints() memo for quantum-os#125 —
+// importing it here patches the shared prototype for every werift consumer.
+import { RTCPeerConnection } from "./werift-patched.mjs";
 import { ringSkipNeighbors } from "./ring-neighbors.mjs";
 
 const DEFAULT_ICE = [{ urls: "stun:stun.l.google.com:19302" }];

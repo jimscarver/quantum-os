@@ -14,7 +14,7 @@
 // room, the message goes nowhere. (This is by design — see CLAUDE.md.)
 
 import WebSocket from "ws";
-import { RTCPeerConnection } from "werift";
+import { RTCPeerConnection } from "./werift-patched.mjs"; // werift + the #125 fingerprint memo
 import { generateCapability, validateCapability } from "./zfa.mjs";
 
 const DEFAULT_SIGNAL = "wss://quantum-os-signaling.onrender.com";
