@@ -196,6 +196,7 @@ The dyncap suite proves the signing port matches the browser byte-for-byte
 npm install && node loopback.mjs            # werift↔werift WebRTC round-trip over a local relay
 node media-reject.selftest.mjs              # a data-only agent rejects a call's audio/video, keeps the data channel
 node turn-relay.selftest.mjs                # the default-relay auto-fetch (GET /turn) merges, falls back, and never overrides an explicit config
+node werift-patched.selftest.mjs            # RTCCertificate.getFingerprints() is memoized (issue #125) and still returns the right value
 ```
 
 The loopback test spins an in-process signaling relay and two peers that
